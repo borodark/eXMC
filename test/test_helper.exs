@@ -1,3 +1,5 @@
+Nx.default_backend(EXLA.Backend)
+Nx.Defn.default_options(compiler: EXLA)
 ExUnit.start()
 
 # Numeric compare helper for Nx tensors

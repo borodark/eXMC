@@ -14,6 +14,7 @@ defmodule Exmc.DSL do
       true
   """
 
+  @doc "Build an IR inside a `do` block. Binds `ir` for use by inner macros."
   defmacro model(do: block) do
     quote do
       var!(ir) = Exmc.Builder.new_ir()
@@ -22,18 +23,21 @@ defmodule Exmc.DSL do
     end
   end
 
+  @doc "Add a random variable node. Delegates to `Builder.rv/5`."
   defmacro rv(id, dist, params, opts \\ []) do
     quote do
       var!(ir) = Exmc.Builder.rv(var!(ir), unquote(id), unquote(dist), unquote(params), unquote(opts))
     end
   end
 
+  @doc "Add an observation node. Delegates to `Builder.obs/4`."
   defmacro obs(id, target_id, value) do
     quote do
       var!(ir) = Exmc.Builder.obs(var!(ir), unquote(id), unquote(target_id), unquote(value))
     end
   end
 
+  @doc "Add an observation node with options. Delegates to `Builder.obs/5`."
   defmacro obs(id, target_id, value, opts) do
     quote do
       var!(ir) =
@@ -41,18 +45,21 @@ defmodule Exmc.DSL do
     end
   end
 
+  @doc "Add a deterministic node. Delegates to `Builder.det/4`."
   defmacro det(id, fun, args) do
     quote do
       var!(ir) = Exmc.Builder.det(var!(ir), unquote(id), unquote(fun), unquote(args))
     end
   end
 
+  @doc "Shorthand for a matmul deterministic node."
   defmacro matmul(id, a, rv_id) do
     quote do
       var!(ir) = Exmc.Builder.det(var!(ir), unquote(id), :matmul, [unquote(a), unquote(rv_id)])
     end
   end
 
+  @doc "Shorthand for an affine deterministic node."
   defmacro affine(id, a, b, rv_id) do
     quote do
       var!(ir) =
@@ -60,6 +67,7 @@ defmodule Exmc.DSL do
     end
   end
 
+  @doc false
   defmacro __using__(_opts) do
     quote do
       import Exmc.DSL

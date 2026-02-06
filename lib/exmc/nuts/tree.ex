@@ -18,7 +18,7 @@ defmodule Exmc.NUTS.Tree do
 
   Returns `%{q:, logp:, grad:, n_steps:, divergent:, accept_sum:, depth:}`.
   """
-  def build(vag_fn, q, p, logp, grad, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0) do
+  def build(step_fn, q, p, logp, grad, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0) do
     joint_logp_0_scalar = Nx.to_number(joint_logp_0)
 
     initial = %{
@@ -39,23 +39,23 @@ defmodule Exmc.NUTS.Tree do
       turning: false
     }
 
-    do_build(vag_fn, initial, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0_scalar, 0)
+    do_build(step_fn, initial, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0_scalar, 0)
   end
 
-  defp do_build(_vag_fn, traj, _epsilon, _inv_mass_diag, max_depth, _rng, _joint_logp_0, depth)
+  defp do_build(_step_fn, traj, _epsilon, _inv_mass_diag, max_depth, _rng, _joint_logp_0, depth)
        when depth >= max_depth do
     result(traj, depth)
   end
 
-  defp do_build(_vag_fn, %{divergent: true} = traj, _epsilon, _inv_mass_diag, _max_depth, _rng, _joint_logp_0, depth) do
+  defp do_build(_step_fn, %{divergent: true} = traj, _epsilon, _inv_mass_diag, _max_depth, _rng, _joint_logp_0, depth) do
     result(traj, depth)
   end
 
-  defp do_build(_vag_fn, %{turning: true} = traj, _epsilon, _inv_mass_diag, _max_depth, _rng, _joint_logp_0, depth) do
+  defp do_build(_step_fn, %{turning: true} = traj, _epsilon, _inv_mass_diag, _max_depth, _rng, _joint_logp_0, depth) do
     result(traj, depth)
   end
 
-  defp do_build(vag_fn, traj, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0, depth) do
+  defp do_build(step_fn, traj, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0, depth) do
     # Random direction
     {rand_val, rng} = :rand.uniform_s(rng)
     go_right = rand_val > 0.5
@@ -71,26 +71,30 @@ defmodule Exmc.NUTS.Tree do
 
     {subtree, rng} =
       build_subtree(
-        vag_fn, start_q, start_p, start_grad,
+        step_fn, start_q, start_p, start_grad,
         dir_epsilon, inv_mass_diag, depth, rng, joint_logp_0
       )
 
     # Merge subtree into trajectory
     {new_traj, rng} = merge_trajectories(traj, subtree, go_right, inv_mass_diag, rng)
 
-    do_build(vag_fn, new_traj, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0, depth + 1)
+    do_build(step_fn, new_traj, epsilon, inv_mass_diag, max_depth, rng, joint_logp_0, depth + 1)
   end
 
   # Base case: single leapfrog step
-  defp build_subtree(vag_fn, q, p, grad, epsilon, inv_mass_diag, 0, rng, joint_logp_0) do
-    {q_new, p_new, logp_new, grad_new} = Leapfrog.step(vag_fn, q, p, grad, epsilon, inv_mass_diag)
+  defp build_subtree(step_fn, q, p, grad, epsilon, inv_mass_diag, 0, rng, joint_logp_0) do
+    {q_new, p_new, logp_new, grad_new} = step_fn.(q, p, grad, epsilon, inv_mass_diag)
 
     joint_logp_new = Leapfrog.joint_logp(logp_new, p_new, inv_mass_diag) |> Nx.to_number()
-    delta = joint_logp_new - joint_logp_0
 
-    divergent = delta < -1000.0
-    log_weight = min(0.0, delta)
-    accept_prob = min(1.0, :math.exp(min(delta, 0.0)))
+    # Guard against NaN/Inf from numerical issues (e.g., log(0) gradient)
+    {divergent, log_weight, accept_prob} =
+      if is_number(joint_logp_new) do
+        d = joint_logp_new - joint_logp_0
+        {d < -1000.0, min(0.0, d), min(1.0, :math.exp(min(d, 0.0)))}
+      else
+        {true, -1001.0, 0.0}
+      end
 
     subtree = %{
       q_left: q_new,
@@ -114,13 +118,13 @@ defmodule Exmc.NUTS.Tree do
   end
 
   # Recursive case: build two half-subtrees and merge
-  defp build_subtree(vag_fn, q, p, grad, epsilon, inv_mass_diag, depth, rng, joint_logp_0)
+  defp build_subtree(step_fn, q, p, grad, epsilon, inv_mass_diag, depth, rng, joint_logp_0)
        when depth > 0 do
     half_depth = depth - 1
 
     # Build first half
     {first, rng} =
-      build_subtree(vag_fn, q, p, grad, epsilon, inv_mass_diag, half_depth, rng, joint_logp_0)
+      build_subtree(step_fn, q, p, grad, epsilon, inv_mass_diag, half_depth, rng, joint_logp_0)
 
     if first.divergent or first.turning do
       {first, rng}
@@ -135,7 +139,7 @@ defmodule Exmc.NUTS.Tree do
 
       {second, rng} =
         build_subtree(
-          vag_fn, next_q, next_p, next_grad,
+          step_fn, next_q, next_p, next_grad,
           epsilon, inv_mass_diag, half_depth, rng, joint_logp_0
         )
 

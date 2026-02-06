@@ -25,4 +25,13 @@ defmodule Exmc.Dist.Normal do
 
   @impl true
   def transform(_params), do: nil
+
+  @impl true
+  def sample(%{mu: mu, sigma: sigma}, rng) do
+    mu_f = Nx.to_number(mu)
+    sigma_f = Nx.to_number(sigma)
+    {z, rng} = :rand.normal_s(rng)
+    value = mu_f + sigma_f * z
+    {Nx.tensor(value), rng}
+  end
 end

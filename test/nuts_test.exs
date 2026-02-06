@@ -21,6 +21,16 @@ defmodule Exmc.NUTSTest do
     Exmc.Compiler.value_and_grad(ir)
   end
 
+  defp standard_normal_step_fn do
+    ir =
+      Builder.new_ir()
+      |> Builder.rv("x", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
+      |> Rewrite.apply()
+
+    {vag_fn, step_fn, pm, _ncp_info} = Exmc.Compiler.compile_for_sampling(ir)
+    {vag_fn, step_fn, pm}
+  end
+
   # =============================================
   # Leapfrog tests (1-4)
   # =============================================
@@ -223,7 +233,7 @@ defmodule Exmc.NUTSTest do
 
   describe "Tree" do
     test "11. single-depth tree: n_steps=1" do
-      {vag_fn, _pm} = standard_normal_vag()
+      {vag_fn, step_fn, _pm} = standard_normal_step_fn()
       q = Nx.tensor([0.0], type: :f64)
       {logp, grad} = vag_fn.(q)
       inv_mass = Nx.tensor([1.0], type: :f64)
@@ -232,7 +242,7 @@ defmodule Exmc.NUTSTest do
       joint_logp_0 = Leapfrog.joint_logp(logp, p, inv_mass)
 
       rng = :rand.seed_s(:exsss, 42)
-      result = Tree.build(vag_fn, q, p, logp, grad, 0.1, inv_mass, 1, rng, joint_logp_0)
+      result = Tree.build(step_fn, q, p, logp, grad, 0.1, inv_mass, 1, rng, joint_logp_0)
 
       # With depth 1, we get at least 1 step
       assert result.n_steps >= 1
@@ -240,7 +250,7 @@ defmodule Exmc.NUTSTest do
     end
 
     test "12. divergence detection with extreme step size" do
-      {vag_fn, _pm} = standard_normal_vag()
+      {vag_fn, step_fn, _pm} = standard_normal_step_fn()
       q = Nx.tensor([0.0], type: :f64)
       {logp, grad} = vag_fn.(q)
       inv_mass = Nx.tensor([1.0], type: :f64)
@@ -250,13 +260,13 @@ defmodule Exmc.NUTSTest do
 
       rng = :rand.seed_s(:exsss, 7)
       # Extremely large step size -> divergence
-      result = Tree.build(vag_fn, q, p, logp, grad, 1000.0, inv_mass, 10, rng, joint_logp_0)
+      result = Tree.build(step_fn, q, p, logp, grad, 1000.0, inv_mass, 10, rng, joint_logp_0)
 
       assert result.divergent == true
     end
 
     test "13. U-turn detection keeps depth small for narrow Normal" do
-      {vag_fn, _pm} = standard_normal_vag()
+      {vag_fn, step_fn, _pm} = standard_normal_step_fn()
       q = Nx.tensor([0.0], type: :f64)
       {logp, grad} = vag_fn.(q)
       inv_mass = Nx.tensor([1.0], type: :f64)
@@ -265,7 +275,7 @@ defmodule Exmc.NUTSTest do
       joint_logp_0 = Leapfrog.joint_logp(logp, p, inv_mass)
 
       rng = :rand.seed_s(:exsss, 99)
-      result = Tree.build(vag_fn, q, p, logp, grad, 0.1, inv_mass, 10, rng, joint_logp_0)
+      result = Tree.build(step_fn, q, p, logp, grad, 0.1, inv_mass, 10, rng, joint_logp_0)
 
       # For standard Normal, tree should U-turn well before max depth 10
       assert result.depth < 10

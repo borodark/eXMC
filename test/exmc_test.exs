@@ -17,6 +17,11 @@ defmodule Exmc.LogProbTest do
   doctest Exmc.LogProb
   doctest Exmc.Rewrite
   doctest Exmc.DSL
+  doctest Exmc.Dist.Gamma
+  doctest Exmc.Dist.Beta
+  doctest Exmc.Dist.StudentT
+  doctest Exmc.Dist.Laplace
+  doctest Exmc.Dist.Cauchy
 
   test "normal logp" do
     ir =
@@ -216,7 +221,8 @@ defmodule Exmc.LogProbTest do
         Nx.add(Nx.multiply(values, values), Nx.log(Nx.tensor(2.0 * :math.pi())))
       )
 
-    expected = Nx.select(mask, Nx.multiply(base, weights), Nx.tensor(0.0))
+    # Vector obs auto-adds reduce: :sum, so result is scalar sum of masked weighted logp
+    expected = Nx.sum(Nx.select(mask, Nx.multiply(base, weights), Nx.tensor(0.0)))
 
     got = LogProb.eval(ir, %{})
 
@@ -353,7 +359,8 @@ defmodule Exmc.LogProbTest do
         Nx.add(Nx.multiply(x, x), Nx.log(Nx.tensor(2.0 * :math.pi())))
       )
     jac = Nx.negate(Nx.log(Nx.abs(a)))
-    expected = Nx.add(base, jac)
+    # Vector obs auto-adds reduce: :sum, so result is scalar sum
+    expected = Nx.sum(Nx.add(base, jac))
 
     assert_close(LogProb.eval(ir, %{}), expected)
   end

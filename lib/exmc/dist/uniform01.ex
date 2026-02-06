@@ -21,4 +21,10 @@ defmodule Exmc.Dist.Uniform01 do
 
   @impl true
   def transform(_params), do: :logit
+
+  @impl true
+  def sample(_params, rng) do
+    {u, rng} = :rand.uniform_s(rng)
+    {Nx.tensor(u), rng}
+  end
 end

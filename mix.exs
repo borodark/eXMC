@@ -21,7 +21,8 @@ defmodule Exmc.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:nx, "~> 0.9.2"}
+      {:nx, "~> 0.9.2"},
+      {:exla, "~> 0.9"}
     ]
   end
 end

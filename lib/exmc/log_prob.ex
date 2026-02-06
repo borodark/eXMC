@@ -37,16 +37,21 @@ defmodule Exmc.LogProb do
 
   defp node_logp(%Node{op: {:rv, dist, params}, id: id}, _ir, value_map) do
     case Map.fetch(value_map, id) do
-      {:ok, v} -> [dist.logpdf(v, params)]
-      :error -> []
+      {:ok, v} ->
+        resolved = resolve_params(params, value_map)
+        [dist.logpdf(v, resolved)]
+
+      :error ->
+        []
     end
   end
 
   defp node_logp(%Node{op: {:rv, dist, params, transform}, id: id}, _ir, value_map) do
     case Map.fetch(value_map, id) do
       {:ok, z} ->
+        resolved = resolve_params(params, value_map)
         x = Transform.apply(transform, z)
-        logp = dist.logpdf(x, params)
+        logp = dist.logpdf(x, resolved)
         jac = Transform.log_abs_det_jacobian(transform, z)
         [Nx.add(logp, jac)]
 
@@ -59,7 +64,7 @@ defmodule Exmc.LogProb do
     node_logp(%Node{op: {:obs, target_id, value, %{}}}, ir, value_map)
   end
 
-  defp node_logp(%Node{op: {:obs, target_id, value, meta}}, %IR{} = ir, _value_map) do
+  defp node_logp(%Node{op: {:obs, target_id, value, meta}}, %IR{} = ir, value_map) do
     target_node = IR.get_node!(ir, target_id)
 
     if Map.get(meta, :likelihood, true) == false do
@@ -67,14 +72,14 @@ defmodule Exmc.LogProb do
     else
     case target_node.op do
       {:rv, dist, params} ->
-        apply_obs_meta([dist.logpdf(value, params)], meta)
+        resolved = resolve_params(params, value_map)
+        apply_obs_meta([dist.logpdf(value, resolved)], meta)
 
       {:rv, dist, params, transform} ->
-        # Observed value is in constrained space.
-        # Use inverse transform via log-abs-det Jacobian at z = log(x) if needed.
+        resolved = resolve_params(params, value_map)
         z = inverse_transform(transform, value)
         x = Transform.apply(transform, z)
-        logp = dist.logpdf(x, params)
+        logp = dist.logpdf(x, resolved)
         jac = Transform.log_abs_det_jacobian(transform, z)
         apply_obs_meta([Nx.add(logp, jac)], meta)
 
@@ -180,6 +185,13 @@ defmodule Exmc.LogProb do
       :logsumexp -> [Nx.logsumexp(masked)]
       _ -> [masked]
     end
+  end
+
+  defp resolve_params(params, value_map) do
+    Map.new(params, fn
+      {k, v} when is_binary(v) -> {k, Map.fetch!(value_map, v)}
+      {k, v} -> {k, v}
+    end)
   end
 
   defp to_tensor(%Nx.Tensor{} = t), do: t

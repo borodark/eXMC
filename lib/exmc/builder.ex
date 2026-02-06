@@ -5,6 +5,7 @@ defmodule Exmc.Builder do
 
   alias Exmc.{IR, Node}
 
+  @doc "Create a fresh empty IR."
   def new_ir, do: IR.new()
 
   @doc """
@@ -28,7 +29,8 @@ defmodule Exmc.Builder do
         {:rv, dist, params, transform}
       end
 
-    node = %Node{id: id, op: op, deps: []}
+    deps = params |> Map.values() |> Enum.filter(&is_binary/1)
+    node = %Node{id: id, op: op, deps: deps}
     IR.add_node(ir, node)
   end
 
@@ -46,7 +48,7 @@ defmodule Exmc.Builder do
   """
   def obs(%IR{} = ir, id, rv_id, value, opts \\ [])
       when is_binary(id) and is_binary(rv_id) do
-    meta = build_obs_meta(opts)
+    meta = build_obs_meta(opts, value)
     node = %Node{id: id, op: {:obs, rv_id, value, meta}, deps: [rv_id]}
     IR.add_node(ir, node)
   end
@@ -67,16 +69,27 @@ defmodule Exmc.Builder do
     IR.add_node(ir, node)
   end
 
-  defp build_obs_meta(opts) when is_list(opts) do
+  defp build_obs_meta(opts, value) when is_list(opts) do
     meta = Keyword.get(opts, :meta, %{})
     meta = if is_map(meta), do: meta, else: %{}
 
-    meta
-    |> put_if_present(:likelihood, Keyword.get(opts, :likelihood))
-    |> put_if_present(:weight, Keyword.get(opts, :weight))
-    |> put_if_present(:mask, Keyword.get(opts, :mask))
-    |> put_if_present(:reduce, Keyword.get(opts, :reduce))
+    meta =
+      meta
+      |> put_if_present(:likelihood, Keyword.get(opts, :likelihood))
+      |> put_if_present(:weight, Keyword.get(opts, :weight))
+      |> put_if_present(:mask, Keyword.get(opts, :mask))
+      |> put_if_present(:reduce, Keyword.get(opts, :reduce))
+
+    # Auto-add reduce: :sum for non-scalar obs (rank > 0)
+    if not Map.has_key?(meta, :reduce) and vector_obs?(value) do
+      Map.put(meta, :reduce, :sum)
+    else
+      meta
+    end
   end
+
+  defp vector_obs?(%Nx.Tensor{} = t), do: tuple_size(Nx.shape(t)) > 0
+  defp vector_obs?(_), do: false
 
   defp put_if_present(meta, _key, nil), do: meta
   defp put_if_present(meta, key, value), do: Map.put(meta, key, value)

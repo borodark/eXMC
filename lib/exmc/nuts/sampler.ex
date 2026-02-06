@@ -26,17 +26,22 @@ defmodule Exmc.NUTS.Sampler do
 
   Returns `{trace, stats}` where:
   - `trace`: `%{var_name => Nx.t() of shape {num_samples, ...var_shape}}` in constrained space
-  - `stats`: `%{step_size:, inv_mass_diag:, divergences:, num_warmup:, num_samples:}`
+  - `stats`: `%{step_size:, inv_mass_diag:, divergences:, num_warmup:, num_samples:, sample_stats:}`
+    where `sample_stats` is a list of per-step maps with keys `:tree_depth`, `:n_steps`, `:divergent`, `:accept_prob`
   """
   def sample(ir, init_values \\ %{}, opts \\ []) do
+    compiled = Compiler.compile_for_sampling(ir)
+    sample_from_compiled(compiled, init_values, opts)
+  end
+
+  # Run sampling from pre-compiled artifacts. Used by sample_chains to compile once.
+  defp sample_from_compiled({vag_fn, step_fn, pm, ncp_info}, init_values, opts) do
     opts = Keyword.merge(@default_opts, opts)
     num_warmup = opts[:num_warmup]
     num_samples = opts[:num_samples]
     max_tree_depth = opts[:max_tree_depth]
     target_accept = opts[:target_accept]
     seed = opts[:seed]
-
-    {vag_fn, pm} = Compiler.value_and_grad(ir)
 
     if pm.size == 0 do
       empty_trace = %{}
@@ -64,7 +69,7 @@ defmodule Exmc.NUTS.Sampler do
       inv_mass_diag = Nx.broadcast(Nx.tensor(1.0, type: :f64), {d})
 
       # Find reasonable initial step size
-      {epsilon, rng} = find_reasonable_epsilon_with_rng(vag_fn, q, logp, grad, inv_mass_diag, rng)
+      {epsilon, rng} = find_reasonable_epsilon_with_rng(step_fn, q, logp, grad, inv_mass_diag, rng)
 
       # Run warmup
       state = %{
@@ -76,24 +81,25 @@ defmodule Exmc.NUTS.Sampler do
       }
 
       {state, epsilon, inv_mass_diag} =
-        run_warmup(vag_fn, state, epsilon, inv_mass_diag, d, num_warmup, max_tree_depth, target_accept)
+        run_warmup(step_fn, state, epsilon, inv_mass_diag, d, num_warmup, max_tree_depth, target_accept)
 
       # Freeze step size
       epsilon_final = epsilon
 
       # Run sampling
-      {draws, state} =
-        run_sampling(vag_fn, state, epsilon_final, inv_mass_diag, num_samples, max_tree_depth)
+      {draws, sample_stats, state} =
+        run_sampling(step_fn, state, epsilon_final, inv_mass_diag, num_samples, max_tree_depth)
 
-      # Build trace
-      trace = build_trace(draws, pm)
+      # Build trace (with NCP reconstruction if applicable)
+      trace = build_trace(draws, pm, ncp_info)
 
       stats = %{
         step_size: epsilon_final,
         inv_mass_diag: inv_mass_diag,
         divergences: state.divergences,
         num_warmup: num_warmup,
-        num_samples: num_samples
+        num_samples: num_samples,
+        sample_stats: sample_stats
       }
 
       {trace, stats}
@@ -138,36 +144,46 @@ defmodule Exmc.NUTS.Sampler do
 
   # --- Step size finding using :rand ---
 
-  defp find_reasonable_epsilon_with_rng(vag_fn, q, logp, grad, inv_mass_diag, rng) do
+  defp find_reasonable_epsilon_with_rng(step_fn, q, logp, grad, inv_mass_diag, rng) do
     {p, rng} = sample_momentum_fast(rng, inv_mass_diag)
     joint_logp_0 = Leapfrog.joint_logp(logp, p, inv_mass_diag) |> Nx.to_number()
 
     epsilon = 1.0
-    {_q_new, p_new, logp_new, _grad_new} =
-      Leapfrog.step(vag_fn, q, p, grad, epsilon, inv_mass_diag)
+    {_q_new, p_new, logp_new, _grad_new} = step_fn.(q, p, grad, epsilon, inv_mass_diag)
 
     joint_logp_new = Leapfrog.joint_logp(logp_new, p_new, inv_mass_diag) |> Nx.to_number()
-    log_accept = joint_logp_new - joint_logp_0
+
+    log_accept =
+      if is_number(joint_logp_0) and is_number(joint_logp_new) do
+        joint_logp_new - joint_logp_0
+      else
+        -1000.0
+      end
 
     direction = if log_accept > :math.log(0.5), do: 1.0, else: -1.0
-    epsilon = search_epsilon(vag_fn, q, p, grad, inv_mass_diag, epsilon, direction, joint_logp_0, 0)
+    epsilon = search_epsilon(step_fn, q, p, grad, inv_mass_diag, epsilon, direction, joint_logp_0, 0)
     {epsilon, rng}
   end
 
-  defp search_epsilon(_vag_fn, _q, _p, _grad, _inv_mass_diag, epsilon, _direction, _joint_logp_0, count)
+  defp search_epsilon(_step_fn, _q, _p, _grad, _inv_mass_diag, epsilon, _direction, _joint_logp_0, count)
        when count >= 100 do
     max(epsilon, 1.0e-10)
   end
 
-  defp search_epsilon(vag_fn, q, p, grad, inv_mass_diag, epsilon, direction, joint_logp_0, count) do
+  defp search_epsilon(step_fn, q, p, grad, inv_mass_diag, epsilon, direction, joint_logp_0, count) do
     factor = :math.pow(2.0, direction)
     new_epsilon = epsilon * factor
 
-    {_q_new, p_new, logp_new, _grad_new} =
-      Leapfrog.step(vag_fn, q, p, grad, new_epsilon, inv_mass_diag)
+    {_q_new, p_new, logp_new, _grad_new} = step_fn.(q, p, grad, new_epsilon, inv_mass_diag)
 
     joint_logp_new = Leapfrog.joint_logp(logp_new, p_new, inv_mass_diag) |> Nx.to_number()
-    log_accept = joint_logp_new - joint_logp_0
+
+    log_accept =
+      if is_number(joint_logp_0) and is_number(joint_logp_new) do
+        joint_logp_new - joint_logp_0
+      else
+        -1000.0
+      end
 
     crossed =
       if direction > 0 do
@@ -179,7 +195,7 @@ defmodule Exmc.NUTS.Sampler do
     if crossed or not is_finite(log_accept) do
       max(new_epsilon, 1.0e-10)
     else
-      search_epsilon(vag_fn, q, p, grad, inv_mass_diag, new_epsilon, direction, joint_logp_0, count + 1)
+      search_epsilon(step_fn, q, p, grad, inv_mass_diag, new_epsilon, direction, joint_logp_0, count + 1)
     end
   end
 
@@ -188,7 +204,7 @@ defmodule Exmc.NUTS.Sampler do
 
   # --- Warmup ---
 
-  defp run_warmup(vag_fn, state, epsilon, inv_mass_diag, d, num_warmup, max_tree_depth, target_accept) do
+  defp run_warmup(step_fn, state, epsilon, inv_mass_diag, d, num_warmup, max_tree_depth, target_accept) do
     if num_warmup == 0 do
       {state, epsilon, inv_mass_diag}
     else
@@ -201,7 +217,7 @@ defmodule Exmc.NUTS.Sampler do
       da_state = StepSize.init(epsilon, target_accept)
 
       {state, da_state} =
-        run_phase(vag_fn, state, epsilon, inv_mass_diag, max_tree_depth, da_state, 0, init_buffer)
+        run_phase(step_fn, state, epsilon, inv_mass_diag, max_tree_depth, da_state, 0, init_buffer)
 
       epsilon = current_epsilon(da_state)
 
@@ -212,7 +228,7 @@ defmodule Exmc.NUTS.Sampler do
         # Phase II: step size + mass matrix with doubling windows
         {state, epsilon, inv_mass_diag, _} =
           run_phase_ii(
-            vag_fn, state, epsilon, inv_mass_diag, d,
+            step_fn, state, epsilon, inv_mass_diag, d,
             max_tree_depth, target_accept, init_buffer, adapt_end
           )
 
@@ -220,7 +236,7 @@ defmodule Exmc.NUTS.Sampler do
         da_state = StepSize.init(epsilon, target_accept)
 
         {state, da_state} =
-          run_phase(vag_fn, state, epsilon, inv_mass_diag, max_tree_depth, da_state, adapt_end, num_warmup)
+          run_phase(step_fn, state, epsilon, inv_mass_diag, max_tree_depth, da_state, adapt_end, num_warmup)
 
         epsilon_final = StepSize.finalize(da_state)
         {state, epsilon_final, inv_mass_diag}
@@ -228,21 +244,21 @@ defmodule Exmc.NUTS.Sampler do
     end
   end
 
-  defp run_phase(vag_fn, state, _epsilon, inv_mass_diag, max_tree_depth, da_state, from, to) do
+  defp run_phase(step_fn, state, _epsilon, inv_mass_diag, max_tree_depth, da_state, from, to) do
     if from >= to do
       {state, da_state}
     else
       Enum.reduce(from..(to - 1)//1, {state, da_state}, fn _i, {state, da_state} ->
         # Use the DA's current epsilon for each step
         eps = current_epsilon(da_state)
-        {state, accept_stat} = nuts_step(vag_fn, state, eps, inv_mass_diag, max_tree_depth)
+        {state, accept_stat} = nuts_step(step_fn, state, eps, inv_mass_diag, max_tree_depth)
         da_state = StepSize.update(da_state, accept_stat)
         {state, da_state}
       end)
     end
   end
 
-  defp run_phase_ii(vag_fn, state, epsilon, inv_mass_diag, d, max_tree_depth, target_accept, from, to) do
+  defp run_phase_ii(step_fn, state, epsilon, inv_mass_diag, d, max_tree_depth, target_accept, from, to) do
     windows = build_windows(from, to)
 
     Enum.reduce(windows, {state, epsilon, inv_mass_diag, nil}, fn {win_start, win_end}, {state, epsilon, inv_mass_diag, _} ->
@@ -252,7 +268,7 @@ defmodule Exmc.NUTS.Sampler do
       {state, da_state, welford} =
         Enum.reduce(win_start..(win_end - 1)//1, {state, da_state, welford}, fn _i, {state, da_state, welford} ->
           eps = current_epsilon(da_state)
-          {state, accept_stat} = nuts_step(vag_fn, state, eps, inv_mass_diag, max_tree_depth)
+          {state, accept_stat} = nuts_step(step_fn, state, eps, inv_mass_diag, max_tree_depth)
           da_state = StepSize.update(da_state, accept_stat)
           welford = MassMatrix.update(welford, state.q)
           {state, da_state, welford}
@@ -299,13 +315,13 @@ defmodule Exmc.NUTS.Sampler do
 
   # --- NUTS step ---
 
-  defp nuts_step(vag_fn, state, epsilon, inv_mass_diag, max_tree_depth) do
+  defp nuts_step(step_fn, state, epsilon, inv_mass_diag, max_tree_depth) do
     {p, rng} = sample_momentum_fast(state.rng, inv_mass_diag)
     joint_logp_0 = Leapfrog.joint_logp(state.logp, p, inv_mass_diag)
 
     result =
       Tree.build(
-        vag_fn, state.q, p, state.logp, state.grad,
+        step_fn, state.q, p, state.logp, state.grad,
         epsilon, inv_mass_diag, max_tree_depth, rng, joint_logp_0
       )
 
@@ -332,33 +348,185 @@ defmodule Exmc.NUTS.Sampler do
     {new_state, accept_stat}
   end
 
+  # NUTS step returning additional stats for diagnostics
+  defp nuts_step_with_stats(step_fn, state, epsilon, inv_mass_diag, max_tree_depth) do
+    {p, rng} = sample_momentum_fast(state.rng, inv_mass_diag)
+    joint_logp_0 = Leapfrog.joint_logp(state.logp, p, inv_mass_diag)
+
+    result =
+      Tree.build(
+        step_fn, state.q, p, state.logp, state.grad,
+        epsilon, inv_mass_diag, max_tree_depth, rng, joint_logp_0
+      )
+
+    accept_stat =
+      if result.n_steps > 0 do
+        result.accept_sum / result.n_steps
+      else
+        0.0
+      end
+
+    {_, rng} = :rand.uniform_s(rng)
+    divergences = if result.divergent, do: state.divergences + 1, else: state.divergences
+
+    new_state = %{
+      q: result.q,
+      logp: result.logp,
+      grad: result.grad,
+      rng: rng,
+      divergences: divergences
+    }
+
+    step_info = %{
+      depth: result.depth,
+      n_steps: result.n_steps,
+      divergent: result.divergent
+    }
+
+    {new_state, accept_stat, step_info}
+  end
+
   # --- Sampling ---
 
-  defp run_sampling(vag_fn, state, epsilon, inv_mass_diag, num_samples, max_tree_depth) do
-    {draws_reversed, state} =
-      Enum.reduce(1..num_samples, {[], state}, fn _i, {draws, state} ->
-        {state, _accept_stat} = nuts_step(vag_fn, state, epsilon, inv_mass_diag, max_tree_depth)
-        {[state.q | draws], state}
+  defp run_sampling(step_fn, state, epsilon, inv_mass_diag, num_samples, max_tree_depth) do
+    {draws_reversed, sample_stats_reversed, state} =
+      Enum.reduce(1..num_samples, {[], [], state}, fn _i, {draws, stats_acc, state} ->
+        {state, accept_stat, step_info} =
+          nuts_step_with_stats(step_fn, state, epsilon, inv_mass_diag, max_tree_depth)
+
+        step_stat = %{
+          tree_depth: step_info.depth,
+          n_steps: step_info.n_steps,
+          divergent: step_info.divergent,
+          accept_prob: accept_stat
+        }
+
+        {[state.q | draws], [step_stat | stats_acc], state}
       end)
 
-    {Enum.reverse(draws_reversed), state}
+    {Enum.reverse(draws_reversed), Enum.reverse(sample_stats_reversed), state}
+  end
+
+  @doc """
+  Run multiple chains with different seeds.
+
+  Compiles the model once and runs chains in parallel by default.
+
+  Returns `{[traces], [stats]}` where each element corresponds to one chain.
+
+  ## Options
+
+  - `:parallel` — run chains concurrently (default: `true`)
+  - `:max_concurrency` — max parallel chains (default: `num_chains`)
+  - `:init_values` — initial values for all chains (default: `%{}`)
+
+  Plus all options from `sample/3` (`:num_warmup`, `:num_samples`, `:seed`, etc.).
+  """
+  def sample_chains(ir, num_chains, opts \\ []) when num_chains >= 1 do
+    base_seed = Keyword.get(opts, :seed, 0)
+    init_values = Keyword.get(opts, :init_values, %{})
+    parallel = Keyword.get(opts, :parallel, true)
+    max_concurrency = Keyword.get(opts, :max_concurrency, num_chains)
+
+    # Strip chain-specific opts before passing to sample
+    sample_opts = Keyword.drop(opts, [:init_values, :parallel, :max_concurrency])
+
+    # Compile once, share across all chains
+    compiled = Compiler.compile_for_sampling(ir)
+
+    chain_opts_list =
+      Enum.map(0..(num_chains - 1), fn i ->
+        Keyword.put(sample_opts, :seed, base_seed + i * 7919)
+      end)
+
+    results =
+      if parallel and num_chains > 1 do
+        chain_opts_list
+        |> Task.async_stream(
+          fn chain_opts -> sample_from_compiled(compiled, init_values, chain_opts) end,
+          max_concurrency: max_concurrency,
+          timeout: :infinity,
+          ordered: true
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+      else
+        Enum.map(chain_opts_list, fn chain_opts ->
+          sample_from_compiled(compiled, init_values, chain_opts)
+        end)
+      end
+
+    traces = Enum.map(results, fn {trace, _stats} -> trace end)
+    stats = Enum.map(results, fn {_trace, stats} -> stats end)
+    {traces, stats}
   end
 
   # --- Trace building ---
 
-  defp build_trace(draws, pm) do
+  defp build_trace(draws, pm, ncp_info) do
     stacked = Nx.stack(draws)
 
-    Map.new(pm.entries, fn entry ->
-      sliced = Nx.slice_along_axis(stacked, entry.offset, entry.length, axis: 1)
+    base_trace =
+      Map.new(pm.entries, fn entry ->
+        sliced = Nx.slice_along_axis(stacked, entry.offset, entry.length, axis: 1)
 
-      num_samples = elem(Nx.shape(stacked), 0)
-      target_shape = Tuple.insert_at(entry.shape, 0, num_samples)
-      reshaped = Nx.reshape(sliced, target_shape)
+        num_samples = elem(Nx.shape(stacked), 0)
+        target_shape = Tuple.insert_at(entry.shape, 0, num_samples)
+        reshaped = Nx.reshape(sliced, target_shape)
 
-      transformed = Transform.apply(entry.transform, reshaped)
+        transformed = Transform.apply(entry.transform, reshaped)
 
-      {entry.id, transformed}
+        {entry.id, transformed}
+      end)
+
+    reconstruct_ncp(base_trace, ncp_info)
+  end
+
+  # Reconstruct NCP'd variables: x = mu + sigma * z (in topological order)
+  defp reconstruct_ncp(trace, ncp_info) when map_size(ncp_info) == 0, do: trace
+
+  defp reconstruct_ncp(trace, ncp_info) do
+    order = ncp_topo_order(ncp_info)
+
+    Enum.reduce(order, trace, fn rv_id, trace ->
+      %{mu: mu_src, sigma: sigma_src} = ncp_info[rv_id]
+      z = Map.fetch!(trace, rv_id)
+      mu = resolve_trace_value(mu_src, trace)
+      sigma = resolve_trace_value(sigma_src, trace)
+      Map.put(trace, rv_id, Nx.add(mu, Nx.multiply(sigma, z)))
     end)
   end
+
+  defp resolve_trace_value(v, trace) when is_binary(v), do: Map.fetch!(trace, v)
+  defp resolve_trace_value(%Nx.Tensor{} = v, _trace), do: v
+  defp resolve_trace_value(v, _trace) when is_number(v), do: Nx.tensor(v, type: :f64)
+
+  # Topological sort for NCP entries: process entries whose NCP dependencies are resolved first
+  defp ncp_topo_order(ncp_info) do
+    ncp_ids = MapSet.new(Map.keys(ncp_info))
+    remaining = Map.keys(ncp_info)
+    do_ncp_topo(remaining, ncp_info, ncp_ids, MapSet.new(), [])
+  end
+
+  defp do_ncp_topo([], _ncp_info, _ncp_ids, _done, acc), do: Enum.reverse(acc)
+
+  defp do_ncp_topo(remaining, ncp_info, ncp_ids, done, acc) do
+    ready =
+      Enum.filter(remaining, fn id ->
+        %{mu: mu, sigma: sigma} = ncp_info[id]
+        ncp_dep_resolved?(mu, ncp_ids, done) and ncp_dep_resolved?(sigma, ncp_ids, done)
+      end)
+
+    if ready == [] do
+      Enum.reverse(acc) ++ remaining
+    else
+      new_done = Enum.reduce(ready, done, &MapSet.put(&2, &1))
+      do_ncp_topo(remaining -- ready, ncp_info, ncp_ids, new_done, Enum.reverse(Enum.sort(ready)) ++ acc)
+    end
+  end
+
+  defp ncp_dep_resolved?(src, ncp_ids, done) when is_binary(src) do
+    not MapSet.member?(ncp_ids, src) or MapSet.member?(done, src)
+  end
+
+  defp ncp_dep_resolved?(_src, _ncp_ids, _done), do: true
 end

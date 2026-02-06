@@ -25,4 +25,12 @@ defmodule Exmc.Dist.HalfNormal do
 
   @impl true
   def transform(_params), do: :softplus
+
+  @impl true
+  def sample(%{sigma: sigma}, rng) do
+    sigma_f = Nx.to_number(sigma)
+    {z, rng} = :rand.normal_s(rng)
+    value = abs(z) * sigma_f
+    {Nx.tensor(value), rng}
+  end
 end
