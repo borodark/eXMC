@@ -7,7 +7,9 @@ defmodule Exmc.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      description: "Probabilistic programming for the BEAM",
+      package: package()
     ]
   end
 
@@ -18,7 +20,13 @@ defmodule Exmc.MixProject do
     ]
   end
 
-  # Run "mix help deps" to learn about dependencies.
+  defp package do
+    [
+      licenses: ["AGPL-3.0-only"],
+      links: %{}
+    ]
+  end
+
   defp deps do
     [
       {:nx, "~> 0.9.2"},
