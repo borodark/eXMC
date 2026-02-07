@@ -123,3 +123,21 @@ See [`../exmc_viz/`](../exmc_viz/) for native ArviZ-style diagnostics -- trace p
 ## License
 
 [GNU Affero General Public License v2.0](./LICENSE)
+
+
+P.S.
+
+```
+❯ In a latin _Documenting important things_ would be what?                                                      
+                                                           
+● Res gestae notatu dignae -- "things done worthy of noting"                                                    
+                                                           
+  Or more concisely for a section header:                                                                       
+   
+  - Notanda -- "things to be noted"                                                                             
+  - Memoranda -- "things to be remembered" (origin of the English word)
+  - Acta notabilia -- "notable proceedings"
+
+  For a DECISIONS.md-style document, Memoranda fits best -- it literally means "things that must be remembered,"
+   which is exactly what architectural decision records are.
+```
