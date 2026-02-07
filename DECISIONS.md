@@ -114,7 +114,7 @@ Each entry includes the assumption that must hold for the decision to remain val
 - Decision: `Exmc.Math.lgamma` uses the Lanczos approximation (g=7, 9 coefficients) implemented entirely with Nx ops.
 - Rationale: No external C dependencies; the implementation is differentiable through `Nx.Defn.grad`. Accurate to ~15 digits for Re(x) > 0.5.
 - Assumption: The gradient of lgamma via Lanczos is numerically stable on BinaryBackend. **Known violation on BinaryBackend only:** gradient triggers `Complex.divide` at extreme values. **Resolved by D24:** when EXLA is available, `Compiler.value_and_grad` uses `EXLA.jit` which handles lgamma gradient correctly.
-- Implication: Gamma, Beta, and StudentT work as sampled priors when EXLA is available. On pure BinaryBackend, they remain limited to observation-only use.
+- Implication: Gamma, Beta, and StudentT work as sampled priors when EXLA is available. On pure BinaryBackend, they remain limited to observation-only use. The distinction: when a distribution is a **free RV** (sampled prior), the NUTS sampler must differentiate its logpdf with respect to the variable's own value — this requires `d/dx lgamma(x)`, which crashes on BinaryBackend. When a distribution is an **observation likelihood** with fixed (constant) shape/rate/nu parameters, `lgamma(alpha)` evaluates to a scalar constant that vanishes from the gradient entirely — no differentiation through lgamma occurs, so BinaryBackend handles it correctly.
 
 ## 22. Hierarchical params use string references resolved at eval time
 - Decision: String values in a distribution's params map (e.g., `%{mu: "parent_mu"}`) reference other RVs and are resolved at evaluation time.
