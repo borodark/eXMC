@@ -13,7 +13,11 @@ defmodule Exmc.NUTS.StepSize do
   def init(epsilon, target_accept \\ 0.8) when is_number(epsilon) do
     %{
       log_epsilon: :math.log(epsilon),
-      log_epsilon_bar: 0.0,
+      # Initialize smoothed value from the input epsilon (not 0.0).
+      # With short adaptation windows (50-200 iterations), starting at 0.0
+      # (step size 1.0) causes log_epsilon_bar to lag behind the working value,
+      # producing an overly conservative final step size.
+      log_epsilon_bar: :math.log(epsilon),
       h_bar: 0.0,
       mu: :math.log(10.0 * epsilon),
       m: 0,
@@ -65,11 +69,23 @@ defmodule Exmc.NUTS.StepSize do
     # Determine direction: if accept prob > 0.5, double; else halve
     direction = if log_accept > :math.log(0.5), do: 1.0, else: -1.0
 
-    epsilon = search_epsilon(vag_fn, q, p, grad, inv_mass_diag, epsilon, direction, joint_logp_0, 0)
+    epsilon =
+      search_epsilon(vag_fn, q, p, grad, inv_mass_diag, epsilon, direction, joint_logp_0, 0)
+
     {epsilon, key}
   end
 
-  defp search_epsilon(_vag_fn, _q, _p, _grad, _inv_mass_diag, epsilon, _direction, _joint_logp_0, count)
+  defp search_epsilon(
+         _vag_fn,
+         _q,
+         _p,
+         _grad,
+         _inv_mass_diag,
+         epsilon,
+         _direction,
+         _joint_logp_0,
+         count
+       )
        when count >= 100 do
     # Safety: cap iterations
     max(epsilon, 1.0e-10)
@@ -97,7 +113,17 @@ defmodule Exmc.NUTS.StepSize do
     if crossed or not is_finite(log_accept) do
       max(new_epsilon, 1.0e-10)
     else
-      search_epsilon(vag_fn, q, p, grad, inv_mass_diag, new_epsilon, direction, joint_logp_0, count + 1)
+      search_epsilon(
+        vag_fn,
+        q,
+        p,
+        grad,
+        inv_mass_diag,
+        new_epsilon,
+        direction,
+        joint_logp_0,
+        count + 1
+      )
     end
   end
 

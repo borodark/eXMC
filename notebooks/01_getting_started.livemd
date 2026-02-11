@@ -1,0 +1,78 @@
+# Getting Started with Exmc
+
+```elixir
+Mix.install([
+  {:exmc, path: Path.expand("../exmc", __DIR__)},
+  {:exmc_viz, path: Path.expand("../exmc_viz", __DIR__)},
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## Building a Simple Model
+
+Exmc uses an IR (intermediate representation) to define probabilistic models.
+Start with `Builder.new_ir()` and add random variables and observations.
+
+```elixir
+alias Exmc.{Builder, Sampler}
+
+# Build a Normal model: x ~ Normal(mu=0, sigma=1), observed at 0.5
+ir = Builder.new_ir()
+ir = Builder.rv(ir, "x", Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
+ir = Builder.obs(ir, "x_obs", "x", Nx.tensor(0.5))
+
+ir
+```
+
+## Running NUTS Sampling
+
+The `Sampler.sample/3` function runs the No-U-Turn Sampler (NUTS):
+
+```elixir
+{trace, stats} = Sampler.sample(ir, %{}, num_samples: 500, seed: 42, num_warmup: 200)
+IO.inspect(Map.keys(trace), label: "Variables")
+IO.inspect(Nx.shape(trace["x"]), label: "Shape")
+```
+
+## Diagnostics
+
+Check convergence with `Diagnostics.summary/1`:
+
+```elixir
+summary = Exmc.Diagnostics.summary(trace)
+IO.inspect(summary, label: "Summary")
+```
+
+## Visualization with VegaLite
+
+Use `ExmcViz.Kino` for inline Livebook plots:
+
+```elixir
+ExmcViz.Kino.trace_plot(trace)
+```
+
+```elixir
+ExmcViz.Kino.histogram(trace)
+```
+
+## A Model with Free Parameters
+
+When parameters are not observed, NUTS explores the posterior:
+
+```elixir
+ir = Builder.new_ir()
+ir = Builder.rv(ir, "mu", Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(10.0)})
+ir = Builder.rv(ir, "sigma", Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(2.0)}, transform: :log)
+ir = Builder.rv(ir, "y", Exmc.Dist.Normal, %{mu: "mu", sigma: "sigma"})
+
+# Observe some data
+data = Nx.tensor([2.1, 2.5, 1.8, 2.3, 2.7])
+ir = Builder.obs(ir, "y_obs", "y", data)
+
+{trace, stats} = Sampler.sample(ir, %{mu: 2.0, sigma: 1.0}, num_samples: 500, seed: 123, num_warmup: 300)
+ExmcViz.Kino.trace_plot(trace)
+```
+
+```elixir
+ExmcViz.Kino.forest_plot(trace)
+```

@@ -1,0 +1,87 @@
+# Hierarchical Models with Exmc
+
+```elixir
+Mix.install([
+  {:exmc, path: Path.expand("../exmc", __DIR__)},
+  {:exmc_viz, path: Path.expand("../exmc_viz", __DIR__)},
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## Building a Hierarchical Model
+
+Hierarchical models have parameters that depend on other parameters.
+Exmc uses string references to express these dependencies.
+
+```elixir
+alias Exmc.{Builder, Sampler}
+
+ir = Builder.new_ir()
+
+# Hyperpriors
+ir = Builder.rv(ir, "mu_group", Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(10.0)})
+ir = Builder.rv(ir, "sigma_group", Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(5.0)}, transform: :log)
+
+# Group-level parameter depends on hyperpriors via string refs
+ir = Builder.rv(ir, "alpha", Exmc.Dist.Normal, %{mu: "mu_group", sigma: "sigma_group"})
+
+# Observation
+data = Nx.tensor([4.1, 3.8, 4.5, 4.2, 3.9])
+ir = Builder.rv(ir, "y", Exmc.Dist.Normal, %{mu: "alpha", sigma: Nx.tensor(0.5)})
+ir = Builder.obs(ir, "y_obs", "y", data)
+
+ir
+```
+
+## NCP Rewrite
+
+Exmc automatically applies Non-Centered Parameterization (NCP) to hierarchical
+models. This improves sampling efficiency by reparameterizing
+`alpha ~ Normal(mu, sigma)` as `alpha_raw ~ Normal(0, 1)` with
+`alpha = mu + sigma * alpha_raw`.
+
+```elixir
+{trace, stats} =
+  Sampler.sample(ir, %{mu_group: 4.0, sigma_group: 1.0, alpha: 4.0},
+    num_samples: 500,
+    seed: 42,
+    num_warmup: 300
+  )
+
+IO.inspect(Map.keys(trace), label: "Variables sampled")
+```
+
+## Multi-Chain Sampling
+
+Run multiple chains for convergence diagnostics:
+
+```elixir
+{traces, stats_list} =
+  Exmc.Sampler.sample_chains(ir, %{mu_group: 4.0, sigma_group: 1.0, alpha: 4.0},
+    num_chains: 4,
+    num_samples: 300,
+    seed: 42,
+    num_warmup: 200
+  )
+
+IO.puts("Chains: #{length(traces)}")
+```
+
+## R-hat Convergence Diagnostic
+
+R-hat measures between-chain vs within-chain variance. Values near 1.0 indicate convergence.
+
+```elixir
+for name <- Map.keys(hd(traces)) |> Enum.sort() do
+  rhat = Exmc.Diagnostics.rhat(traces, name)
+  IO.puts("#{name}: R-hat = #{Float.round(rhat, 3)}")
+end
+```
+
+## Forest Plot
+
+Visualize posterior credible intervals:
+
+```elixir
+ExmcViz.Kino.forest_plot(hd(traces))
+```

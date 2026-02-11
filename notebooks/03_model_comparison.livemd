@@ -1,0 +1,92 @@
+# Model Comparison with WAIC and LOO
+
+```elixir
+Mix.install([
+  {:exmc, path: Path.expand("../exmc", __DIR__)},
+  {:exmc_viz, path: Path.expand("../exmc_viz", __DIR__)},
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## Two Competing Models
+
+We'll build two models for the same data and compare them using
+information criteria.
+
+```elixir
+alias Exmc.{Builder, Sampler, ModelComparison}
+
+# Observed data
+data = Nx.tensor([2.1, 2.5, 1.8, 2.3, 2.7, 2.0, 2.4])
+
+# Model 1: Known variance
+ir1 = Builder.new_ir()
+ir1 = Builder.rv(ir1, "mu", Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(10.0)})
+ir1 = Builder.rv(ir1, "y", Exmc.Dist.Normal, %{mu: "mu", sigma: Nx.tensor(1.0)})
+ir1 = Builder.obs(ir1, "y_obs", "y", data)
+
+# Model 2: Unknown variance
+ir2 = Builder.new_ir()
+ir2 = Builder.rv(ir2, "mu", Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(10.0)})
+ir2 = Builder.rv(ir2, "sigma", Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(2.0)}, transform: :log)
+ir2 = Builder.rv(ir2, "y", Exmc.Dist.Normal, %{mu: "mu", sigma: "sigma"})
+ir2 = Builder.obs(ir2, "y_obs", "y", data)
+
+{ir1, ir2}
+```
+
+## Sampling Both Models
+
+```elixir
+{trace1, _} = Sampler.sample(ir1, %{mu: 2.0}, num_samples: 500, seed: 42, num_warmup: 200)
+{trace2, _} = Sampler.sample(ir2, %{mu: 2.0, sigma: 1.0}, num_samples: 500, seed: 42, num_warmup: 200)
+
+IO.puts("Model 1 vars: #{inspect(Map.keys(trace1))}")
+IO.puts("Model 2 vars: #{inspect(Map.keys(trace2))}")
+```
+
+## Computing WAIC
+
+WAIC (Widely Applicable Information Criterion) estimates out-of-sample
+prediction accuracy using the log pointwise predictive density.
+
+```elixir
+waic1 = ModelComparison.waic(ir1, trace1)
+waic2 = ModelComparison.waic(ir2, trace2)
+
+IO.puts("Model 1 WAIC: #{Float.round(waic1.waic, 2)} (se: #{Float.round(waic1.se, 2)})")
+IO.puts("Model 2 WAIC: #{Float.round(waic2.waic, 2)} (se: #{Float.round(waic2.se, 2)})")
+```
+
+## Computing LOO
+
+LOO-CV (Leave-One-Out Cross-Validation) via Pareto-smoothed importance sampling:
+
+```elixir
+loo1 = ModelComparison.loo(ir1, trace1)
+loo2 = ModelComparison.loo(ir2, trace2)
+
+IO.puts("Model 1 LOO: #{Float.round(loo1.loo, 2)} (se: #{Float.round(loo1.se, 2)})")
+IO.puts("Model 2 LOO: #{Float.round(loo2.loo, 2)} (se: #{Float.round(loo2.se, 2)})")
+```
+
+## Model Comparison Table
+
+Use `ModelComparison.compare/1` to rank models:
+
+```elixir
+comparison = ModelComparison.compare([
+  {"Fixed variance", ir1, trace1},
+  {"Free variance", ir2, trace2}
+])
+
+IO.inspect(comparison, label: "Comparison")
+```
+
+## Interpreting Results
+
+- **Lower WAIC/LOO is better** (less information loss)
+- **dWAIC/dLOO** shows the difference from the best model
+- **SE** indicates uncertainty in the estimate
+- **p_waic/p_loo** is the effective number of parameters
+- Large p_loo with Pareto k warnings suggests model misspecification

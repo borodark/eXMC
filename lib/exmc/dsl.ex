@@ -26,7 +26,8 @@ defmodule Exmc.DSL do
   @doc "Add a random variable node. Delegates to `Builder.rv/5`."
   defmacro rv(id, dist, params, opts \\ []) do
     quote do
-      var!(ir) = Exmc.Builder.rv(var!(ir), unquote(id), unquote(dist), unquote(params), unquote(opts))
+      var!(ir) =
+        Exmc.Builder.rv(var!(ir), unquote(id), unquote(dist), unquote(params), unquote(opts))
     end
   end
 

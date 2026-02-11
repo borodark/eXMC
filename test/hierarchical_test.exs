@@ -62,8 +62,12 @@ defmodule Exmc.HierarchicalTest do
 
     fd_grad =
       Enum.map(0..(pm.size - 1), fn i ->
-        flat_plus = Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_number(flat[i]) + eps]))
-        flat_minus = Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_number(flat[i]) - eps]))
+        flat_plus =
+          Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_number(flat[i]) + eps]))
+
+        flat_minus =
+          Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_number(flat[i]) - eps]))
+
         {lp_plus, _} = vag_fn.(flat_plus)
         {lp_minus, _} = vag_fn.(flat_minus)
         (Nx.to_number(lp_plus) - Nx.to_number(lp_minus)) / (2 * eps)

@@ -29,10 +29,13 @@ defmodule Exmc.Rewrite.NonCenteredParameterization do
       Enum.reduce(ir.nodes, {ir.nodes, %{}}, fn {id, node}, {nodes, ncp} ->
         case should_ncp?(node, observed) do
           {:yes, mu_src, sigma_src} ->
-            new_op = {:rv, Normal, %{
-              mu: Nx.tensor(0.0, backend: Nx.BinaryBackend),
-              sigma: Nx.tensor(1.0, backend: Nx.BinaryBackend)
-            }}
+            new_op =
+              {:rv, Normal,
+               %{
+                 mu: Nx.tensor(0.0, backend: Nx.BinaryBackend),
+                 sigma: Nx.tensor(1.0, backend: Nx.BinaryBackend)
+               }}
+
             new_node = %Node{node | op: new_op, deps: []}
             {Map.put(nodes, id, new_node), Map.put(ncp, id, %{mu: mu_src, sigma: sigma_src})}
 

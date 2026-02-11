@@ -79,6 +79,7 @@ defmodule Exmc.Builder do
       |> put_if_present(:weight, Keyword.get(opts, :weight))
       |> put_if_present(:mask, Keyword.get(opts, :mask))
       |> put_if_present(:reduce, Keyword.get(opts, :reduce))
+      |> put_if_present(:censored, Keyword.get(opts, :censored))
 
     # Auto-add reduce: :sum for non-scalar obs (rank > 0)
     if not Map.has_key?(meta, :reduce) and vector_obs?(value) do

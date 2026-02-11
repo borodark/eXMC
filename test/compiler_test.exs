@@ -16,8 +16,20 @@ defmodule Exmc.CompilerTest do
       x_flat
       |> Enum.with_index()
       |> Enum.map(fn {_val, i} ->
-        x_plus = Nx.indexed_put(x, Nx.tensor([[i]]), Nx.tensor([Nx.to_flat_list(x) |> Enum.at(i) |> Kernel.+(eps)]))
-        x_minus = Nx.indexed_put(x, Nx.tensor([[i]]), Nx.tensor([Nx.to_flat_list(x) |> Enum.at(i) |> Kernel.-(eps)]))
+        x_plus =
+          Nx.indexed_put(
+            x,
+            Nx.tensor([[i]]),
+            Nx.tensor([Nx.to_flat_list(x) |> Enum.at(i) |> Kernel.+(eps)])
+          )
+
+        x_minus =
+          Nx.indexed_put(
+            x,
+            Nx.tensor([[i]]),
+            Nx.tensor([Nx.to_flat_list(x) |> Enum.at(i) |> Kernel.-(eps)])
+          )
+
         fp = f.(x_plus) |> Nx.to_number()
         fm = f.(x_minus) |> Nx.to_number()
         (fp - fm) / (2.0 * eps)
@@ -100,8 +112,8 @@ defmodule Exmc.CompilerTest do
 
       pm = PointMap.build(ir)
 
-      x_entry = Enum.find(pm.entries, & &1.id == "x")
-      y_entry = Enum.find(pm.entries, & &1.id == "y")
+      x_entry = Enum.find(pm.entries, &(&1.id == "x"))
+      y_entry = Enum.find(pm.entries, &(&1.id == "y"))
 
       # Exponential gets :log transform from rewrite
       assert x_entry.transform == :log

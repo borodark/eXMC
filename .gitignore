@@ -22,3 +22,7 @@ exmc-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 deps/exla/cache/*
+
+# Rust NIF build artifacts
+/native/*/target/
+/priv/native/

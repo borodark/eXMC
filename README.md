@@ -122,22 +122,8 @@ See [`../exmc_viz/`](../exmc_viz/) for native ArviZ-style diagnostics -- trace p
 
 ## License
 
-[GNU Affero General Public License v2.0](./LICENSE)
+Exmc is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
 
+You are free to use, modify, and distribute this software under AGPL terms. If you run a modified version as a network service, you must make your source code available to users of that service.
 
-P.S.
-
-```
-❯ In a latin _Documenting important things_ would be what?                                                      
-                                                           
-● Res gestae notatu dignae -- "things done worthy of noting"                                                    
-                                                           
-  Or more concisely for a section header:                                                                       
-   
-  - Notanda -- "things to be noted"                                                                             
-  - Memoranda -- "things to be remembered" (origin of the English word)
-  - Acta notabilia -- "notable proceedings"
-
-  For a DECISIONS.md-style document, Memoranda fits best -- it literally means "things that must be remembered,"
-   which is exactly what architectural decision records are.
-```
+**Commercial licensing** is available for organizations that need to embed Exmc in proprietary products without AGPL obligations. Contact us for terms.

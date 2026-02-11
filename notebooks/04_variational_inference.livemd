@@ -1,0 +1,87 @@
+# Variational Inference
+
+```elixir
+Mix.install([
+  {:exmc, path: Path.expand("../exmc", __DIR__)},
+  {:exmc_viz, path: Path.expand("../exmc_viz", __DIR__)},
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## When to Use VI vs MCMC
+
+- **MCMC (NUTS)**: Gold standard, asymptotically exact, but slower
+- **ADVI**: Fast mean-field approximation, good for quick exploration
+- **Pathfinder**: Very fast, follows L-BFGS optimization path
+- **SMC**: No gradients needed, handles multimodal posteriors
+
+Use VI for quick model checking, then switch to NUTS for final inference.
+
+## ADVI: Automatic Differentiation Variational Inference
+
+ADVI approximates the posterior with a diagonal normal distribution
+in unconstrained space, optimized by maximizing the ELBO.
+
+```elixir
+alias Exmc.{Builder, ADVI, Sampler}
+
+# Simple model
+ir = Builder.new_ir()
+ir = Builder.rv(ir, "mu", Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(10.0)})
+ir = Builder.rv(ir, "y", Exmc.Dist.Normal, %{mu: "mu", sigma: Nx.tensor(1.0)})
+data = Nx.tensor([2.1, 2.5, 1.8, 2.3, 2.7])
+ir = Builder.obs(ir, "y_obs", "y", data)
+
+{vi_trace, vi_info} = ADVI.fit(ir, num_draws: 1000, max_iters: 500, seed: 42)
+
+IO.puts("ADVI mu estimate: #{Nx.to_number(Nx.mean(vi_trace["mu"])) |> Float.round(3)}")
+IO.puts("Final ELBO: #{Float.round(vi_info.final_elbo, 2)}")
+```
+
+## Pathfinder
+
+Pathfinder traces an L-BFGS optimization path and fits diagonal normal
+approximations along the way, selecting the best by ELBO:
+
+```elixir
+alias Exmc.Pathfinder
+
+{pf_trace, pf_info} = Pathfinder.fit(ir, num_draws: 1000, seed: 42)
+
+IO.puts("Pathfinder mu estimate: #{Nx.to_number(Nx.mean(pf_trace["mu"])) |> Float.round(3)}")
+IO.puts("Best ELBO: #{Float.round(pf_info.elbo, 2)}")
+IO.puts("Converged in #{pf_info.num_iters} iterations")
+```
+
+## SMC: Sequential Monte Carlo
+
+SMC uses particle methods with tempering. No gradients needed,
+making it robust for complex likelihood surfaces:
+
+```elixir
+alias Exmc.SMC
+
+{smc_trace, smc_info} = SMC.sample(ir, num_particles: 500, seed: 42)
+
+IO.puts("SMC mu estimate: #{Nx.to_number(Nx.mean(smc_trace["mu"])) |> Float.round(3)}")
+IO.puts("Tempering stages: #{length(smc_info.betas)}")
+```
+
+## Comparing VI to NUTS
+
+```elixir
+{nuts_trace, _} = Sampler.sample(ir, %{mu: 2.0}, num_samples: 1000, seed: 42, num_warmup: 300)
+
+nuts_mean = Nx.to_number(Nx.mean(nuts_trace["mu"])) |> Float.round(3)
+vi_mean = Nx.to_number(Nx.mean(vi_trace["mu"])) |> Float.round(3)
+pf_mean = Nx.to_number(Nx.mean(pf_trace["mu"])) |> Float.round(3)
+
+IO.puts("NUTS mean:       #{nuts_mean}")
+IO.puts("ADVI mean:       #{vi_mean}")
+IO.puts("Pathfinder mean: #{pf_mean}")
+```
+
+```elixir
+# Visualize NUTS posterior
+ExmcViz.Kino.histogram(nuts_trace)
+```

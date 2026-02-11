@@ -50,6 +50,7 @@ defmodule Exmc.LogProbTest do
         Nx.subtract(Nx.log(Nx.tensor(1.5)), Nx.multiply(Nx.tensor(1.5), x)),
         z
       )
+
     got = LogProb.eval(ir, %{"z" => z})
 
     assert_close(got, expected)
@@ -68,6 +69,7 @@ defmodule Exmc.LogProbTest do
         Nx.subtract(Nx.log(Nx.tensor(1.5)), Nx.multiply(Nx.tensor(1.5), x)),
         z
       )
+
     got = LogProb.eval(ir, %{"z" => z})
 
     assert_close(got, expected)
@@ -100,6 +102,7 @@ defmodule Exmc.LogProbTest do
     logp_x = Nx.multiply(Nx.tensor(-0.5), Nx.add(x2, Nx.log(Nx.tensor(2.0 * :math.pi()))))
     z = Nx.divide(Nx.subtract(y, Nx.tensor(1.0)), Nx.tensor(2.0))
     z2 = Nx.multiply(z, z)
+
     logp_y =
       Nx.multiply(
         Nx.tensor(-0.5),
@@ -317,6 +320,7 @@ defmodule Exmc.LogProbTest do
 
     z = Nx.tensor(0.2)
     x = Nx.log1p(Nx.exp(z))
+
     base =
       Nx.multiply(
         Nx.tensor(-0.5),
@@ -353,11 +357,13 @@ defmodule Exmc.LogProbTest do
       |> Builder.obs("y_obs", "y", y)
 
     x = Nx.divide(Nx.subtract(y, b), a)
+
     base =
       Nx.multiply(
         Nx.tensor(-0.5),
         Nx.add(Nx.multiply(x, x), Nx.log(Nx.tensor(2.0 * :math.pi())))
       )
+
     jac = Nx.negate(Nx.log(Nx.abs(a)))
     # Vector obs auto-adds reduce: :sum, so result is scalar sum
     expected = Nx.sum(Nx.add(base, jac))

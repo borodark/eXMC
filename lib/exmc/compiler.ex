@@ -14,8 +14,8 @@ defmodule Exmc.Compiler do
 
   Returns `{logp_fn, point_map}` where `logp_fn :: flat_tensor -> scalar_logp`.
   """
-  def compile(%IR{} = ir) do
-    {logp_fn, pm, _ncp_info} = do_compile(ir)
+  def compile(%IR{} = ir, opts \\ []) do
+    {logp_fn, pm, _ncp_info} = do_compile(ir, opts)
     {logp_fn, pm}
   end
 
@@ -36,11 +36,17 @@ defmodule Exmc.Compiler do
   When EXLA is available, the entire leapfrog + gradient is one JIT-compiled call.
   `ncp_info` maps NCP'd variable ids to their original `%{mu:, sigma:}` sources.
   """
-  def compile_for_sampling(%IR{} = ir) do
-    {logp_fn, pm, ncp_info} = do_compile(ir)
-    vag_fn = build_vag_fn(logp_fn)
-    step_fn = build_step_fn(logp_fn, vag_fn)
-    {vag_fn, step_fn, pm, ncp_info}
+  def compile_for_sampling(%IR{} = ir, opts \\ []) do
+    {logp_fn, pm, ncp_info} = do_compile(ir, opts)
+    device = Keyword.get(opts, :device, :host)
+    jit_opts = if device == :host, do: [], else: [client: device]
+    vag_fn = build_vag_fn(logp_fn, jit_opts)
+    step_fn = build_step_fn(logp_fn, vag_fn, jit_opts)
+
+    multi_step_fn =
+      if pm.size > 0, do: Exmc.NUTS.BatchedLeapfrog.build(logp_fn, pm.size, jit_opts), else: nil
+
+    {vag_fn, step_fn, pm, ncp_info, multi_step_fn}
   end
 
   @doc """
@@ -58,13 +64,16 @@ defmodule Exmc.Compiler do
 
     pointwise_fn =
       if pm.size == 0 do
-        evaluated = Map.new(obs_terms, fn {obs_id, terms} ->
-          {obs_id, eval_terms(terms, %{})}
-        end)
+        evaluated =
+          Map.new(obs_terms, fn {obs_id, terms} ->
+            {obs_id, eval_terms(terms, %{})}
+          end)
+
         fn _flat -> evaluated end
       else
         fn flat ->
           vm = PointMap.unpack(flat, pm)
+
           Map.new(obs_terms, fn {obs_id, terms} ->
             {obs_id, eval_terms(terms, vm)}
           end)
@@ -76,8 +85,8 @@ defmodule Exmc.Compiler do
 
   # --- Internal compile pipeline ---
 
-  defp do_compile(%IR{} = ir) do
-    ir = Rewrite.apply(ir)
+  defp do_compile(%IR{} = ir, opts \\ []) do
+    ir = Rewrite.apply(ir, opts)
     ir = ensure_binary_backend(ir)
     pm = PointMap.build(ir)
     ncp_info = ir.ncp_info || %{}
@@ -97,34 +106,33 @@ defmodule Exmc.Compiler do
     {logp_fn, pm, ncp_info}
   end
 
-  defp build_vag_fn(logp_fn) do
-    if Code.ensure_loaded?(EXLA) do
-      EXLA.jit(fn flat -> Nx.Defn.value_and_grad(flat, logp_fn) end)
-    else
-      fn flat -> Nx.Defn.value_and_grad(flat, logp_fn) end
-    end
+  defp build_vag_fn(logp_fn, jit_opts \\ []) do
+    EXLA.jit(fn flat -> Nx.Defn.value_and_grad(flat, logp_fn) end, jit_opts)
   end
 
-  defp build_step_fn(logp_fn, vag_fn) do
-    if Code.ensure_loaded?(EXLA) do
-      jitted = EXLA.jit(fn q, p, grad, eps, inv_mass ->
-        two = Nx.tensor(2.0, type: :f64, backend: Nx.BinaryBackend)
-        half_eps = Nx.divide(eps, two)
-        p_half = Nx.add(p, Nx.multiply(half_eps, grad))
-        q_new = Nx.add(q, Nx.multiply(eps, Nx.multiply(inv_mass, p_half)))
-        {logp_new, grad_new} = Nx.Defn.value_and_grad(q_new, logp_fn)
-        p_new = Nx.add(p_half, Nx.multiply(half_eps, grad_new))
-        {q_new, p_new, Nx.reshape(logp_new, {}), grad_new}
-      end)
+  defp build_step_fn(logp_fn, _vag_fn, jit_opts \\ []) do
+    jitted =
+      EXLA.jit(
+        fn q, p, grad, eps, inv_mass ->
+          two = Nx.tensor(2.0, type: :f64, backend: Nx.BinaryBackend)
+          half = Nx.tensor(0.5, type: :f64, backend: Nx.BinaryBackend)
+          half_eps = Nx.divide(eps, two)
+          p_half = Nx.add(p, Nx.multiply(half_eps, grad))
+          q_new = Nx.add(q, Nx.multiply(eps, Nx.multiply(inv_mass, p_half)))
+          {logp_new, grad_new} = Nx.Defn.value_and_grad(q_new, logp_fn)
+          p_new = Nx.add(p_half, Nx.multiply(half_eps, grad_new))
+          logp_scalar = Nx.reshape(logp_new, {})
+          # Compute joint_logp = logp - 0.5 * p^T M^{-1} p inside JIT
+          ke = Nx.multiply(half, Nx.sum(Nx.multiply(p_new, Nx.multiply(inv_mass, p_new))))
+          joint_logp = Nx.subtract(logp_scalar, ke)
+          {q_new, p_new, logp_scalar, grad_new, Nx.reshape(joint_logp, {})}
+        end,
+        jit_opts
+      )
 
-      fn q, p, grad, epsilon, inv_mass_diag ->
-        eps_t = Nx.tensor(epsilon, type: :f64, backend: Nx.BinaryBackend)
-        jitted.(q, p, grad, eps_t, inv_mass_diag)
-      end
-    else
-      fn q, p, grad, epsilon, inv_mass_diag ->
-        Exmc.NUTS.Leapfrog.step(vag_fn, q, p, grad, epsilon, inv_mass_diag)
-      end
+    fn q, p, grad, epsilon, inv_mass_diag ->
+      eps_t = Nx.tensor(epsilon, type: :f64, backend: Nx.BinaryBackend)
+      jitted.(q, p, grad, eps_t, inv_mass_diag)
     end
   end
 
@@ -158,10 +166,12 @@ defmodule Exmc.Compiler do
   # Free RV without transform
   defp node_term(%{id: id, op: {:rv, dist, params}}, _ir, pm, ncp_info) do
     if PointMap.has_entry?(pm, id) do
-      [fn vm ->
-        resolved = resolve_params_constrained(params, vm, pm, ncp_info)
-        dist.logpdf(Map.fetch!(vm, id), resolved)
-      end]
+      [
+        fn vm ->
+          resolved = resolve_params_constrained(params, vm, pm, ncp_info)
+          dist.logpdf(Map.fetch!(vm, id), resolved)
+        end
+      ]
     else
       []
     end
@@ -221,6 +231,12 @@ defmodule Exmc.Compiler do
 
   # --- Eager obs computation (constant w.r.t. free RVs) ---
 
+  # Censored obs (eager): use CDF-based likelihood instead of logpdf
+  defp eager_obs_term(%{op: {:rv, dist, params}}, value, %{censored: censor_type} = meta) do
+    logp = Exmc.Dist.Censored.log_likelihood(censor_type, value, dist, params)
+    [fn _vm -> apply_obs_meta(logp, Map.delete(meta, :censored)) end]
+  end
+
   defp eager_obs_term(%{op: {:rv, dist, params}}, value, meta) do
     logp = dist.logpdf(value, params)
     [fn _vm -> apply_obs_meta(logp, meta) end]
@@ -239,23 +255,44 @@ defmodule Exmc.Compiler do
 
   # --- Deferred obs computation (depends on free parent RVs) ---
 
+  # Censored obs (deferred): use CDF-based likelihood with resolved params
+  defp deferred_obs_term(
+         %{op: {:rv, dist, params}},
+         value,
+         %{censored: censor_type} = meta,
+         pm,
+         ncp_info
+       ) do
+    [
+      fn vm ->
+        resolved = resolve_params_constrained(params, vm, pm, ncp_info)
+        logp = Exmc.Dist.Censored.log_likelihood(censor_type, value, dist, resolved)
+        apply_obs_meta(logp, Map.delete(meta, :censored))
+      end
+    ]
+  end
+
   defp deferred_obs_term(%{op: {:rv, dist, params}}, value, meta, pm, ncp_info) do
-    [fn vm ->
-      resolved = resolve_params_constrained(params, vm, pm, ncp_info)
-      logp = dist.logpdf(value, resolved)
-      apply_obs_meta(logp, meta)
-    end]
+    [
+      fn vm ->
+        resolved = resolve_params_constrained(params, vm, pm, ncp_info)
+        logp = dist.logpdf(value, resolved)
+        apply_obs_meta(logp, meta)
+      end
+    ]
   end
 
   defp deferred_obs_term(%{op: {:rv, dist, params, transform}}, value, meta, pm, ncp_info) do
-    [fn vm ->
-      resolved = resolve_params_constrained(params, vm, pm, ncp_info)
-      z = inverse_transform(transform, value)
-      x = Transform.apply(transform, z)
-      logp = dist.logpdf(x, resolved)
-      jac = Transform.log_abs_det_jacobian(transform, z)
-      apply_obs_meta(Nx.add(logp, jac), meta)
-    end]
+    [
+      fn vm ->
+        resolved = resolve_params_constrained(params, vm, pm, ncp_info)
+        z = inverse_transform(transform, value)
+        x = Transform.apply(transform, z)
+        logp = dist.logpdf(x, resolved)
+        jac = Transform.log_abs_det_jacobian(transform, z)
+        apply_obs_meta(Nx.add(logp, jac), meta)
+      end
+    ]
   end
 
   defp deferred_obs_term(_target, _value, _meta, _pm, _ncp_info), do: []
@@ -345,8 +382,12 @@ defmodule Exmc.Compiler do
   defp inverse_transform(:softplus, x), do: Nx.log(Nx.expm1(x))
   defp inverse_transform(:logit, x), do: Nx.subtract(Nx.log(x), Nx.log1p(Nx.negate(x)))
 
-  defp has_param_refs?(%{op: {:rv, _dist, params}}), do: Enum.any?(Map.values(params), &is_binary/1)
-  defp has_param_refs?(%{op: {:rv, _dist, params, _transform}}), do: Enum.any?(Map.values(params), &is_binary/1)
+  defp has_param_refs?(%{op: {:rv, _dist, params}}),
+    do: Enum.any?(Map.values(params), &is_binary/1)
+
+  defp has_param_refs?(%{op: {:rv, _dist, params, _transform}}),
+    do: Enum.any?(Map.values(params), &is_binary/1)
+
   defp has_param_refs?(_), do: false
 
   # Resolve params with transforms and NCP reconstruction applied.
@@ -355,6 +396,7 @@ defmodule Exmc.Compiler do
     Map.new(params, fn
       {k, v} when is_binary(v) ->
         {k, resolve_ref(v, vm, pm, ncp_info)}
+
       {k, v} ->
         {k, v}
     end)
@@ -392,9 +434,8 @@ defmodule Exmc.Compiler do
   defp to_tensor(%Nx.Tensor{} = t), do: t
   defp to_tensor(v) when is_number(v) or is_boolean(v), do: Nx.tensor(v)
 
-  # Copy all tensors in IR nodes to BinaryBackend so they can be captured
-  # by closures that EXLA.jit traces. EXLA tracing requires captured tensors
-  # to be BinaryBackend (not EXLA.Backend).
+  # EXLA.jit tracing requires all captured tensors to be on BinaryBackend.
+  # Tensors on EXLA.Backend cannot be traced — they're already device buffers.
   defp ensure_binary_backend(%IR{} = ir) do
     nodes =
       Map.new(ir.nodes, fn {id, node} ->

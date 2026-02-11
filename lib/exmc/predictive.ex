@@ -124,6 +124,7 @@ defmodule Exmc.Predictive do
       {k, v} when is_binary(v) ->
         samples = Map.fetch!(trace, v)
         {k, Nx.reshape(samples[i], {})}
+
       {k, v} ->
         {k, v}
     end)

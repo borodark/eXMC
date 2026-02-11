@@ -20,8 +20,17 @@ defmodule Exmc.Rewrite do
   ]
 
   @doc "Run all rewrite passes on the IR in order."
-  def apply(%IR{} = ir) do
-    Enum.reduce(@passes, ir, fn pass, acc -> pass.run(acc) end)
+  def apply(%IR{} = ir, opts \\ []) do
+    skip_ncp = Keyword.get(opts, :ncp, true) == false
+
+    passes =
+      if skip_ncp do
+        Enum.reject(@passes, &(&1 == Exmc.Rewrite.NonCenteredParameterization))
+      else
+        @passes
+      end
+
+    Enum.reduce(passes, ir, fn pass, acc -> pass.run(acc) end)
   end
 
   @doc "Return the ordered list of pass modules."

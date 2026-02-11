@@ -37,6 +37,7 @@ defmodule Exmc.Diagnostics do
   Effective sample size via initial positive sequence estimator (Geyer 1992).
 
   Takes a 1D tensor or list of samples from a single chain.
+  Uses raw (non-rank-normalized) autocorrelation.
   """
   def ess(samples) do
     values = to_float_list(samples)
@@ -46,8 +47,26 @@ defmodule Exmc.Diagnostics do
       n * 1.0
     else
       acf = autocorrelation(values, min(n - 1, n))
-      # Initial positive sequence: sum pairs of consecutive ACF values
-      # while the sum remains positive
+      ess_from_acf(acf, n)
+    end
+  end
+
+  @doc """
+  Bulk effective sample size (Vehtari et al. 2021).
+
+  Rank-normalizes the chain, then computes ESS on the normalized values.
+  This matches ArviZ's `az.ess(data, method="bulk")` for single-chain input.
+  """
+  def ess_bulk(samples) do
+    values = to_float_list(samples)
+    n = length(values)
+
+    if n < 4 do
+      n * 1.0
+    else
+      # Rank-normalize: rank → normal quantile
+      z = rank_normalize(values)
+      acf = autocorrelation(z, min(n - 1, n))
       ess_from_acf(acf, n)
     end
   end
@@ -126,14 +145,15 @@ defmodule Exmc.Diagnostics do
   # --- Private helpers ---
 
   defp ess_from_acf(acf, n) do
-    # Initial positive sequence estimator
-    # Sum autocorrelation pairs (rho_{2k}, rho_{2k+1}) while their sum > 0
-    max_k = div(length(acf) - 2, 2)
+    # Initial positive sequence estimator (Geyer 1992)
+    # Gamma_m = rho_{2m} + rho_{2m+1}, tau = -1 + 2 * sum Gamma_m while Gamma_m > 0
+    # Note: rho_0 = 1 (included in Gamma_0 = rho_0 + rho_1 = 1 + rho_1)
+    max_k = div(length(acf) - 1, 2)
 
     tau =
       Enum.reduce_while(0..max_k, -1.0, fn k, tau_acc ->
-        rho_2k = Enum.at(acf, 2 * k + 1, 0.0)
-        rho_2k1 = Enum.at(acf, 2 * k + 2, 0.0)
+        rho_2k = Enum.at(acf, 2 * k, 0.0)
+        rho_2k1 = Enum.at(acf, 2 * k + 1, 0.0)
         pair_sum = rho_2k + rho_2k1
 
         if pair_sum > 0 do
@@ -156,6 +176,62 @@ defmodule Exmc.Diagnostics do
     lo_val = Enum.at(sorted, lo)
     hi_val = Enum.at(sorted, hi)
     lo_val + frac * (hi_val - lo_val)
+  end
+
+  # Rank-normalize: map values to normal quantiles via their ranks.
+  # Uses average rank for ties, then Blom's approximation: z = Φ^{-1}((r - 3/8) / (n + 1/4))
+  defp rank_normalize(values) do
+    n = length(values)
+    indexed = Enum.with_index(values)
+    sorted = Enum.sort_by(indexed, fn {v, _} -> v end)
+
+    # Compute average ranks (1-based) for tied groups
+    ranks = :array.new(n)
+
+    ranks =
+      sorted
+      |> Enum.chunk_by(fn {v, _} -> v end)
+      |> Enum.reduce({ranks, 1}, fn group, {r_arr, pos} ->
+        avg_rank = pos + (length(group) - 1) / 2.0
+
+        r_arr =
+          Enum.reduce(group, r_arr, fn {_, orig_idx}, acc ->
+            :array.set(orig_idx, avg_rank, acc)
+          end)
+
+        {r_arr, pos + length(group)}
+      end)
+      |> elem(0)
+
+    # Transform to normal quantiles
+    Enum.map(0..(n - 1), fn i ->
+      r = :array.get(i, ranks)
+      p = (r - 0.375) / (n + 0.25)
+      # Approximate Φ^{-1}(p) using rational approximation (Abramowitz & Stegun)
+      probit(p)
+    end)
+  end
+
+  # Probit function (inverse normal CDF) via rational approximation.
+  # Accurate to ~4.5e-4 for 0 < p < 1.
+  defp probit(p) when p > 0.0 and p < 1.0 do
+    if p < 0.5 do
+      -probit_inner(p)
+    else
+      probit_inner(1.0 - p)
+    end
+  end
+
+  defp probit_inner(p) do
+    # Rational approximation for Φ^{-1}(1-p) where p < 0.5
+    t = :math.sqrt(-2.0 * :math.log(p))
+    c0 = 2.515517
+    c1 = 0.802853
+    c2 = 0.010328
+    d1 = 1.432788
+    d2 = 0.189269
+    d3 = 0.001308
+    t - (c0 + c1 * t + c2 * t * t) / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t)
   end
 
   defp to_float_list(%Nx.Tensor{} = t), do: Nx.to_flat_list(t)

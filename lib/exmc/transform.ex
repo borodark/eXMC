@@ -23,8 +23,7 @@ defmodule Exmc.Transform do
   end
 
   def apply(:logit, z) do
-    # Numerically stable sigmoid: avoid exp overflow on BinaryBackend
-    # sigmoid(z) = exp(-softplus(-z))
+    # Numerically stable sigmoid: sigmoid(z) = exp(-softplus(-z))
     Nx.exp(Nx.negate(softplus(Nx.negate(z))))
   end
 

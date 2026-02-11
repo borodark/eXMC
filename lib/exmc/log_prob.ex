@@ -70,22 +70,22 @@ defmodule Exmc.LogProb do
     if Map.get(meta, :likelihood, true) == false do
       []
     else
-    case target_node.op do
-      {:rv, dist, params} ->
-        resolved = resolve_params(params, value_map)
-        apply_obs_meta([dist.logpdf(value, resolved)], meta)
+      case target_node.op do
+        {:rv, dist, params} ->
+          resolved = resolve_params(params, value_map)
+          apply_obs_meta([dist.logpdf(value, resolved)], meta)
 
-      {:rv, dist, params, transform} ->
-        resolved = resolve_params(params, value_map)
-        z = inverse_transform(transform, value)
-        x = Transform.apply(transform, z)
-        logp = dist.logpdf(x, resolved)
-        jac = Transform.log_abs_det_jacobian(transform, z)
-        apply_obs_meta([Nx.add(logp, jac)], meta)
+        {:rv, dist, params, transform} ->
+          resolved = resolve_params(params, value_map)
+          z = inverse_transform(transform, value)
+          x = Transform.apply(transform, z)
+          logp = dist.logpdf(x, resolved)
+          jac = Transform.log_abs_det_jacobian(transform, z)
+          apply_obs_meta([Nx.add(logp, jac)], meta)
 
-      _ ->
-        []
-    end
+        _ ->
+          []
+      end
     end
   end
 

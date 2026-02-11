@@ -30,7 +30,8 @@ defmodule Exmc.MixProject do
   defp deps do
     [
       {:nx, "~> 0.9.2"},
-      {:exla, "~> 0.9"}
+      {:exla, "~> 0.9"},
+      {:rustler, "~> 0.36", runtime: false}
     ]
   end
 end
