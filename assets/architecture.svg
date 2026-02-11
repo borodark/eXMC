@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300">
+  <defs>
+    <style>
+      .box { fill: #0b0b0b; stroke: #ffb000; stroke-width: 3; rx: 12; }
+      .title { fill: #ffd18a; font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; font-size: 28px; font-weight: 600; }
+      .subtitle { fill: #ffb000; font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; }
+      .arrow { stroke: #ffb000; stroke-width: 4; fill: none; marker-end: url(#arrowhead); }
+      .bg { fill: #000000; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ffb000" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="300" />
+
+  <rect class="box" x="40" y="80" width="220" height="140" />
+  <text class="title" x="150" y="140" text-anchor="middle">IR</text>
+  <text class="subtitle" x="150" y="175" text-anchor="middle">Model graph</text>
+
+  <rect class="box" x="320" y="80" width="220" height="140" />
+  <text class="title" x="430" y="140" text-anchor="middle">Rewrite</text>
+  <text class="subtitle" x="430" y="175" text-anchor="middle">NCP + transforms</text>
+
+  <rect class="box" x="600" y="80" width="220" height="140" />
+  <text class="title" x="710" y="140" text-anchor="middle">Compile</text>
+  <text class="subtitle" x="710" y="175" text-anchor="middle">logp + grad</text>
+
+  <rect class="box" x="880" y="80" width="220" height="140" />
+  <text class="title" x="990" y="140" text-anchor="middle">NUTS</text>
+  <text class="subtitle" x="990" y="175" text-anchor="middle">Sampling + stats</text>
+
+  <line class="arrow" x1="260" y1="150" x2="320" y2="150" />
+  <line class="arrow" x1="540" y1="150" x2="600" y2="150" />
+  <line class="arrow" x1="820" y1="150" x2="880" y2="150" />
+</svg>

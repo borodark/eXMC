@@ -20,6 +20,8 @@ The BEAM gives us lightweight processes, isolation, and message passing. That ch
 - Statistical correctness: NUTS with Stan-style warmup, ESS/R-hat, WAIC/LOO.
 - Composable diagnostics: traces, energy, autocorrelation, and predictive checks.
 
+
+
 ## What The BEAM Enables
 
 - True multi-chain concurrency with one compiled model.
@@ -28,6 +30,7 @@ The BEAM gives us lightweight processes, isolation, and message passing. That ch
 - Isolated failure domains so one chain can fail without killing the run.
 
 ## Architecture
+
 
 ```
 Builder.new_ir()                        # 1. Declare
@@ -55,6 +58,10 @@ Four layers, each a clean boundary:
 | **Compiler** | `Compiler`, `PointMap`, `Transform`, `Rewrite` | IR to differentiable closure. Transforms, Jacobians, NCP |
 | **NUTS** | `Leapfrog`, `Tree`, `MassMatrix`, `StepSize` | Multinomial NUTS (Betancourt 2017) with diagonal mass |
 | **Sampler** | `Sampler`, `Diagnostics`, `Predictive` | Orchestration, warmup, ESS, R-hat, prior/posterior predictive |
+
+
+![Architecture](assets/architecture.svg)
+
 
 ## Quick Start
 
@@ -127,11 +134,3 @@ Every non-trivial choice is recorded in `exmc/DECISIONS.md` with rationale, assu
 See `exmc_viz/` for native ArviZ-style diagnostics — trace plots, histograms, ACF, pair plots, forest plots, energy diagnostics, and live streaming visualization during sampling.
 
 ![Pair Plot](assets/pair_plot_4k.png)
-
-## License
-
-Exmc is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
-
-You are free to use, modify, and distribute this software under AGPL terms. If you run a modified version as a network service, you must make your source code available to users of that service.
-
-Commercial licensing is available for organizations that need to embed Exmc in proprietary products without AGPL obligations. Contact us for terms.
