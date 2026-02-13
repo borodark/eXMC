@@ -285,6 +285,36 @@ Each entry includes the assumption that must hold for the decision to remain val
 - Assumption: Biased progressive sampling is a valid MCMC proposal mechanism that preserves the target distribution (proven in Betancourt 2017).
 - Implication: Implemented in both Elixir `merge_trajectories` and Rust NIF `merge_into_trajectory`. Uses `log(U) < (subtree.lsw - traj.lsw)` to avoid overflow. 1-chain 5-seed race: simple 469 (0.81x PyMC), medium 298 (1.90x PyMC), stress 215 (1.16x PyMC). eXMC now beats PyMC on medium and stress models.
 
+## 53. Precision portability via `Exmc.JIT.precision()`
+- Decision: Replace all hardcoded `:f64` type annotations with `Exmc.JIT.precision()`, which returns `:f32` for EMLX and `:f64` for EXLA. Applied across 8 files: `tree.ex`, `sampler.ex`, `mass_matrix.ex`, `leapfrog.ex`, `batched_leapfrog.ex`, `distributed.ex`, `point_map.ex`, `transform.ex`.
+- Rationale: EMLX (Apple Metal GPU backend) is f32-only. Hardcoded `:f64` annotations cause silent type mismatches or crashes when tensors flow between EMLX (f32) and code expecting f64. A single dispatch point (`JIT.precision()`) makes the entire codebase precision-portable.
+- Assumption: f32 precision is sufficient for MCMC sampling on models where EMLX is used. Numerical range is narrower (exp overflow at ~88 vs ~709 for f64), requiring tighter clamping (D54).
+- Implication: The same `Sampler.sample` call works on both EXLA (f64) and EMLX (f32) with zero code changes. Benchmark results are backend-dependent but posteriors match within f32 tolerance.
+
+## 54. `Nx.clip` broken gradient workaround — use `Nx.max`/`Nx.min`
+- Decision: Replace `Nx.clip(z, lo, hi)` with `Nx.max(Nx.tensor(lo), Nx.min(z, Nx.tensor(hi)))` in `Transform.apply(:log, z)` and `Transform.log_abs_det_jacobian(:log, z)`.
+- Rationale: `Nx.clip` has broken gradient in Evaluator autodiff — when composed with `Nx.exp()` inside `value_and_grad` closures, the gradient is incorrect (measured 1.22 vs correct 1.105). `Nx.max` and `Nx.min` produce correct gradients in the same composition. The bug is specific to the Evaluator backend; EXLA's `Nx.clip` gradient is correct. Since EMLX falls back to Evaluator for `value_and_grad`, this is a blocking issue for macOS support.
+- Assumption: `Nx.max`/`Nx.min` subgradients are correct in all Nx backends (confirmed by test). The Evaluator `Nx.clip` gradient bug may be fixed in a future Nx release.
+- Implication: Transform clamping now uses precision-dependent ranges via `exp_safe_range/0`: `{-20, 20}` for f32 (sigma ∈ [2e-9, 5e8]), `{-200, 200}` for f64 (sigma ∈ [1e-87, 7e86]).
+
+## 55. BinaryBackend numerical safety — distribution scale guards
+- Decision: All distributions that divide by a scale parameter now floor it at `1.0e-30`: `safe_sigma = Nx.max(sigma, Nx.tensor(1.0e-30))`. Applied to 10 distributions: Normal, HalfNormal, Laplace, Cauchy, HalfCauchy, Lognormal, StudentT, TruncatedNormal, GaussianRandomWalk, Censored.
+- Rationale: On BinaryBackend (used by EMLX/Evaluator), Erlang arithmetic throws `ArithmeticError` on divide-by-zero, unlike GPU backends which silently return NaN/Inf per IEEE 754. During NUTS tree building, divergent trajectories can produce extreme q values that, after `exp()` transform, yield sigma ≈ 0 — triggering a divide-by-zero crash in the logpdf. The `1.0e-30` floor prevents the crash while producing a very large negative logpdf that the tree builder correctly treats as divergent.
+- Assumption: A scale of `1.0e-30` is small enough to never affect valid posterior regions. The resulting logpdf is finite (not NaN/Inf) and correctly signals low probability.
+- Implication: Combined with D54 (transform clamping) and D56 (tree crash resilience), this forms a three-layer defense against BinaryBackend arithmetic crashes during NUTS sampling.
+
+## 56. Tree builder crash resilience — try/rescue and NaN-safe divergent leaves
+- Decision: Two changes to `tree.ex` build_subtree base case: (A) Wrap the `step_fn` call in `try/rescue` — on `ArithmeticError`, return a divergent leaf at the starting position instead of crashing the tree. (B) When divergent is detected (NaN `joint_logp` via `is_number/1` guard), fall back to original `q`/`p` for all flat lists instead of using `q_new`/`p_new` which may contain NaN values.
+- Rationale: Even with scale guards (D55), step_fn can produce NaN in momentum without throwing. `Nx.to_flat_list` converts NaN tensors to `:nan` atoms, and Erlang `+` on `:nan` atoms crashes with `ArithmeticError` in `zip_add`. Falling back to original (pre-step) position/momentum for flat lists ensures only valid floats reach Erlang arithmetic. The try/rescue catches any remaining arithmetic failures from the BinaryBackend/Evaluator path.
+- Assumption: Divergent leaves with original q/p are valid NUTS proposals (they have zero acceptance probability and are almost never selected by multinomial sampling). The try/rescue has zero cost on the non-faulting path (BEAM exception registration).
+- Implication: Extends the fault tolerance hierarchy from Chapter 3 to cover BinaryBackend-specific failure modes. The existing NaN detection (leaf level) now has a fallback path that prevents atom-arithmetic crashes.
+
+## 57. Batched leapfrog type cast for Evaluator fallback
+- Decision: After `value_and_grad` inside the `Nx.Defn.while` loop in `batched_leapfrog.ex`, cast results back to target precision: `logp_new = Nx.as_type(logp_new, fp)` and `grad_new = Nx.as_type(grad_new, fp)`.
+- Rationale: The Evaluator/BinaryBackend returns f64 tensors from `value_and_grad` (BinaryBackend's default precision) even when the while-loop accumulator tensors are f32. This causes a while-loop type mismatch (`CompileError`: body returns f64 but initial arguments are f32). The explicit cast ensures type consistency regardless of which backend executes `value_and_grad`.
+- Assumption: The f64→f32 downcast does not lose information relevant to MCMC sampling (the f32 precision is already the working precision for the entire model on EMLX).
+- Implication: Batched leapfrog now works on both EXLA (f64, cast is a no-op) and EMLX/Evaluator (f64→f32 cast). This was a blocking issue for EMLX support — without it, all Livebook notebooks crashed.
+
 ## 52. Distributed 4-node sampling with compile options fix
 - Decision: (1) Thread `[:ncp, :device]` compile options through `Distributed.sample_chains` to `Compiler.compile_for_sampling` in `run_coordinator_warmup`, `run_chain_local`, and `run_chain_remote`. (2) Created `benchmark/dist_bench.exs` for 4-node `:peer` distributed benchmarking.
 - Rationale: `distributed.ex` called `Compiler.compile_for_sampling(ir)` without passing `ncp: false` or `device` options, so distributed sampling always used NCP (wrong for medium/stress models where `ncp: false` is 9x better). Additionally, local 4-chain via `sample_chains_compiled` runs chains sequentially on a single BEAM (Elixir NIF scheduling prevents true CPU parallelism), while PyMC uses 4 OS processes. Using 4 `:peer` nodes gives same parallelism model.
