@@ -1,6 +1,6 @@
 <!-- livebook:{"persist_outputs":true} -->
 
-# Advanced Sampling with Exmc
+# Advanced Sampling with eXMC
 
 ```elixir
 # EMLX (Metal GPU) on macOS Apple Silicon, EXLA (CPU/CUDA) elsewhere
@@ -19,7 +19,7 @@ Mix.install([
 
 ## NCP vs Centered Parameterization
 
-Exmc auto-applies Non-Centered Parameterization (NCP) for hierarchical models.
+eXMC auto-applies Non-Centered Parameterization (NCP) for hierarchical models.
 NCP helps when data is weak relative to priors, but can hurt when data is strong.
 
 ```elixir
@@ -157,7 +157,7 @@ Vl.new(width: 600, height: 200, title: "mu_group — 4 chains")
 
 ## New Distributions
 
-Exmc includes distributions beyond the standard Normal/HalfNormal:
+eXMC includes distributions beyond the standard Normal/HalfNormal:
 
 ```elixir
 # Lognormal prior for a rate parameter

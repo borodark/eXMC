@@ -1,4 +1,4 @@
-# Getting Started with Exmc
+# Getting Started with eXMC
 
 ## Section
 
@@ -19,7 +19,7 @@ Mix.install([
 
 ## Building a Simple Model
 
-Exmc uses an IR (intermediate representation) to define probabilistic models.
+eXMC uses an IR (intermediate representation) to define probabilistic models.
 Start with `Builder.new_ir()` and add random variables and observations.
 
 ```elixir

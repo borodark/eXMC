@@ -1,6 +1,6 @@
-# Exmc
+# eXMC
 
-**A PPL environment on the BEAM, inspired by PyMC.** Exmc is a from-scratch Elixir implementation of PyMC's architecture: declarative model specification, automatic constraint transforms, NUTS sampling, and Bayesian diagnostics — all on Nx tensors with optional EXLA acceleration.
+**A PPL environment on the BEAM, inspired by PyMC.** eXMC is a from-scratch Elixir implementation of PyMC's architecture: declarative model specification, automatic constraint transforms, NUTS sampling, and Bayesian diagnostics — all on Nx tensors with optional EXLA acceleration.
 
 **With deep respect:** this project builds on the ideas, rigor, and ergonomics pioneered by the PyMC community. The goal is not to replace PyMC. The goal is to preserve correctness and usability while exploring what changes when the runtime is the BEAM.
 
@@ -8,11 +8,11 @@
 
 ## Why A New PPL Environment?
 
-PyMC established a high bar for statistical correctness, extensibility, and user experience. Exmc asks a focused question:
+PyMC established a high bar for statistical correctness, extensibility, and user experience. eXMC asks a focused question:
 
 **What happens if that architecture runs on a fault-tolerant, massively concurrent runtime?**
 
-The BEAM gives us lightweight processes, isolation, and message passing. That changes how we think about multi-chain sampling, streaming diagnostics, and observability. Exmc keeps PyMC's model semantics and diagnostics philosophy, while rethinking execution.
+The BEAM gives us lightweight processes, isolation, and message passing. That changes how we think about multi-chain sampling, streaming diagnostics, and observability. eXMC keeps PyMC's model semantics and diagnostics philosophy, while rethinking execution.
 
 ## What We Preserve From PyMC
 
@@ -23,7 +23,7 @@ The BEAM gives us lightweight processes, isolation, and message passing. That ch
 ## What The BEAM Enables
 
 - **Concurrency without copies.** Four chains are four lightweight processes sharing one compiled model. No `cloudpickle`, no `multiprocessing.Pool`, no four copies of the interpreter. `Task.async_stream` dispatches them across all cores.
-- **Per-sample streaming.** `sample_stream/4` sends each posterior sample as a message to any BEAM process — a Scenic window, a Phoenix LiveView, a GenServer computing running statistics. [Nutpie](https://github.com/pymc-devs/nutpie) sets the standard for live MCMC UX with rich terminal progress bars (per-chain draws, divergences, step size, gradients/draw), `blocking=False` with pause/resume/abort, and access to incomplete traces. Exmc takes a different approach: instead of a built-in terminal display, it streams individual samples as BEAM messages, composing with whatever visualization layer you choose — Scenic for native desktop, Phoenix LiveView for browser, or a custom GenServer for online statistics.
+- **Per-sample streaming.** `sample_stream/4` sends each posterior sample as a message to any BEAM process — a Scenic window, a Phoenix LiveView, a GenServer computing running statistics. [Nutpie](https://github.com/pymc-devs/nutpie) sets the standard for live MCMC UX with rich terminal progress bars (per-chain draws, divergences, step size, gradients/draw), `blocking=False` with pause/resume/abort, and access to incomplete traces. eXMC takes a different approach: instead of a built-in terminal display, it streams individual samples as BEAM messages, composing with whatever visualization layer you choose — Scenic for native desktop, Phoenix LiveView for browser, or a custom GenServer for online statistics.
 - **Fault isolation.** A chain that hits a numerical singularity — NaN gradient, EXLA crash, memory fault — is caught and replaced with a divergent placeholder. The other chains keep running. The supervisor tree doesn't care.
 - **Distribution as a language primitive.** `Distributed.sample_chains/2` sends model IR to remote `:peer` nodes via `:erpc`. Each node compiles independently (heterogeneous hardware). If a node dies, the chain retries on the coordinator automatically. Zero external infrastructure.
 
@@ -32,26 +32,26 @@ The BEAM gives us lightweight processes, isolation, and message passing. That ch
 Seven-model benchmark against PyMC (1-chain, 5-seed medians, 1000 warmup + 1000 draws):
 
 ```
-                PyMC ESS/s   Exmc ESS/s   Ratio    Winner
+                PyMC ESS/s   eXMC ESS/s   Ratio    Winner
                 ──────────────────────────────────────────
 simple (d=2)         576          469      0.81x    PyMC
-medium (d=5)         157          298      1.90x    Exmc
-stress (d=8)         185          215      1.16x    Exmc
-eight_schools (d=10)   5           12      2.55x    Exmc
+medium (d=5)         157          298      1.90x    eXMC
+stress (d=8)         185          215      1.16x    eXMC
+eight_schools (d=10)   5           12      2.55x    eXMC
 funnel (d=10)          6            2      0.40x    PyMC
 logistic (d=21)      336           69      0.21x    PyMC
-sv (d=102)             1            1      1.20x    Exmc
+sv (d=102)             1            1      1.20x    eXMC
 ```
 
-**Exmc wins 4 models to PyMC's 3**, including the canonical Eight Schools benchmark (2.55x) and 102-dimensional stochastic volatility (1.20x). PyMC wins on throughput-bound models where compiled C++ per-step speed dominates. Exmc wins on adaptation-bound models where posterior geometry is hard.
+**eXMC wins 4 models to PyMC's 3**, including the canonical Eight Schools benchmark (2.55x) and 102-dimensional stochastic volatility (1.20x). PyMC wins on throughput-bound models where compiled C++ per-step speed dominates. eXMC wins on adaptation-bound models where posterior geometry is hard.
 
-With 5-node distribution, Exmc achieves 2.88x average scaling:
+With 5-node distribution, eXMC achieves 2.88x average scaling:
 
 ```
                 1ch ESS/s   5-node ESS/s   PyMC 4ch   Dist vs PyMC
                 ─────────────────────────────────────────────────────
-medium              271           841          680       1.24x Exmc
-funnel              1.6           5.4          4.1       1.32x Exmc
+medium              271           841          680       1.24x eXMC
+funnel              1.6           5.4          4.1       1.32x eXMC
 ```
 
 ## Quick Start
@@ -233,7 +233,7 @@ ExmcViz.stream(ir, init, num_samples: 5000)   # live sampling dashboard
 
 ## Backends
 
-Exmc's tensor operations go through [Nx](https://github.com/elixir-nx/nx), with backend-specific acceleration:
+eXMC's tensor operations go through [Nx](https://github.com/elixir-nx/nx), with backend-specific acceleration:
 
 | Backend | Platform | Status |
 |---------|----------|--------|
@@ -247,8 +247,8 @@ Every non-trivial choice is recorded in [`DECISIONS.md`](DECISIONS.md) with rati
 
 ## License
 
-Exmc is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+eXMC is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
 
 You are free to use, modify, and distribute this software under AGPL terms. If you run a modified version as a network service, you must make your source code available to users of that service.
 
-**Commercial licensing** is available for organizations that need to embed Exmc in proprietary products without AGPL obligations. Contact us for terms.
+**Commercial licensing** is available for organizations that need to embed eXMC in proprietary products without AGPL obligations. Contact us for terms.

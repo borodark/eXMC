@@ -1,4 +1,4 @@
-# Hierarchical Models with Exmc
+# Hierarchical Models with eXMC
 
 ## Section
 
@@ -53,7 +53,7 @@ Mix.install([
 ## Building a Hierarchical Model
 
 Hierarchical models have parameters that depend on other parameters.
-Exmc uses string references to express these dependencies.
+eXMC uses string references to express these dependencies.
 
 ```elixir
 alias Exmc.{Builder, Sampler}
@@ -150,7 +150,7 @@ ir
 
 ## NCP Rewrite
 
-Exmc automatically applies Non-Centered Parameterization (NCP) to hierarchical
+eXMC automatically applies Non-Centered Parameterization (NCP) to hierarchical
 models. This improves sampling efficiency by reparameterizing
 `alpha ~ Normal(mu, sigma)` as `alpha_raw ~ Normal(0, 1)` with
 `alpha = mu + sigma * alpha_raw`.

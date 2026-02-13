@@ -1,6 +1,6 @@
-# Exmc — macOS Build & Test Guide
+# eXMC — macOS Build & Test Guide
 
-Tested on macOS (Darwin 25.2.0, Apple Silicon). This guide covers everything needed to compile Exmc (including the Rust NIF) and run the full test suite and Livebook notebooks.
+Tested on macOS (Darwin 25.2.0, Apple Silicon). This guide covers everything needed to compile eXMC (including the Rust NIF) and run the full test suite and Livebook notebooks.
 
 ## Prerequisites
 
@@ -102,7 +102,7 @@ CUDA_VISIBLE_DEVICES="" mix test
 
 ## Livebook Notebooks
 
-The `notebooks/` directory contains 4 interactive notebooks demonstrating Exmc features.
+The `notebooks/` directory contains 4 interactive notebooks demonstrating eXMC features.
 
 ### Install Livebook
 

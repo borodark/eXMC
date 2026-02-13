@@ -1,6 +1,6 @@
 # Decisions
 
-This document records key architectural and design decisions for the Exmc prototype.
+This document records key architectural and design decisions for the eXMC prototype.
 Each entry includes the assumption that must hold for the decision to remain valid.
 
 ## 1. Nx as the numeric backend
@@ -275,7 +275,7 @@ Each entry includes the assumption that must hold for the decision to remain val
 
 ## 49. Uncap multinomial log_weight at tree leaves
 - Decision: In `build_subtree` depth 0, change `log_weight = min(0.0, d)` to `log_weight = d` where `d = joint_logp_new - joint_logp_0`.
-- Rationale: The `min(0.0, d)` cap was capping multinomial weights at `exp(0) = 1`, so trajectory points with *better* energy than the starting point (d > 0) were underweighted. This biased multinomial selection toward q_0, inflating the duplicate rate. The `accept_prob = min(1, exp(min(d, 0)))` cap for DA feedback is correct (standard MH ratio), but the log_weight for multinomial proposal selection must be uncapped. Discovered via diagnostic: Exmc had 37.7% duplicate samples vs PyMC's 7.8%.
+- Rationale: The `min(0.0, d)` cap was capping multinomial weights at `exp(0) = 1`, so trajectory points with *better* energy than the starting point (d > 0) were underweighted. This biased multinomial selection toward q_0, inflating the duplicate rate. The `accept_prob = min(1, exp(min(d, 0)))` cap for DA feedback is correct (standard MH ratio), but the log_weight for multinomial proposal selection must be uncapped. Discovered via diagnostic: eXMC had 37.7% duplicate samples vs PyMC's 7.8%.
 - Assumption: Trajectory points can have d > 0 or d < 0, and the multinomial should weight them accordingly.
 - Implication: Combined with D50, reduced duplicate rate from 37.7% to 6.5%, ESS improvement 2-3x across all models.
 
@@ -283,7 +283,7 @@ Each entry includes the assumption that must hold for the decision to remain val
 - Decision: In `merge_trajectories`, change acceptance probability from `exp(subtree.lsw - combined_lsw)` (balanced multinomial) to `min(1, exp(subtree.lsw - traj.lsw))` (biased progressive, matching Stan/PyMC).
 - Rationale: Stan and PyMC use biased progressive sampling (Betancourt 2017, Appendix A.3.2) for the outer merge (trajectory extension), while using balanced multinomial for the inner merge (within `build_subtree`). The balanced formula gives `P(accept subtree) = w_subtree / (w_traj + w_subtree)`, while biased progressive gives `P = min(1, w_subtree / w_traj)`. When the subtree outweighs the existing trajectory, biased progressive always accepts (P=1), while balanced gives P < 1. This makes the balanced formula "sticky" on q_0 — the starting point survives merges more often than it should. PyMC's `index_in_trajectory` analysis showed only 3.7% q_0 selection rate at depth 2 (vs balanced prediction of 25%). Inner merges (`merge_subtrees`) correctly use balanced multinomial in all implementations.
 - Assumption: Biased progressive sampling is a valid MCMC proposal mechanism that preserves the target distribution (proven in Betancourt 2017).
-- Implication: Implemented in both Elixir `merge_trajectories` and Rust NIF `merge_into_trajectory`. Uses `log(U) < (subtree.lsw - traj.lsw)` to avoid overflow. 1-chain 5-seed race: simple 469 (0.81x PyMC), medium 298 (1.90x PyMC), stress 215 (1.16x PyMC). Exmc now beats PyMC on medium and stress models.
+- Implication: Implemented in both Elixir `merge_trajectories` and Rust NIF `merge_into_trajectory`. Uses `log(U) < (subtree.lsw - traj.lsw)` to avoid overflow. 1-chain 5-seed race: simple 469 (0.81x PyMC), medium 298 (1.90x PyMC), stress 215 (1.16x PyMC). eXMC now beats PyMC on medium and stress models.
 
 ## 52. Distributed 4-node sampling with compile options fix
 - Decision: (1) Thread `[:ncp, :device]` compile options through `Distributed.sample_chains` to `Compiler.compile_for_sampling` in `run_coordinator_warmup`, `run_chain_local`, and `run_chain_remote`. (2) Created `benchmark/dist_bench.exs` for 4-node `:peer` distributed benchmarking.
