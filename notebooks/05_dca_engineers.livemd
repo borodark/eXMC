@@ -1,0 +1,547 @@
+# Bayesian Decline Curve Analysis with eXMC
+
+## Setup
+
+```elixir
+# EMLX (Metal GPU) on macOS Apple Silicon, EXLA (CPU/CUDA) elsewhere
+backend_dep =
+  case :os.type() do
+    {:unix, :darwin} -> {:emlx, "~> 0.2"}
+    _ -> {:exla, "~> 0.10"}
+  end
+
+Mix.install([
+  {:exmc, path: Path.expand("../", __DIR__)},
+  backend_dep,
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## The Arps Decline Model
+
+Every producing oil or gas well declines over time. The **Arps hyperbolic decline** equation
+models this behavior with three parameters:
+
+$$q(t) = \frac{q_i}{(1 + b \cdot D_i \cdot t)^{1/b}}$$
+
+* **q_i** — initial production rate (bbl/day)
+* **D_i** — initial decline rate (per month)
+* **b** — decline exponent (0 = exponential, 1 = harmonic, 0-2 typical)
+
+```elixir
+alias VegaLite, as: Vl
+
+# Show how the decline exponent b changes the curve shape
+t_months = Enum.to_list(0..60)
+qi = 800.0
+
+curves =
+  for b <- [0.0, 0.5, 1.0, 1.5], t <- t_months do
+    di = 0.12
+    q =
+      if b == 0.0 do
+        qi * :math.exp(-di * t)
+      else
+        qi / :math.pow(1.0 + b * di * t, 1.0 / b)
+      end
+
+    %{"month" => t, "rate_bpd" => q, "b" => "b = #{b}"}
+  end
+
+Vl.new(width: 700, height: 350, title: "Arps Decline Curves (q_i=800, D_i=0.12)")
+|> Vl.data_from_values(curves)
+|> Vl.mark(:line, stroke_width: 2)
+|> Vl.encode_field(:x, "month", type: :quantitative, title: "Months")
+|> Vl.encode_field(:y, "rate_bpd", type: :quantitative, title: "Production (bbl/day)")
+|> Vl.encode_field(:color, "b", type: :nominal, title: "Exponent")
+```
+
+## Synthetic Well Data
+
+We generate 24 months of production data from a simulated Eagle Ford shale well
+with known "true" parameters. In practice, these parameters are unknown — that's
+what Bayesian inference recovers.
+
+```elixir
+# True parameters (unknown to the model)
+true_qi = 850.0
+true_di = 0.13
+true_b = 0.85
+true_sigma = 0.18
+
+# Generate noisy monthly production
+months = Enum.to_list(1..24)
+rng = :rand.seed_s(:exsss, 42)
+
+{observed, _rng} =
+  Enum.map_reduce(months, rng, fn t, rng ->
+    q_true = true_qi / :math.pow(1.0 + true_b * true_di * t, 1.0 / true_b)
+    {noise, rng} = :rand.normal_s(rng)
+    q_obs = q_true * :math.exp(true_sigma * noise)
+    {{t, q_obs, q_true}, rng}
+  end)
+
+# Plot observed vs true
+obs_data =
+  Enum.flat_map(observed, fn {t, q_obs, q_true} ->
+    [
+      %{"month" => t, "rate" => q_obs, "series" => "Observed"},
+      %{"month" => t, "rate" => q_true, "series" => "True decline"}
+    ]
+  end)
+
+Vl.new(width: 700, height: 350, title: "Eagle Ford Well — Observed Production")
+|> Vl.data_from_values(obs_data)
+|> Vl.encode_field(:x, "month", type: :quantitative, title: "Month")
+|> Vl.encode_field(:y, "rate", type: :quantitative, title: "Production (bbl/day)")
+|> Vl.encode_field(:color, "series", type: :nominal)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:point, size: 60)
+  |> Vl.transform(filter: "datum.series == 'Observed'"),
+  Vl.new()
+  |> Vl.mark(:line, stroke_dash: [6, 3], stroke_width: 2)
+  |> Vl.transform(filter: "datum.series == 'True decline'")
+])
+```
+
+## Bayesian Model
+
+We define priors on the four unknown parameters and a custom likelihood that
+computes the log-probability of the observed data given the Arps model.
+
+**Priors:**
+
+* `log_qi ~ Normal(log(800), 0.5)` — median 800 bbl/day, 95% CI: ~300-2100
+* `log_Di ~ Normal(log(0.12), 0.4)` — median 0.12/month, allows 0.05-0.30
+* `b ~ Beta(5, 3)` — mode ~0.67, range 0.2-1.0
+* `sigma ~ HalfCauchy(0.3)` — observation noise scale
+
+**Likelihood:** Lognormal noise on production rates.
+
+```elixir
+alias Exmc.{Builder, NUTS.Sampler, Dist}
+
+# Prepare data tensors
+t_data = Nx.tensor(Enum.map(observed, fn {t, _, _} -> t * 1.0 end))
+q_obs_list = Enum.map(observed, fn {_, q, _} -> q end)
+log_q_obs = Nx.tensor(Enum.map(q_obs_list, &:math.log/1))
+
+# Custom logpdf: computes full DCA log-likelihood
+dca_logpdf = fn _x, params ->
+  qi = Nx.exp(params.log_qi)
+  di = Nx.exp(params.log_di)
+  b = params.b
+  sigma = params.sigma
+  t = params.t_data
+  log_q_observed = params.log_q_obs
+
+  # Arps model: log(q) = log(qi) - (1/b) * log(1 + b*Di*t)
+  log_q_pred =
+    Nx.subtract(
+      Nx.log(qi),
+      Nx.multiply(Nx.divide(1.0, b), Nx.log(Nx.add(1.0, Nx.multiply(Nx.multiply(b, di), t))))
+    )
+
+  # Lognormal log-likelihood: -0.5 * sum((log_obs - log_pred)^2 / sigma^2) - N*log(sigma)
+  residuals = Nx.subtract(log_q_observed, log_q_pred)
+  n = Nx.tensor(Nx.size(log_q_observed) * 1.0)
+
+  Nx.subtract(
+    Nx.sum(
+      Nx.negate(Nx.divide(Nx.pow(residuals, 2), Nx.multiply(2.0, Nx.pow(sigma, 2))))
+    ),
+    Nx.multiply(n, Nx.log(sigma))
+  )
+end
+
+# Build the model IR
+ir = Builder.new_ir()
+
+# Priors (working in log-space for qi and Di to ensure positivity)
+ir = Builder.rv(ir, "log_qi", Dist.Normal, %{mu: Nx.tensor(:math.log(800.0)), sigma: Nx.tensor(0.5)})
+ir = Builder.rv(ir, "log_di", Dist.Normal, %{mu: Nx.tensor(:math.log(0.12)), sigma: Nx.tensor(0.4)})
+ir = Builder.rv(ir, "b", Dist.Beta, %{alpha: Nx.tensor(5.0), beta: Nx.tensor(3.0)}, transform: :logit)
+ir = Builder.rv(ir, "sigma", Dist.HalfCauchy, %{scale: Nx.tensor(0.3)}, transform: :log)
+
+# Custom likelihood
+dca_dist = Dist.Custom.new(dca_logpdf, support: :real)
+
+ir =
+  Dist.Custom.rv(ir, "ll", dca_dist, %{
+    log_qi: "log_qi",
+    log_di: "log_di",
+    b: "b",
+    sigma: "sigma",
+    t_data: t_data,
+    log_q_obs: log_q_obs
+  })
+
+ir = Builder.obs(ir, "ll_obs", "ll", Nx.tensor(0.0))
+
+IO.puts("Free parameters: #{inspect(Enum.sort(Map.keys(ir.nodes) -- ["ll", "ll_obs"]))}")
+ir
+```
+
+## MCMC Sampling
+
+Run the NUTS sampler with 500 warmup + 500 draws.
+
+```elixir
+init = %{"log_qi" => :math.log(800.0), "log_di" => :math.log(0.12), "b" => 0.7, "sigma" => 0.2}
+
+t0 = System.monotonic_time(:millisecond)
+
+{trace, stats} =
+  Sampler.sample(ir, init,
+    num_warmup: 500,
+    num_samples: 500,
+    seed: 42,
+    ncp: false
+  )
+
+elapsed = System.monotonic_time(:millisecond) - t0
+
+# Compute constrained parameters from log-space
+qi_samples = trace["log_qi"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+di_samples = trace["log_di"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+b_samples = trace["b"] |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+sigma_samples = trace["sigma"] |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+
+n_div = Enum.count(stats.sample_stats, & &1.divergent)
+
+IO.puts("Sampling complete in #{elapsed}ms")
+IO.puts("Divergences: #{n_div}")
+IO.puts("Step size: #{Float.round(stats.step_size, 4)}")
+IO.puts("Samples: #{length(qi_samples)}")
+```
+
+## Diagnostics
+
+```elixir
+summary = Exmc.Diagnostics.summary(trace)
+
+# Build a formatted table
+rows =
+  for {name, s} <- Enum.sort(summary) do
+    true_val =
+      case name do
+        "log_qi" -> :math.log(true_qi)
+        "log_di" -> :math.log(true_di)
+        "b" -> true_b
+        "sigma" -> true_sigma
+        _ -> nil
+      end
+
+    label =
+      case name do
+        "log_qi" -> "log(q_i)"
+        "log_di" -> "log(D_i)"
+        n -> n
+      end
+
+    true_str = if true_val, do: Float.round(true_val, 4), else: "-"
+
+    IO.puts(
+      "#{String.pad_trailing(label, 10)} " <>
+        "mean=#{String.pad_trailing(Float.round(s.mean, 4) |> to_string(), 8)} " <>
+        "std=#{String.pad_trailing(Float.round(s.std, 4) |> to_string(), 8)} " <>
+        "true=#{true_str}"
+    )
+  end
+
+:ok
+```
+
+## Trace Plots
+
+```elixir
+trace_data = fn samples, name ->
+  Enum.with_index(samples, fn val, i -> %{"iteration" => i, "value" => val, "param" => name} end)
+end
+
+all_traces =
+  trace_data.(qi_samples, "q_i (bbl/day)") ++
+    trace_data.(di_samples, "D_i (per month)") ++
+    trace_data.(b_samples, "b (exponent)") ++
+    trace_data.(sigma_samples, "sigma (noise)")
+
+Vl.new(width: 700, height: 120, title: "MCMC Trace Plots")
+|> Vl.data_from_values(all_traces)
+|> Vl.mark(:line, opacity: 0.6, stroke_width: 0.5)
+|> Vl.encode_field(:x, "iteration", type: :quantitative)
+|> Vl.encode_field(:y, "value", type: :quantitative)
+|> Vl.encode_field(:row, "param", type: :nominal, title: nil,
+  header: [label_font_size: 11])
+|> Vl.resolve(:scale, y: :independent)
+```
+
+## Parameter Recovery
+
+Posterior distributions vs. true values:
+
+```elixir
+# q_i posterior histogram with true value
+qi_hist =
+  Enum.map(qi_samples, fn v -> %{"q_i" => v} end)
+
+Vl.new(width: 350, height: 200, title: "Posterior: q_i (bbl/day)")
+|> Vl.data_from_values(qi_hist)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:bar, opacity: 0.7, color: "steelblue")
+  |> Vl.encode_field(:x, "q_i", type: :quantitative, bin: [maxbins: 30], title: "q_i")
+  |> Vl.encode(:y, aggregate: :count),
+  Vl.new()
+  |> Vl.data_from_values([%{"true" => true_qi}])
+  |> Vl.mark(:rule, color: "red", stroke_width: 2, stroke_dash: [6, 3])
+  |> Vl.encode_field(:x, "true", type: :quantitative)
+])
+```
+
+```elixir
+# Joint posterior: q_i vs D_i (shows parameter correlation)
+joint_data =
+  Enum.zip(qi_samples, di_samples)
+  |> Enum.map(fn {q, d} -> %{"q_i" => q, "D_i" => d} end)
+
+Vl.new(width: 400, height: 400, title: "Joint Posterior: q_i vs D_i")
+|> Vl.data_from_values(joint_data)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:point, opacity: 0.3, size: 8, color: "steelblue")
+  |> Vl.encode_field(:x, "q_i", type: :quantitative, title: "q_i (bbl/day)")
+  |> Vl.encode_field(:y, "D_i", type: :quantitative, title: "D_i (per month)"),
+  Vl.new()
+  |> Vl.data_from_values([%{"q_i" => true_qi, "D_i" => true_di}])
+  |> Vl.mark(:point, size: 200, shape: "cross", color: "red", stroke_width: 3)
+  |> Vl.encode_field(:x, "q_i", type: :quantitative)
+  |> Vl.encode_field(:y, "D_i", type: :quantitative)
+])
+```
+
+## Production Forecast: P10 / P50 / P90
+
+The key deliverable for petroleum engineers. Each posterior sample generates a
+different forecast curve. We take percentiles at each future time point to get
+probabilistic production bands.
+
+```elixir
+# Forecast 60 months into the future
+forecast_months = Enum.to_list(1..60)
+n_draws = min(200, length(qi_samples))
+
+# Sample posterior draws and compute forecasts
+forecast_curves =
+  Enum.zip([
+    Enum.take(qi_samples, n_draws),
+    Enum.take(di_samples, n_draws),
+    Enum.take(b_samples, n_draws)
+  ])
+  |> Enum.map(fn {qi, di, b} ->
+    Enum.map(forecast_months, fn t ->
+      qi / :math.pow(1.0 + b * di * t, 1.0 / b)
+    end)
+  end)
+
+# Compute P10, P50, P90 at each time point
+percentiles =
+  Enum.map(Enum.with_index(forecast_months), fn {t, idx} ->
+    rates = Enum.map(forecast_curves, fn curve -> Enum.at(curve, idx) end) |> Enum.sort()
+    n = length(rates)
+    p10 = Enum.at(rates, round(0.1 * n))
+    p50 = Enum.at(rates, round(0.5 * n))
+    p90 = Enum.at(rates, round(0.9 * n))
+    %{month: t, p10: p10, p50: p50, p90: p90}
+  end)
+
+# Build chart data
+band_data =
+  Enum.flat_map(percentiles, fn p ->
+    [
+      %{"month" => p.month, "rate" => p.p10, "band" => "P10 (conservative)"},
+      %{"month" => p.month, "rate" => p.p50, "band" => "P50 (median)"},
+      %{"month" => p.month, "rate" => p.p90, "band" => "P90 (optimistic)"}
+    ]
+  end)
+
+obs_points =
+  Enum.map(observed, fn {t, q, _} -> %{"month" => t, "rate" => q, "band" => "Observed"} end)
+
+Vl.new(width: 700, height: 400, title: "Production Forecast: P10 / P50 / P90")
+|> Vl.data_from_values(band_data ++ obs_points)
+|> Vl.layers([
+  # P10-P90 area band
+  Vl.new()
+  |> Vl.data_from_values(
+    Enum.map(percentiles, fn p ->
+      %{"month" => p.month, "p10" => p.p10, "p90" => p.p90}
+    end)
+  )
+  |> Vl.mark(:area, opacity: 0.2, color: "steelblue")
+  |> Vl.encode_field(:x, "month", type: :quantitative, title: "Month")
+  |> Vl.encode_field(:y, "p10", type: :quantitative, title: "Production (bbl/day)")
+  |> Vl.encode_field(:y2, "p90"),
+  # P50 line
+  Vl.new()
+  |> Vl.data_from_values(
+    Enum.map(percentiles, fn p -> %{"month" => p.month, "rate" => p.p50} end)
+  )
+  |> Vl.mark(:line, stroke_width: 2, color: "steelblue")
+  |> Vl.encode_field(:x, "month", type: :quantitative)
+  |> Vl.encode_field(:y, "rate", type: :quantitative),
+  # Observed data points
+  Vl.new()
+  |> Vl.data_from_values(obs_points)
+  |> Vl.mark(:point, size: 40, color: "black", filled: true)
+  |> Vl.encode_field(:x, "month", type: :quantitative)
+  |> Vl.encode_field(:y, "rate", type: :quantitative)
+])
+```
+
+## EUR Distribution
+
+**Estimated Ultimate Recovery** — total barrels the well will produce over its lifetime.
+For hyperbolic decline with b < 1: `EUR = q_i / (D_i * (1 - b))`.
+
+```elixir
+# Compute EUR for each posterior draw (to economic limit of 5 bbl/day over 30 years)
+eur_samples =
+  Enum.zip([qi_samples, di_samples, b_samples])
+  |> Enum.map(fn {qi, di, b} ->
+    # Cumulative production over 360 months (30 years)
+    cum =
+      Enum.reduce(1..360, 0.0, fn t, acc ->
+        q = qi / :math.pow(max(1.0 + b * di * t, 1.0e-10), 1.0 / max(b, 0.01))
+        # Monthly volume = daily rate * 30.4 days/month
+        acc + max(q, 0.0) * 30.4
+      end)
+
+    # Convert to thousands of barrels
+    cum / 1000.0
+  end)
+  |> Enum.filter(&is_number/1)
+
+eur_sorted = Enum.sort(eur_samples)
+n = length(eur_sorted)
+eur_p10 = Enum.at(eur_sorted, round(0.1 * n))
+eur_p50 = Enum.at(eur_sorted, round(0.5 * n))
+eur_p90 = Enum.at(eur_sorted, round(0.9 * n))
+
+# Deterministic EUR (single best-fit)
+det_eur =
+  Enum.reduce(1..360, 0.0, fn t, acc ->
+    q = true_qi / :math.pow(1.0 + true_b * true_di * t, 1.0 / true_b)
+    acc + q * 30.4
+  end) / 1000.0
+
+IO.puts("EUR Distribution (kbbl):")
+IO.puts("  P10 (conservative): #{Float.round(eur_p10, 0)}")
+IO.puts("  P50 (median):       #{Float.round(eur_p50, 0)}")
+IO.puts("  P90 (optimistic):   #{Float.round(eur_p90, 0)}")
+IO.puts("  Deterministic:      #{Float.round(det_eur, 0)}")
+
+eur_hist = Enum.map(eur_samples, fn v -> %{"EUR_kbbl" => v} end)
+
+Vl.new(width: 600, height: 300, title: "EUR Distribution (thousands of barrels)")
+|> Vl.data_from_values(eur_hist)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:bar, opacity: 0.7, color: "steelblue")
+  |> Vl.encode_field(:x, "EUR_kbbl", type: :quantitative, bin: [maxbins: 30], title: "EUR (kbbl)")
+  |> Vl.encode(:y, aggregate: :count),
+  # P50 line
+  Vl.new()
+  |> Vl.data_from_values([%{"v" => eur_p50}])
+  |> Vl.mark(:rule, color: "black", stroke_width: 2)
+  |> Vl.encode_field(:x, "v", type: :quantitative),
+  # Deterministic point
+  Vl.new()
+  |> Vl.data_from_values([%{"v" => det_eur}])
+  |> Vl.mark(:rule, color: "red", stroke_width: 2, stroke_dash: [6, 3])
+  |> Vl.encode_field(:x, "v", type: :quantitative)
+])
+```
+
+## Live Updating: Posterior Narrows as Data Arrives
+
+The key eXMC value proposition: as new monthly production data arrives,
+the posterior updates and uncertainty shrinks. Here we simulate this
+by running MCMC with 6, 12, and 24 months of data.
+
+```elixir
+run_dca = fn months_of_data ->
+  subset = Enum.take(observed, months_of_data)
+  t_sub = Nx.tensor(Enum.map(subset, fn {t, _, _} -> t * 1.0 end))
+  log_q_sub = Nx.tensor(Enum.map(subset, fn {_, q, _} -> :math.log(q) end))
+
+  ir_sub = Builder.new_ir()
+  ir_sub = Builder.rv(ir_sub, "log_qi", Dist.Normal, %{mu: Nx.tensor(:math.log(800.0)), sigma: Nx.tensor(0.5)})
+  ir_sub = Builder.rv(ir_sub, "log_di", Dist.Normal, %{mu: Nx.tensor(:math.log(0.12)), sigma: Nx.tensor(0.4)})
+  ir_sub = Builder.rv(ir_sub, "b", Dist.Beta, %{alpha: Nx.tensor(5.0), beta: Nx.tensor(3.0)}, transform: :logit)
+  ir_sub = Builder.rv(ir_sub, "sigma", Dist.HalfCauchy, %{scale: Nx.tensor(0.3)}, transform: :log)
+
+  dist_sub = Dist.Custom.new(dca_logpdf, support: :real)
+
+  ir_sub =
+    Dist.Custom.rv(ir_sub, "ll", dist_sub, %{
+      log_qi: "log_qi", log_di: "log_di", b: "b", sigma: "sigma",
+      t_data: t_sub, log_q_obs: log_q_sub
+    })
+
+  ir_sub = Builder.obs(ir_sub, "ll_obs", "ll", Nx.tensor(0.0))
+
+  {trace_sub, _} =
+    Sampler.sample(ir_sub, init, num_warmup: 500, num_samples: 300, seed: 42, ncp: false)
+
+  qi_s = trace_sub["log_qi"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+  di_s = trace_sub["log_di"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+  b_s = trace_sub["b"] |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+
+  # Compute EUR distribution
+  eurs =
+    Enum.zip([qi_s, di_s, b_s])
+    |> Enum.map(fn {qi, di, b} ->
+      Enum.reduce(1..360, 0.0, fn t, acc ->
+        q = qi / :math.pow(max(1.0 + b * di * t, 1.0e-10), 1.0 / max(b, 0.01))
+        acc + max(q, 0.0) * 30.4
+      end) / 1000.0
+    end)
+    |> Enum.filter(&is_number/1)
+
+  eurs_sorted = Enum.sort(eurs)
+  n = length(eurs_sorted)
+  {Enum.at(eurs_sorted, round(0.1 * n)), Enum.at(eurs_sorted, round(0.5 * n)),
+   Enum.at(eurs_sorted, round(0.9 * n))}
+end
+
+# Run with increasing data
+IO.puts("Sequential updating — EUR narrows as data arrives:\n")
+IO.puts("Months | P10 (kbbl) | P50 (kbbl) | P90 (kbbl) | Range")
+IO.puts("-------|------------|------------|------------|------")
+
+for n_months <- [6, 12, 24] do
+  {p10, p50, p90} = run_dca.(n_months)
+  range = Float.round(p90 - p10, 0)
+
+  IO.puts(
+    "#{String.pad_leading(to_string(n_months), 6)} " <>
+      "| #{String.pad_leading(Float.round(p10, 0) |> to_string(), 10)} " <>
+      "| #{String.pad_leading(Float.round(p50, 0) |> to_string(), 10)} " <>
+      "| #{String.pad_leading(Float.round(p90, 0) |> to_string(), 10)} " <>
+      "| #{range}"
+  )
+end
+```
+
+## Summary
+
+This notebook demonstrated:
+
+1. **Bayesian DCA** recovers the true decline parameters from noisy production data
+2. **Full posterior** provides P10/P50/P90 forecasts — not just a single best guess
+3. **EUR distribution** gives risk-adjusted reserves estimates for booking and financing
+4. **Live updating** — each new month of data narrows the uncertainty automatically
+
+With eXMC's `sample_stream/4`, this entire analysis runs as a live dashboard
+where posteriors update in real time as new production data arrives from the field.

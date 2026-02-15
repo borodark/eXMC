@@ -247,8 +247,9 @@ Every non-trivial choice is recorded in [`DECISIONS.md`](DECISIONS.md) with rati
 
 ## License
 
-eXMC is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+eXMC is dual-licensed:
 
-You are free to use, modify, and distribute this software under AGPL terms. If you run a modified version as a network service, you must make your source code available to users of that service.
+- **Community License:** [Apache 2.0](LICENSE_COMMUNITY.md) — free and open source
+- **Commercial License:** [Proprietary](LICENSE_COMMERCIAL.md) — for enterprises, OEM embedding, and closed-source use
 
-**Commercial licensing** is available for organizations that need to embed eXMC in proprietary products without AGPL obligations. Contact us for terms.
+Choose one. If you use the Community License, you must comply with Apache 2.0. If you need proprietary use, hosted/SaaS deployment, or enterprise support, contact sales@octanix.com for a Commercial License.

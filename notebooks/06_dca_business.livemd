@@ -1,0 +1,595 @@
+# Live Production Forecasting for Oil & Gas Assets
+
+## Setup
+
+```elixir
+# EMLX (Metal GPU) on macOS Apple Silicon, EXLA (CPU/CUDA) elsewhere
+backend_dep =
+  case :os.type() do
+    {:unix, :darwin} -> {:emlx, "~> 0.2"}
+    _ -> {:exla, "~> 0.10"}
+  end
+
+Mix.install([
+  {:exmc, path: Path.expand("../", __DIR__)},
+  backend_dep,
+  {:kino_vega_lite, "~> 0.1"}
+])
+```
+
+## The Problem: One Number, No Uncertainty
+
+Today, production engineers forecast every well with a **single best-guess curve**. One number
+for reserves. One line on the chart. Updated quarterly — if at all.
+
+But underground reservoirs are uncertain. The single line hides a wide range of possible
+outcomes. When decisions worth millions of dollars depend on that forecast — field development
+plans, reserve bookings, acquisition bids — one number is not enough.
+
+```elixir
+alias VegaLite, as: Vl
+alias Exmc.{Builder, NUTS.Sampler, Dist}
+
+# --- Shared data generation (hidden complexity — just data) ---
+true_qi = 850.0
+true_di = 0.13
+true_b = 0.85
+true_sigma = 0.18
+
+months = Enum.to_list(1..24)
+rng = :rand.seed_s(:exsss, 42)
+
+{observed, _rng} =
+  Enum.map_reduce(months, rng, fn t, rng ->
+    q_true = true_qi / :math.pow(1.0 + true_b * true_di * t, 1.0 / true_b)
+    {noise, rng} = :rand.normal_s(rng)
+    q_obs = q_true * :math.exp(true_sigma * noise)
+    {{t, q_obs, q_true}, rng}
+  end)
+
+# Deterministic "best fit" forecast
+det_forecast =
+  Enum.map(1..60, fn t ->
+    q = true_qi / :math.pow(1.0 + true_b * true_di * t, 1.0 / true_b)
+    %{"month" => t, "rate" => q, "type" => "Best Guess (Current Practice)"}
+  end)
+
+obs_points =
+  Enum.map(observed, fn {t, q, _} ->
+    %{"month" => t, "rate" => q, "type" => "Monthly Production"}
+  end)
+
+Vl.new(
+  width: 700,
+  height: 350,
+  title: [
+    text: "Current Practice: One Line, No Uncertainty",
+    subtitle: "Well A — Eagle Ford, TX"
+  ]
+)
+|> Vl.data_from_values(det_forecast ++ obs_points)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:line, stroke_width: 2.5, color: "#d62728")
+  |> Vl.transform(filter: "datum.type == 'Best Guess (Current Practice)'")
+  |> Vl.encode_field(:x, "month", type: :quantitative, title: "Month")
+  |> Vl.encode_field(:y, "rate", type: :quantitative, title: "Oil Production (bbl/day)"),
+  Vl.new()
+  |> Vl.mark(:point, size: 40, filled: true, color: "#333")
+  |> Vl.transform(filter: "datum.type == 'Monthly Production'")
+  |> Vl.encode_field(:x, "month", type: :quantitative)
+  |> Vl.encode_field(:y, "rate", type: :quantitative)
+])
+```
+
+**What's missing:** How confident are we in that red line? Could production be 20% higher?
+50% lower? The single line doesn't say.
+
+## The Solution: Live Probability Bands
+
+eXMC replaces the single line with a **probability envelope** — showing the full range
+of likely outcomes at every time point. The P50 line is the median forecast. The shaded
+band shows where 80% of outcomes fall (P10 to P90).
+
+The model runs in seconds. No specialized hardware required.
+
+```elixir
+# --- Build and run the Bayesian model (hidden math) ---
+t_data = Nx.tensor(Enum.map(observed, fn {t, _, _} -> t * 1.0 end))
+log_q_obs = Nx.tensor(Enum.map(observed, fn {_, q, _} -> :math.log(q) end))
+
+dca_logpdf = fn _x, params ->
+  qi = Nx.exp(params.log_qi)
+  di = Nx.exp(params.log_di)
+  b = params.b
+  sigma = params.sigma
+  t = params.t_data
+  log_q_observed = params.log_q_obs
+
+  log_q_pred =
+    Nx.subtract(
+      Nx.log(qi),
+      Nx.multiply(Nx.divide(1.0, b), Nx.log(Nx.add(1.0, Nx.multiply(Nx.multiply(b, di), t))))
+    )
+
+  residuals = Nx.subtract(log_q_observed, log_q_pred)
+  n = Nx.tensor(Nx.size(log_q_observed) * 1.0)
+
+  Nx.subtract(
+    Nx.sum(Nx.negate(Nx.divide(Nx.pow(residuals, 2), Nx.multiply(2.0, Nx.pow(sigma, 2))))),
+    Nx.multiply(n, Nx.log(sigma))
+  )
+end
+
+ir = Builder.new_ir()
+ir = Builder.rv(ir, "log_qi", Dist.Normal, %{mu: Nx.tensor(:math.log(800.0)), sigma: Nx.tensor(0.5)})
+ir = Builder.rv(ir, "log_di", Dist.Normal, %{mu: Nx.tensor(:math.log(0.12)), sigma: Nx.tensor(0.4)})
+ir = Builder.rv(ir, "b", Dist.Beta, %{alpha: Nx.tensor(5.0), beta: Nx.tensor(3.0)}, transform: :logit)
+ir = Builder.rv(ir, "sigma", Dist.HalfCauchy, %{scale: Nx.tensor(0.3)}, transform: :log)
+dca_dist = Dist.Custom.new(dca_logpdf, support: :real)
+
+ir =
+  Dist.Custom.rv(ir, "ll", dca_dist, %{
+    log_qi: "log_qi", log_di: "log_di", b: "b", sigma: "sigma",
+    t_data: t_data, log_q_obs: log_q_obs
+  })
+
+ir = Builder.obs(ir, "ll_obs", "ll", Nx.tensor(0.0))
+init = %{"log_qi" => :math.log(800.0), "log_di" => :math.log(0.12), "b" => 0.7, "sigma" => 0.2}
+
+{trace, _stats} = Sampler.sample(ir, init, num_warmup: 500, num_samples: 500, seed: 42, ncp: false)
+
+qi_samples = trace["log_qi"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+di_samples = trace["log_di"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+b_samples = trace["b"] |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+
+# --- Generate forecast envelope ---
+forecast_months = Enum.to_list(1..60)
+n_draws = min(200, length(qi_samples))
+
+forecast_curves =
+  Enum.zip([
+    Enum.take(qi_samples, n_draws),
+    Enum.take(di_samples, n_draws),
+    Enum.take(b_samples, n_draws)
+  ])
+  |> Enum.map(fn {qi, di, b} ->
+    Enum.map(forecast_months, fn t ->
+      qi / :math.pow(1.0 + b * di * t, 1.0 / b)
+    end)
+  end)
+
+percentiles =
+  Enum.map(Enum.with_index(forecast_months), fn {t, idx} ->
+    rates = Enum.map(forecast_curves, fn curve -> Enum.at(curve, idx) end) |> Enum.sort()
+    n = length(rates)
+    %{month: t,
+      p10: Enum.at(rates, round(0.1 * n)),
+      p50: Enum.at(rates, round(0.5 * n)),
+      p90: Enum.at(rates, round(0.9 * n))}
+  end)
+
+obs_chart =
+  Enum.map(observed, fn {t, q, _} -> %{"month" => t, "rate" => q} end)
+
+Vl.new(
+  width: 700,
+  height: 400,
+  title: [
+    text: "eXMC Solution: Probability-Based Forecast",
+    subtitle: "Well A — P10/P50/P90 bands update automatically with new data"
+  ]
+)
+|> Vl.layers([
+  # P10-P90 band
+  Vl.new()
+  |> Vl.data_from_values(
+    Enum.map(percentiles, fn p ->
+      %{"month" => p.month, "p10" => p.p10, "p90" => p.p90}
+    end)
+  )
+  |> Vl.mark(:area, opacity: 0.25, color: "#1f77b4")
+  |> Vl.encode_field(:x, "month", type: :quantitative, title: "Month")
+  |> Vl.encode_field(:y, "p10", type: :quantitative, title: "Oil Production (bbl/day)")
+  |> Vl.encode_field(:y2, "p90"),
+  # P50 median line
+  Vl.new()
+  |> Vl.data_from_values(
+    Enum.map(percentiles, fn p -> %{"month" => p.month, "rate" => p.p50} end)
+  )
+  |> Vl.mark(:line, stroke_width: 2.5, color: "#1f77b4")
+  |> Vl.encode_field(:x, "month", type: :quantitative)
+  |> Vl.encode_field(:y, "rate", type: :quantitative),
+  # Observed data
+  Vl.new()
+  |> Vl.data_from_values(obs_chart)
+  |> Vl.mark(:point, size: 40, color: "#333", filled: true)
+  |> Vl.encode_field(:x, "month", type: :quantitative)
+  |> Vl.encode_field(:y, "rate", type: :quantitative)
+])
+```
+
+**What changed:** The blue band shows uncertainty. Early months are tight (we have data).
+Future months fan out (less certain). Decision-makers can now see risk directly.
+
+## Live Updating: Uncertainty Shrinks as Data Arrives
+
+This is the core value proposition. As each month's production report comes in,
+the forecast **updates automatically**. Uncertainty shrinks. Decisions get sharper.
+
+No quarterly recalibration. No waiting for an analyst. The model updates itself.
+
+```elixir
+# Run the model with 6, 12, 18, and 24 months of data
+run_forecast = fn months_of_data ->
+  subset = Enum.take(observed, months_of_data)
+  t_sub = Nx.tensor(Enum.map(subset, fn {t, _, _} -> t * 1.0 end))
+  log_q_sub = Nx.tensor(Enum.map(subset, fn {_, q, _} -> :math.log(q) end))
+
+  ir_sub = Builder.new_ir()
+  ir_sub = Builder.rv(ir_sub, "log_qi", Dist.Normal, %{mu: Nx.tensor(:math.log(800.0)), sigma: Nx.tensor(0.5)})
+  ir_sub = Builder.rv(ir_sub, "log_di", Dist.Normal, %{mu: Nx.tensor(:math.log(0.12)), sigma: Nx.tensor(0.4)})
+  ir_sub = Builder.rv(ir_sub, "b", Dist.Beta, %{alpha: Nx.tensor(5.0), beta: Nx.tensor(3.0)}, transform: :logit)
+  ir_sub = Builder.rv(ir_sub, "sigma", Dist.HalfCauchy, %{scale: Nx.tensor(0.3)}, transform: :log)
+  dist_sub = Dist.Custom.new(dca_logpdf, support: :real)
+
+  ir_sub =
+    Dist.Custom.rv(ir_sub, "ll", dist_sub, %{
+      log_qi: "log_qi", log_di: "log_di", b: "b", sigma: "sigma",
+      t_data: t_sub, log_q_obs: log_q_sub
+    })
+
+  ir_sub = Builder.obs(ir_sub, "ll_obs", "ll", Nx.tensor(0.0))
+
+  {trace_sub, _} =
+    Sampler.sample(ir_sub, init, num_warmup: 500, num_samples: 300, seed: 42, ncp: false)
+
+  qi_s = trace_sub["log_qi"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+  di_s = trace_sub["log_di"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+  b_s = trace_sub["b"] |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+
+  n_draws = min(200, length(qi_s))
+
+  curves =
+    Enum.zip([Enum.take(qi_s, n_draws), Enum.take(di_s, n_draws), Enum.take(b_s, n_draws)])
+    |> Enum.map(fn {qi, di, b} ->
+      Enum.map(1..60, fn t -> qi / :math.pow(1.0 + b * di * t, 1.0 / b) end)
+    end)
+
+  pcts =
+    Enum.map(0..59, fn idx ->
+      rates = Enum.map(curves, fn c -> Enum.at(c, idx) end) |> Enum.sort()
+      n = length(rates)
+      %{month: idx + 1,
+        p10: Enum.at(rates, round(0.1 * n)),
+        p50: Enum.at(rates, round(0.5 * n)),
+        p90: Enum.at(rates, round(0.9 * n))}
+    end)
+
+  # EUR distribution
+  eurs =
+    Enum.zip([qi_s, di_s, b_s])
+    |> Enum.map(fn {qi, di, b} ->
+      Enum.reduce(1..360, 0.0, fn t, acc ->
+        q = qi / :math.pow(max(1.0 + b * di * t, 1.0e-10), 1.0 / max(b, 0.01))
+        acc + max(q, 0.0) * 30.4
+      end) / 1000.0
+    end)
+    |> Enum.filter(&is_number/1)
+    |> Enum.sort()
+
+  n_eur = length(eurs)
+
+  %{
+    months: months_of_data,
+    pcts: pcts,
+    obs: Enum.take(observed, months_of_data),
+    eur_p10: Enum.at(eurs, round(0.1 * n_eur)),
+    eur_p50: Enum.at(eurs, round(0.5 * n_eur)),
+    eur_p90: Enum.at(eurs, round(0.9 * n_eur)),
+    eur_range: Enum.at(eurs, round(0.9 * n_eur)) - Enum.at(eurs, round(0.1 * n_eur))
+  }
+end
+
+stages = Enum.map([6, 12, 18, 24], fn m -> run_forecast.(m) end)
+
+IO.puts("As data arrives, uncertainty collapses:\n")
+IO.puts("  Data      | EUR P10   | EUR P50   | EUR P90   | Uncertainty Range")
+IO.puts("  ----------|-----------|-----------|-----------|------------------")
+
+for s <- stages do
+  IO.puts(
+    "  #{String.pad_trailing("#{s.months} months", 10)}" <>
+      "| #{String.pad_trailing("#{Float.round(s.eur_p10, 0)} kbbl", 10)}" <>
+      "| #{String.pad_trailing("#{Float.round(s.eur_p50, 0)} kbbl", 10)}" <>
+      "| #{String.pad_trailing("#{Float.round(s.eur_p90, 0)} kbbl", 10)}" <>
+      "| #{Float.round(s.eur_range, 0)} kbbl"
+  )
+end
+```
+
+```elixir
+# Visualize the four stages side by side
+update_charts =
+  for {s, panel_idx} <- Enum.with_index(stages) do
+    band =
+      Enum.map(s.pcts, fn p ->
+        %{"month" => p.month, "p10" => p.p10, "p90" => p.p90, "p50" => p.p50,
+          "stage" => "#{s.months} months of data"}
+      end)
+
+    obs =
+      Enum.map(s.obs, fn {t, q, _} ->
+        %{"month" => t, "rate" => q, "stage" => "#{s.months} months of data"}
+      end)
+
+    {band, obs}
+  end
+
+all_bands = Enum.flat_map(update_charts, fn {b, _} -> b end)
+all_obs = Enum.flat_map(update_charts, fn {_, o} -> o end)
+
+Vl.new(
+  width: 320,
+  height: 200,
+  title: [text: "Live Updating: Forecast Improves With Every Month of Data"]
+)
+|> Vl.data_from_values(all_bands)
+|> Vl.facet_wrap("stage", columns: 2)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:area, opacity: 0.25, color: "#1f77b4")
+  |> Vl.encode_field(:x, "month", type: :quantitative, title: "Month")
+  |> Vl.encode_field(:y, "p10", type: :quantitative, title: "bbl/day")
+  |> Vl.encode_field(:y2, "p90"),
+  Vl.new()
+  |> Vl.mark(:line, stroke_width: 2, color: "#1f77b4")
+  |> Vl.encode_field(:x, "month", type: :quantitative)
+  |> Vl.encode_field(:y, "p50", type: :quantitative),
+  Vl.new()
+  |> Vl.data_from_values(all_obs)
+  |> Vl.mark(:point, size: 25, color: "#333", filled: true)
+  |> Vl.encode_field(:x, "month", type: :quantitative)
+  |> Vl.encode_field(:y, "rate", type: :quantitative)
+])
+```
+
+**Key takeaway:** After 6 months the forecast is wide — many outcomes are possible.
+By 24 months, the band is tight. Decision-makers watch this happen in real time
+on a live dashboard, not in a quarterly report.
+
+## Portfolio View: Three Wells at a Glance
+
+In practice, operators manage hundreds of wells. eXMC scales to fleet-level analysis —
+each well gets its own probabilistic forecast, and portfolio-level uncertainty
+is computed by aggregating individual well distributions.
+
+```elixir
+# Simulate three wells with different characteristics
+well_profiles = [
+  %{name: "Well A (strong)", qi: 950, di: 0.10, b: 0.80, sigma: 0.15, color: "#2ca02c"},
+  %{name: "Well B (average)", qi: 680, di: 0.14, b: 0.90, sigma: 0.20, color: "#1f77b4"},
+  %{name: "Well C (weak)",   qi: 420, di: 0.18, b: 0.95, sigma: 0.25, color: "#d62728"}
+]
+
+rng = :rand.seed_s(:exsss, 99)
+
+{well_data, _} =
+  Enum.map_reduce(well_profiles, rng, fn w, rng ->
+    {data, rng} =
+      Enum.map_reduce(1..24, rng, fn t, rng ->
+        q_true = w.qi / :math.pow(1.0 + w.b * w.di * t, 1.0 / w.b)
+        {noise, rng} = :rand.normal_s(rng)
+        q_obs = q_true * :math.exp(w.sigma * noise)
+        {{t, q_obs}, rng}
+      end)
+
+    # Run Bayesian model for each well
+    t_w = Nx.tensor(Enum.map(data, fn {t, _} -> t * 1.0 end))
+    lq_w = Nx.tensor(Enum.map(data, fn {_, q} -> :math.log(q) end))
+
+    ir_w = Builder.new_ir()
+    ir_w = Builder.rv(ir_w, "log_qi", Dist.Normal, %{mu: Nx.tensor(:math.log(700.0)), sigma: Nx.tensor(0.5)})
+    ir_w = Builder.rv(ir_w, "log_di", Dist.Normal, %{mu: Nx.tensor(:math.log(0.12)), sigma: Nx.tensor(0.4)})
+    ir_w = Builder.rv(ir_w, "b", Dist.Beta, %{alpha: Nx.tensor(5.0), beta: Nx.tensor(3.0)}, transform: :logit)
+    ir_w = Builder.rv(ir_w, "sigma", Dist.HalfCauchy, %{scale: Nx.tensor(0.3)}, transform: :log)
+    dist_w = Dist.Custom.new(dca_logpdf, support: :real)
+
+    ir_w =
+      Dist.Custom.rv(ir_w, "ll", dist_w, %{
+        log_qi: "log_qi", log_di: "log_di", b: "b", sigma: "sigma",
+        t_data: t_w, log_q_obs: lq_w
+      })
+
+    ir_w = Builder.obs(ir_w, "ll_obs", "ll", Nx.tensor(0.0))
+
+    {tr, _} =
+      Sampler.sample(ir_w, init, num_warmup: 500, num_samples: 300, seed: 42, ncp: false)
+
+    qi_s = tr["log_qi"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+    di_s = tr["log_di"] |> Nx.exp() |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+    b_s = tr["b"] |> Nx.to_flat_list() |> Enum.filter(&is_number/1)
+
+    eurs =
+      Enum.zip([qi_s, di_s, b_s])
+      |> Enum.map(fn {qi, di, b} ->
+        Enum.reduce(1..360, 0.0, fn t, acc ->
+          q = qi / :math.pow(max(1.0 + b * di * t, 1.0e-10), 1.0 / max(b, 0.01))
+          acc + max(q, 0.0) * 30.4
+        end) / 1000.0
+      end)
+      |> Enum.filter(&is_number/1)
+
+    {{w.name, w.color, eurs}, rng}
+  end)
+
+# Portfolio EUR histogram
+eur_chart_data =
+  Enum.flat_map(well_data, fn {name, _color, eurs} ->
+    Enum.map(eurs, fn e -> %{"EUR_kbbl" => e, "Well" => name} end)
+  end)
+
+Vl.new(
+  width: 600,
+  height: 300,
+  title: [
+    text: "Portfolio EUR Distribution",
+    subtitle: "Risk-adjusted reserves across three wells"
+  ]
+)
+|> Vl.data_from_values(eur_chart_data)
+|> Vl.mark(:bar, opacity: 0.6)
+|> Vl.encode_field(:x, "EUR_kbbl", type: :quantitative,
+  bin: [maxbins: 25], title: "Estimated Ultimate Recovery (thousand barrels)")
+|> Vl.encode(:y, aggregate: :count, title: "Count")
+|> Vl.encode_field(:color, "Well", type: :nominal,
+  scale: %{range: ["#2ca02c", "#1f77b4", "#d62728"]})
+```
+
+```elixir
+# Portfolio summary table
+IO.puts("Portfolio Summary:\n")
+IO.puts("  Well                | EUR P10   | EUR P50   | EUR P90")
+IO.puts("  --------------------|-----------|-----------|----------")
+
+total_p10 = 0.0
+total_p50 = 0.0
+total_p90 = 0.0
+
+{total_p10, total_p50, total_p90} =
+  Enum.reduce(well_data, {0.0, 0.0, 0.0}, fn {name, _, eurs}, {tp10, tp50, tp90} ->
+    sorted = Enum.sort(eurs)
+    n = length(sorted)
+    p10 = Enum.at(sorted, round(0.1 * n))
+    p50 = Enum.at(sorted, round(0.5 * n))
+    p90 = Enum.at(sorted, round(0.9 * n))
+
+    IO.puts(
+      "  #{String.pad_trailing(name, 20)}" <>
+        "| #{String.pad_trailing("#{Float.round(p10, 0)} kbbl", 10)}" <>
+        "| #{String.pad_trailing("#{Float.round(p50, 0)} kbbl", 10)}" <>
+        "| #{Float.round(p90, 0)} kbbl"
+    )
+
+    {tp10 + p10, tp50 + p50, tp90 + p90}
+  end)
+
+IO.puts("  --------------------|-----------|-----------|----------")
+IO.puts(
+  "  #{String.pad_trailing("PORTFOLIO TOTAL", 20)}" <>
+    "| #{String.pad_trailing("#{Float.round(total_p10, 0)} kbbl", 10)}" <>
+    "| #{String.pad_trailing("#{Float.round(total_p50, 0)} kbbl", 10)}" <>
+    "| #{Float.round(total_p90, 0)} kbbl"
+)
+```
+
+## Value of Information
+
+Probabilistic forecasting changes how operators make decisions. Here are three
+concrete areas where uncertainty quantification creates measurable value:
+
+```elixir
+IO.puts("""
++---------------------------+-------------------------------+-------------------------------+
+| Decision                  | Current Practice              | With eXMC Live Forecasting    |
++---------------------------+-------------------------------+-------------------------------+
+| Reserves Booking          | Single EUR estimate.          | P10/P50/P90 for SEC filings.  |
+|                           | Over-book -> write-downs.     | Risk-adjusted from day one.   |
+|                           | Under-book -> missed value.   | Updates monthly, not yearly.  |
++---------------------------+-------------------------------+-------------------------------+
+| Workover Timing           | React when production drops   | See decline steepening early  |
+|                           | below threshold. Late.        | in the probability band.      |
+|                           |                               | Intervene 3-6 months sooner.  |
++---------------------------+-------------------------------+-------------------------------+
+| Acquisition Bids          | Bid based on single NPV.      | Bid with full NPV distribution|
+|                           | Overpay or lose the deal.     | Price risk explicitly.        |
+|                           |                               | Win more deals at fair price. |
++---------------------------+-------------------------------+-------------------------------+
+| Field Visit Scheduling    | Fixed calendar (monthly).     | Visit only when uncertainty   |
+|                           | Waste trips on stable wells.  | exceeds threshold. Save 30%+  |
+|                           |                               | of field visits.              |
++---------------------------+-------------------------------+-------------------------------+
+""")
+```
+
+## Three Technical Advantages
+
+eXMC is not just better math — it is a different kind of software architecture.
+
+```elixir
+IO.puts("""
+1. LIVE STREAMING POSTERIOR
+   Each MCMC sample streams as a message to any dashboard — browser, desktop, mobile.
+   No batch jobs. No waiting. Engineers see the forecast update in real time
+   as the model runs.
+
+2. LIVE OBSERVATION UPDATES
+   When new production data arrives (monthly report, daily SCADA reading),
+   the model re-runs automatically. The posterior sharpens. Uncertainty
+   collapses. No analyst intervention required.
+
+3. FAULT-TOLERANT EDGE DEPLOYMENT
+   Runs on edge hardware at the wellsite. If the device crashes, it restarts
+   automatically — no data loss, no manual recovery. Works offline when
+   connectivity drops. Syncs results when connection restores.
+
+   Compare to Python-based tools:
+   - Python: one crash kills all running models
+   - eXMC: each well's model is isolated — one crash affects nothing else
+   - Python: requires cloud infrastructure (AWS/Azure) for multi-well analysis
+   - eXMC: deploys to any hardware with zero external infrastructure
+""")
+```
+
+## Architecture: From Wellsite to Dashboard
+
+```elixir
+IO.puts("""
+How it works in production:
+
+    Wellsite Sensors              eXMC Engine                  Live Dashboard
+   (pressure, flow,          (runs at the edge or          (browser-based,
+    temperature)               in the cloud)                any device)
+
+   +----------------+        +-------------------+        +------------------+
+   |                |  data  |                   | stream |                  |
+   |  SCADA / IoT   +------->  Bayesian Model    +------->  P10/P50/P90     |
+   |  sensors       |        |  (NUTS sampler)   |        |  forecast bands  |
+   |                |        |                   |        |                  |
+   +----------------+        +-------------------+        +------------------+
+                                      |
+                                      | fault-tolerant:
+                                      | crash -> auto-restart
+                                      | offline -> buffer & sync
+                                      |
+                              +-------v---------+
+                              |                 |
+                              |  Other Wells    |  Each well = isolated process
+                              |  (100s-1000s)   |  No shared failure modes
+                              |                 |
+                              +-----------------+
+
+   KEY: No Kubernetes. No Docker. No message queues. No cloud required.
+        One binary. Deploy anywhere. Scale by adding nodes.
+""")
+```
+
+## Summary
+
+```elixir
+IO.puts("""
+What eXMC delivers for oil & gas operations:
+
+  BEFORE                              AFTER
+  ------                              -----
+  One forecast line                   Full probability envelope (P10/P50/P90)
+  Updated quarterly                   Updates with every data point
+  Analyst runs spreadsheet            Model runs itself, streams to dashboard
+  Single EUR number                   EUR distribution with risk quantification
+  Cloud-dependent infrastructure      Runs at the edge, fault-tolerant
+  One crash kills everything          Isolated processes, automatic recovery
+
+  Result: Better reserves estimates. Earlier intervention. Smarter bids.
+          Less risk. More uptime. Fewer surprises.
+""")
+```

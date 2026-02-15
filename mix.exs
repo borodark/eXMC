@@ -22,7 +22,7 @@ defmodule Exmc.MixProject do
 
   defp package do
     [
-      licenses: ["AGPL-3.0-only"],
+      licenses: ["Apache-2.0", "Commercial"],
       links: %{}
     ]
   end

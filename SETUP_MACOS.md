@@ -102,7 +102,7 @@ CUDA_VISIBLE_DEVICES="" mix test
 
 ## Livebook Notebooks
 
-The `notebooks/` directory contains 4 interactive notebooks demonstrating eXMC features.
+The `notebooks/` directory contains 6 interactive notebooks demonstrating eXMC features.
 
 ### Install Livebook
 
@@ -130,6 +130,8 @@ Then open any notebook from `exmc/notebooks/`:
 | `02_hierarchical_model.livemd` | Hierarchical models, NCP, multi-chain, R-hat, forest plots |
 | `03_model_comparison.livemd` | WAIC, LOO-CV, model comparison tables |
 | `04_variational_inference.livemd` | NCP vs centered, multi-chain diagnostics, Lognormal |
+| `05_dca_engineers.livemd` | Bayesian decline curve analysis, Custom distributions, P10/P50/P90 forecasts |
+| `06_dca_business.livemd` | Live production forecasting demo for business stakeholders |
 
 Notebooks use `kino_vega_lite` for chart rendering — VegaLite specs auto-render natively in Livebook cells.
 
