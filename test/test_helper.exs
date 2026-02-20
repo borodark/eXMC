@@ -5,7 +5,7 @@ case Exmc.JIT.detect_compiler() do
   compiler -> Nx.Defn.default_options(compiler: compiler)
 end
 
-ExUnit.start()
+ExUnit.start(exclude: [:distributed])
 
 # Numeric compare helper for Nx tensors
 

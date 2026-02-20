@@ -118,15 +118,16 @@ defmodule Exmc.DistributedTest do
 
     setup do
       # Skip if distribution is not available or :peer module not present
-      cond do
-        not function_exported?(:peer, :start_link, 1) ->
-          {:skip, "OTP :peer module not available"}
+      unless function_exported?(:peer, :start_link, 1) do
+        flunk("OTP :peer module not available (run with --exclude distributed)")
+      end
 
-        true ->
-          case ensure_distribution() do
-            :ok -> start_peer_nodes(2)
-            {:skip, _} = skip -> skip
-          end
+      case ensure_distribution() do
+        :ok ->
+          start_peer_nodes(2)
+
+        {:skip, reason} ->
+          flunk("Cannot start distribution: #{reason} (run with --exclude distributed)")
       end
     end
 
