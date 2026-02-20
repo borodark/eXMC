@@ -6,6 +6,7 @@ defmodule Exmc.MixProject do
       app: :exmc,
       version: "0.1.0",
       elixir: "~> 1.18",
+      compilers: [:yecc, :leex | Mix.compilers()],
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: "Probabilistic programming for the BEAM",
