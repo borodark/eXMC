@@ -207,3 +207,37 @@ the machine to do otherwise.
 - `Task.async_stream` with explicit `max_concurrency` for parallel runs
 - `:timer.tc/1` for wall-clock measurement
 - Hardware: 2x Intel Xeon E5-2699 v4 @ 2.20GHz (44 cores / 88 threads), 256GB DDR4, NUMA 2-socket
+
+---
+
+### P.S. What Does "Thread No-Node Processor Spread" Actually Mean?
+
+The name `tnnps` is an Erlang-style compound that reads as three layered
+instructions, innermost to outermost:
+
+| Component | Token | Meaning |
+|-----------|-------|---------|
+| **thread** | `t` | Spread across hardware threads first. Low-numbered schedulers get the first HT thread of each core; higher-numbered get the second. Prevents two schedulers from fighting over one core's execution units. |
+| **no_node** | `nn` | Fill one NUMA node completely before crossing to the next. "No [crossing] node [boundaries]" — stay local. This is the NUMA-aware constraint. |
+| **processor_spread** | `ps` | Within each NUMA node, spread across physical processors (cores) as widely as possible. Don't cluster schedulers on adjacent cores. |
+
+The confusing part is "no_node." It sounds like "ignore NUMA nodes" but means
+the opposite: *respect* node boundaries. The Erlang documentation confirms:
+"schedulers are only spread over processors internally in one NUMA node at a
+time." The name describes what the algorithm *avoids doing* — crossing node
+boundaries — not what it ignores.
+
+One further detail from the docs: **`db` (default_bind) currently maps to
+`tnnps`**. The Erlang/OTP team already decided this is the best general-purpose
+binding strategy for bound schedulers. They simply don't make it the
+default-default, which remains `unbound` — because most BEAM workloads are
+I/O-bound web servers where scheduler migration is harmless and binding would
+reduce the OS scheduler's ability to balance load across cores responding to
+bursty network traffic.
+
+For compute-bound numerical work — gradient evaluations, leapfrog integrations,
+tree building — the calculus inverts. Pinning wins because the cost of a NUMA
+remote access (40ns) exceeds the benefit of OS load balancing (saving maybe 1ms
+of queue imbalance across 88 schedulers that are all equally busy anyway).
+
+Source: [Erlang `erl` command reference, `+sbt` flag](https://www.erlang.org/doc/apps/erts/erl_cmd.html)
