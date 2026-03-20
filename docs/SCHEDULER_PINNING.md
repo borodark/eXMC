@@ -175,3 +175,35 @@ the machine to do otherwise.
 
 *Benchmark: `CUDA_VISIBLE_DEVICES="" mix run benchmark/cpu_pinning_bench.exs`*
 *Compare strategies: `elixir --erl "+sbt tnnps" -S mix run benchmark/cpu_pinning_bench.exs`*
+
+---
+
+### Sources
+
+**Erlang/OTP scheduler binding**:
+- Erlang `erl` man page, `+sbt` flag: https://www.erlang.org/doc/apps/erts/erl_cmd.html
+- Erlang Efficiency Guide, "System Limits and Tuning": https://www.erlang.org/doc/system/efficiency_guide.html
+- Lukas Larsson, "Understanding the Erlang Scheduler" (Erlang User Conference 2013)
+
+**NUMA architecture and effects**:
+- Intel Xeon E5-2699 v4 datasheet, ARK: https://ark.intel.com/content/www/us/en/ark/products/91317/intel-xeon-processor-e5-2699-v4-55m-cache-2-20-ghz.html
+- Lameter, C. "NUMA (Non-Uniform Memory Access): An Overview." *ACM Queue* 11(7), 2013. https://queue.acm.org/detail.cfm?id=2513149
+- Drepper, U. "What Every Programmer Should Know About Memory." 2007. https://people.freebsd.org/~lstewart/articles/cpumemory.pdf (Section 5: NUMA)
+- McCurley, J. "NUMA Deep Dive" series (VMware): https://frankdenneman.nl/2016/07/07/numa-deep-dive-part-1-uma-numa/
+
+**BEAM on NUMA — prior art**:
+- Lundin, K. "Scalable Erlang on Many-Core Processors." (Ericsson internal, referenced in Erlang/OTP source `erts/emulator/beam/erl_process.c`)
+- Erlang source: `erts_sched_bind_atthd_prepare()` implements the binding strategies — see `erts/emulator/beam/erl_process.c` line ~12000
+- WhatsApp engineering (2014): scaled BEAM to 2M connections per server using `+sbt` on NUMA hardware
+
+**XLA/EXLA JIT compilation**:
+- XLA (Accelerated Linear Algebra) documentation: https://www.tensorflow.org/xla
+- EXLA Hex package: https://hex.pm/packages/exla
+- XLA caches compiled HLO by graph hash; captured tensors become constants in the graph. See `xla/service/hlo_module.h`
+
+**Benchmarking methodology**:
+- All benchmarks run with `CUDA_VISIBLE_DEVICES=""` (CPU-only, no GPU contention)
+- JIT cache warmed before measurement (first compilation excluded)
+- `Task.async_stream` with explicit `max_concurrency` for parallel runs
+- `:timer.tc/1` for wall-clock measurement
+- Hardware: 2x Intel Xeon E5-2699 v4 @ 2.20GHz (44 cores / 88 threads), 256GB DDR4, NUMA 2-socket
