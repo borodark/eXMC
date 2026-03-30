@@ -1,5 +1,7 @@
 # eXMC
 
+
+
 > *"One does not translate a minor work. One translates the work that would not leave one alone."* — [Translator's Foreword](FOREWORD.md)
 
 **A PPL environment on the BEAM, inspired by PyMC.** eXMC is a from-scratch Elixir implementation of PyMC's architecture: declarative model specification, automatic constraint transforms, NUTS sampling, and Bayesian diagnostics — all on Nx tensors with optional EXLA acceleration.
@@ -233,7 +235,7 @@ ExmcViz.stream(ir, init, num_samples: 5000)   # live sampling dashboard
 
 ![Pair Plot](assets/pair_plot_4k.png)
 
-## Backends
+## Backends 
 
 eXMC's tensor operations go through [Nx](https://github.com/elixir-nx/nx), with backend-specific acceleration:
 
@@ -243,7 +245,9 @@ eXMC's tensor operations go through [Nx](https://github.com/elixir-nx/nx), with 
 | [EMLX](https://github.com/elixir-nx/emlx) | Apple Silicon (Metal) | Planned. MLX backend for M-series Macs ([#1](https://github.com/borodark/exmc/issues/1)) |
 | BinaryBackend | Any | Fallback. Pure Elixir, no dependencies |
 
-## The Ecosystem: Three Inference Families
+## The Ecosystem: Les Trois Chambrées
+
+_Probabiliers de tous les a priori, unissez-vous!_
 
 eXMC is one of three standalone libraries for Bayesian inference on the BEAM.
 Each covers a different inference family. Each is independent — no shared
