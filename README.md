@@ -245,7 +245,7 @@ eXMC's tensor operations go through [Nx](https://github.com/elixir-nx/nx), with 
 | [EMLX](https://github.com/elixir-nx/emlx) | Apple Silicon (Metal) | Planned. MLX backend for M-series Macs ([#1](https://github.com/borodark/exmc/issues/1)) |
 | BinaryBackend | Any | Fallback. Pure Elixir, no dependencies |
 
-## The Ecosystem: Les Trois Chambrées
+## The Ecosystem: _Three Comrades_
 
 _Probabiliers de tous les a priori, unissez-vous!_
 
