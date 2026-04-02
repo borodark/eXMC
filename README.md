@@ -257,7 +257,7 @@ dependencies beyond Elixir itself.
 |---|---|---|---|
 | **eXMC** | NUTS / HMC, ADVI, SMC, Pathfinder | Known parametric models, continuous parameters | Nx, EXLA |
 | [**smc_ex**](https://github.com/borodark/smc_ex) | Bootstrap PF, PMCMC, Online SMC² | Discrete state transitions, streaming data, epidemic tracking | **zero** |
-| [**StochTree-Ex**](https://github.com/borodark/stochtree_ex) | BART (Bayesian Additive Regression Trees) | Unknown functional form, feature discovery, nonparametric regression | Rustler |
+| [**StochTree-Ex**](https://github.com/borodark/ex_stochtree) | BART (Bayesian Additive Regression Trees) | Unknown functional form, feature discovery, nonparametric regression | Rustler |
 
 **When to use which:**
 
