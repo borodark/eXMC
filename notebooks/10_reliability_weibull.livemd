@@ -3,18 +3,20 @@
 ## Setup
 
 ```elixir
-# EMLX (Metal GPU) on macOS Apple Silicon, EXLA (CPU/CUDA) elsewhere
-backend_dep =
-  case :os.type() do
-    {:unix, :darwin} -> {:emlx, "~> 0.2"}
-    _ -> {:exla, "~> 0.10"}
-  end
 
+# CPU only — no GPU required
+System.put_env("EXLA_CPU_ONLY", "true")
+System.put_env("CUDA_VISIBLE_DEVICES", "")
 Mix.install([
   {:exmc, path: Path.expand("../", __DIR__)},
-  backend_dep,
+  {:exla, "~> 0.10"},
   {:kino_vega_lite, "~> 0.1"}
 ])
+Application.put_env(:exla, :clients, host: [platform: :host])
+Application.put_env(:exla, :default_client, :host)
+Nx.default_backend(Nx.BinaryBackend)
+Nx.Defn.default_options(compiler: EXLA, client: :host)
+
 ```
 
 ## Why This Matters

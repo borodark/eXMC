@@ -1,0 +1,581 @@
+# Bayesian Poker: Opponent Profiling via NUTS
+
+## Section
+
+*Probabiliers de tous les a priori, unissez-vous !*
+
+## What This Notebook Does
+
+You sit down at a poker table. Five strangers. You know nothing about them.
+After 80 hands, you know everything — not as point estimates ("she raises 22%
+of the time") but as full posterior distributions ("her raise rate is between
+18% and 27% with 95% probability, and she bluffs more on the turn than the flop").
+
+This notebook builds a **hierarchical Bayesian model** of poker opponents.
+The model has four hidden parameters per player (VPIP, PFR, aggression, bluff
+frequency) and population-level hyperparameters that share information across
+players. NUTS explores the 20-dimensional posterior. The result: probability
+distributions over each opponent's tendencies, used to compute expected value
+for every decision.
+
+**Why this matters beyond poker:** This is the same pattern as any system
+where you observe behavior and infer hidden parameters. Manufacturing quality
+(workers have hidden defect rates), customer segmentation (customers have
+hidden preferences), clinical trials (patients have hidden treatment
+responses). The poker framing makes the math tangible.
+
+## Setup
+
+```elixir
+
+# CPU only — no GPU required
+System.put_env("EXLA_CPU_ONLY", "true")
+System.put_env("CUDA_VISIBLE_DEVICES", "")
+Mix.install([
+  {:exmc, path: Path.expand("../", __DIR__)},
+  {:exla, "~> 0.10"},
+  {:kino_vega_lite, "~> 0.1"}
+])
+Application.put_env(:exla, :clients, host: [platform: :host])
+Application.put_env(:exla, :default_client, :host)
+Nx.default_backend(Nx.BinaryBackend)
+Nx.Defn.default_options(compiler: EXLA, client: :host)
+
+
+alias Exmc.Poker
+alias Exmc.Poker.{Cards, ActionModel, Simulator, OpponentModel, Decision}
+alias VegaLite, as: Vl
+:ok
+```
+
+## The Hidden Parameters
+
+Every poker player has hidden tendencies. You cannot observe them directly —
+you can only observe their *actions* (fold, call, raise) in response to
+situations. The inference problem: given 80 hands of observed actions,
+what are the most probable values of the hidden parameters?
+
+| Parameter | What it means                                      | Range | Example                             |
+| --------- | -------------------------------------------------- | ----- | ----------------------------------- |
+| **VPIP**  | Voluntarily Put $ In Pot — how loose they play   | 0–1 | 0.22 = tight, 0.45 = loose          |
+| **PFR**   | Preflop Raise Rate — raise vs limp               | 0–1 | 0.18 = selective, 0.28 = aggressive |
+| **AGG**   | Aggression Factor — raise-to-call ratio postflop | 0+    | 0.5 = passive, 2.2 = aggressive     |
+| **BLUFF** | Bluff Frequency — raises with weak hands         | 0–1 | 0.05 = honest, 0.40 = deceptive     |
+
+These four numbers define a player's *type*. A **TAG** (tight-aggressive) has
+low VPIP, moderate PFR, high AGG. A **calling station** has high VPIP, low PFR,
+low AGG — they call everything but rarely raise. A **LAG** (loose-aggressive)
+has high everything.
+
+The challenge: you don't see the parameters. You see folds, calls, and raises.
+The Bayesian model inverts this — from actions to parameters.
+
+## The Hierarchical Structure
+
+Why hierarchical? Because players at the same stake level share
+characteristics. A $1/$2 table has a typical distribution of VPIPs.
+A new player at that table probably has a VPIP near the table average.
+The hierarchical model captures this: population-level hyperparameters
+(μ and σ for each parameter) act as informative priors for individual
+players.
+
+```
+Population:   μ_VPIP, σ_VPIP, μ_PFR, σ_PFR, μ_AGG, σ_AGG
+                  ↓
+Player i:     VPIP_i ~ logit⁻¹(μ_VPIP + σ_VPIP * z_i)   (NCP)
+                  ↓
+Observation:  action_ij ~ Softmax(VPIP_i, PFR_i, AGG_i, BLUFF_i, hand_strength_j)
+```
+
+The NCP (non-centered parameterization) is critical. Without it, the
+posterior has funnel geometry that NUTS navigates poorly. With NCP, the
+sampler explores efficiently even at 20 dimensions.
+
+## Meet the Table
+
+Five archetypal players. In real poker, you'd observe their actions over
+50-100 hands before forming a read. Let's simulate that.
+
+```elixir
+archetypes = Simulator.archetypes()
+
+archetype_table =
+  Enum.map(archetypes, fn p ->
+    %{
+      "Type" => to_string(p.label),
+      "VPIP" => p.vpip,
+      "PFR" => p.pfr,
+      "AGG" => p.agg,
+      "BLUFF" => p.bluff
+    }
+  end)
+
+Kino.DataTable.new(archetype_table, name: "Player Archetypes")
+```
+
+## Example 1: Simulate 80 Hands
+
+We pick 3 opponents (TAG, LAG, Calling Station) and simulate 80 hands each.
+The simulator draws random hand strengths and samples actions from the softmax
+model. This is the "data generation" step — in real poker, this is what you
+observe over the first two hours at the table.
+
+```elixir
+players = [
+  %{vpip: 0.22, pfr: 0.18, agg: 1.8, bluff: 0.25, label: :tag},
+  %{vpip: 0.35, pfr: 0.28, agg: 2.2, bluff: 0.40, label: :lag},
+  %{vpip: 0.45, pfr: 0.08, agg: 0.5, bluff: 0.05, label: :station}
+]
+
+:rand.seed(:exsss, 42)
+{observations, true_params} = Simulator.simulate(players, 80)
+
+# Action distribution per player
+action_data =
+  Enum.zip(players, observations)
+  |> Enum.flat_map(fn {player, obs} ->
+    freqs = Enum.frequencies(obs.actions)
+    total = length(obs.actions)
+
+    [
+      %{"Player" => to_string(player.label), "Action" => "Fold", "Count" => Map.get(freqs, 0, 0), "Pct" => Map.get(freqs, 0, 0) / total * 100},
+      %{"Player" => to_string(player.label), "Action" => "Call", "Count" => Map.get(freqs, 1, 0), "Pct" => Map.get(freqs, 1, 0) / total * 100},
+      %{"Player" => to_string(player.label), "Action" => "Raise", "Count" => Map.get(freqs, 2, 0), "Pct" => Map.get(freqs, 2, 0) / total * 100}
+    ]
+  end)
+
+Vl.new(width: 500, height: 250, title: "Observed Action Frequencies (80 hands)")
+|> Vl.data_from_values(action_data)
+|> Vl.mark(:bar)
+|> Vl.encode_field(:x, "Player", type: :nominal)
+|> Vl.encode_field(:y, "Pct", type: :quantitative, title: "% of hands")
+|> Vl.encode_field(:color, "Action", type: :nominal, scale: %{domain: ["Fold", "Call", "Raise"], range: ["#e45756", "#54a24b", "#4c78a8"]})
+|> Vl.encode_field(:x_offset, "Action", type: :nominal)
+```
+
+**What to notice:** The TAG folds the most (tight). The LAG raises the most
+(aggressive). The calling station calls the most (passive). These are the
+surface patterns. NUTS will recover the hidden parameters that produce them.
+
+## The Action Model
+
+Before running inference, let's visualize what the softmax action model looks
+like for different player types. Given a hand strength (0 = garbage, 1 = nuts),
+the model outputs P(fold), P(call), P(raise).
+
+The softmax transforms raw utilities into probabilities:
+
+* **Fold utility** ∝ (1 - VPIP) × (1 - hand_strength)
+* **Call utility** ∝ VPIP × (1 - PFR) × hand_strength
+* **Raise utility** ∝ PFR × (AGG × hand_strength + BLUFF × (1 - hand_strength))
+
+The BLUFF parameter is key: it adds raise probability even with weak hands.
+A player with BLUFF = 0.40 will sometimes raise with garbage — making them
+unpredictable and hard to play against.
+
+```elixir
+hs_range = for h <- 0..100, do: h / 100
+
+model_curves =
+  Enum.flat_map(players, fn p ->
+    Enum.flat_map(hs_range, fn hs ->
+      {pf, pc, pr} = ActionModel.action_probs(p.vpip, p.pfr, p.agg, p.bluff, hs)
+      [
+        %{"Player" => to_string(p.label), "Hand Strength" => hs, "Probability" => pf, "Action" => "Fold"},
+        %{"Player" => to_string(p.label), "Hand Strength" => hs, "Probability" => pc, "Action" => "Call"},
+        %{"Player" => to_string(p.label), "Hand Strength" => hs, "Probability" => pr, "Action" => "Raise"}
+      ]
+    end)
+  end)
+
+child_curves =
+  Vl.new(width: 250, height: 200)
+  |> Vl.mark(:line, stroke_width: 2)
+  |> Vl.encode_field(:x, "Hand Strength", type: :quantitative)
+  |> Vl.encode_field(:y, "Probability", type: :quantitative)
+  |> Vl.encode_field(:color, "Action",
+    type: :nominal,
+    scale: %{domain: ["Fold", "Call", "Raise"], range: ["#e45756", "#54a24b", "#4c78a8"]}
+  )
+
+Vl.new(title: "Action Probability vs Hand Strength")
+|> Vl.data_from_values(model_curves)
+|> Vl.facet([column: [field: "Player", type: :nominal]], child_curves)
+```
+
+**What to notice:** The TAG's curves cross at hand_strength ~0.3 (selective).
+The calling station's fold line is low and flat (calls almost everything).
+The LAG's raise line stays high even at low hand strengths (bluffs frequently).
+
+## Run Bayesian Inference
+
+Now the main event: feed 80 hands of observations into a hierarchical Bayesian
+model and let NUTS recover the hidden player parameters.
+
+The model has **8 population hyperparams** (μ and σ for VPIP, PFR, AGG, BLUFF)
+plus **4 raw NCP params per player** = **20 dimensions**.
+
+NUTS navigates this 20-dimensional posterior with adaptive step size and mass
+matrix. The NCP reparameterization avoids the funnel geometry that would
+otherwise trap the sampler.
+
+```elixir
+{ir, _data} = OpponentModel.build(observations)
+init = OpponentModel.init_values(3)
+
+{trace, stats} =
+  Exmc.Sampler.sample(ir, init,
+    num_samples: 500,
+    num_warmup: 500,
+    seed: 42,
+    ncp: false
+  )
+
+profiles = OpponentModel.extract_profiles(trace, 3)
+
+IO.puts("Sampling complete:")
+IO.puts("  Divergences: #{stats.divergences}")
+IO.puts("  Step size: #{Float.round(stats.step_size, 4)}")
+IO.puts("  Samples: #{stats.num_samples}")
+:ok
+```
+
+## True vs Recovered Parameters
+
+The moment of truth — how well did NUTS recover the hidden player types
+from 80 hands of noisy behavioral data?
+
+A perfect recovery is impossible — 80 hands is not enough data to pin down
+4 parameters exactly. But the posterior means should be close, and the
+uncertainty should reflect how much information 80 hands actually contains.
+
+```elixir
+comparison_data =
+  Enum.zip([players, profiles])
+  |> Enum.with_index()
+  |> Enum.flat_map(fn {{true_p, profile}, _i} ->
+    label = to_string(true_p.label)
+
+    vpip_mean = profile.vpip |> Nx.mean() |> Nx.to_number()
+    pfr_mean = profile.pfr |> Nx.mean() |> Nx.to_number()
+    agg_mean = profile.agg |> Nx.mean() |> Nx.to_number()
+    bluff_mean = profile.bluff |> Nx.mean() |> Nx.to_number()
+
+    [
+      %{"Player" => label, "Param" => "VPIP", "True" => true_p.vpip, "Posterior Mean" => vpip_mean},
+      %{"Player" => label, "Param" => "PFR", "True" => true_p.pfr, "Posterior Mean" => pfr_mean},
+      %{"Player" => label, "Param" => "AGG", "True" => true_p.agg, "Posterior Mean" => agg_mean},
+      %{"Player" => label, "Param" => "BLUFF", "True" => true_p.bluff, "Posterior Mean" => bluff_mean}
+    ]
+  end)
+
+Kino.DataTable.new(comparison_data, name: "Parameter Recovery")
+```
+
+## Posterior Distributions
+
+The posterior gives us not just point estimates but **full uncertainty**.
+A player you've only seen 80 hands from has wide posteriors — you're uncertain.
+More hands = tighter posteriors. This is the Bayesian advantage over
+frequentist HUD stats: you know *how much you know*.
+
+```elixir
+posterior_data =
+  Enum.zip(players, profiles)
+  |> Enum.flat_map(fn {true_p, profile} ->
+    label = to_string(true_p.label)
+
+    vpip_samples = Nx.to_flat_list(profile.vpip)
+    pfr_samples = Nx.to_flat_list(profile.pfr)
+    agg_samples = Nx.to_flat_list(profile.agg)
+    bluff_samples = Nx.to_flat_list(profile.bluff)
+
+    Enum.flat_map(Enum.zip([vpip_samples, pfr_samples, agg_samples, bluff_samples]), fn {v, p, a, b} ->
+      [
+        %{"Player" => label, "Param" => "VPIP", "Value" => v},
+        %{"Player" => label, "Param" => "PFR", "Value" => p},
+        %{"Player" => label, "Param" => "AGG", "Value" => min(a, 5.0)},
+        %{"Player" => label, "Param" => "BLUFF", "Value" => b}
+      ]
+    end)
+  end)
+
+true_markers =
+  Enum.flat_map(players, fn p ->
+    [
+      %{"Player" => to_string(p.label), "Param" => "VPIP", "True" => p.vpip},
+      %{"Player" => to_string(p.label), "Param" => "PFR", "True" => p.pfr},
+      %{"Player" => to_string(p.label), "Param" => "AGG", "True" => p.agg},
+      %{"Player" => to_string(p.label), "Param" => "BLUFF", "True" => p.bluff}
+    ]
+  end)
+
+hist =
+  Vl.new(width: 160, height: 120)
+  |> Vl.data_from_values(posterior_data)
+  |> Vl.mark(:bar, opacity: 0.7)
+  |> Vl.encode_field(:x, "Value", type: :quantitative, bin: %{maxbins: 25})
+  |> Vl.encode_field(:y, "Value", type: :quantitative, aggregate: :count, title: "Count")
+  |> Vl.encode_field(:color, "Player", type: :nominal)
+
+rules =
+  Vl.new()
+  |> Vl.data_from_values(true_markers)
+  |> Vl.mark(:rule, color: "red", stroke_width: 2, stroke_dash: [4, 4])
+  |> Vl.encode_field(:x, "True", type: :quantitative)
+
+child_posterior =
+  Vl.new(width: 160, height: 120)
+  |> Vl.layers([hist, rules])
+
+Vl.new(title: "Posterior Distributions (red dashed = true value)")
+|> Vl.facet(
+  [column: [field: "Param", type: :nominal], row: [field: "Player", type: :nominal]],
+  child_posterior
+)
+|> Vl.resolve(:scale, x: :independent)
+```
+
+**What to notice:** The red dashed lines are the true values. Wide histograms
+mean high uncertainty. BLUFF is the hardest to estimate — you need many hands
+with weak holdings to distinguish a bluff from a value bet.
+
+## Make a Decision
+
+You're holding A♥ K♥. The board shows T♦ J♦ 2♣.
+You have an open-ended straight draw (any Q gives you the nuts).
+The pot is 100, and the TAG player bets 30.
+
+What should you do? The decision engine uses your **full posterior** over
+the TAG's parameters to compute expected value. Not a point estimate — an
+integral over all plausible opponent types, weighted by their posterior
+probability.
+
+```elixir
+my_hole = [Cards.parse("Ah"), Cards.parse("Kh")]
+board = [Cards.parse("Td"), Cards.parse("Jd"), Cards.parse("2c")]
+
+tag_profile = Enum.at(profiles, 0)
+
+decision = Decision.expected_value(my_hole, board, tag_profile, 100, 30)
+
+IO.puts(Decision.format_decision(decision))
+```
+
+## Example 2: Same Hand, Different Opponent
+
+Same hand, same board, but now the calling station (Player 2) bet 30.
+Calling stations rarely bluff — when they bet, they usually have something.
+But they also call too much, making our raises more profitable when we hit.
+
+**The Bayesian advantage:** the decision changes not because the cards changed,
+but because the posterior over the opponent changed. A TAG betting 30 into 100
+might be bluffing 25% of the time. A calling station betting the same amount
+might be bluffing 5%. The EV calculation integrates over these different
+posterior beliefs.
+
+```elixir
+station_profile = Enum.at(profiles, 2)
+
+decision_vs_station = Decision.expected_value(my_hole, board, station_profile, 100, 30)
+
+IO.puts("vs Calling Station:")
+IO.puts(Decision.format_decision(decision_vs_station))
+
+IO.puts("\nCompare: same hand, same board, different opponent →")
+IO.puts("  vs TAG:     #{decision.recommended}")
+IO.puts("  vs Station: #{decision_vs_station.recommended}")
+IO.puts("The posterior, not the cards, determines the decision.")
+```
+
+## OTP Mode: The Table as a Process
+
+The poker table is a GenServer. Each call to `play/2` simulates more hands,
+accumulating observations. `profile/1` runs NUTS on the full history.
+
+This is the OTP angle Python frameworks can't match — the table maintains
+state across interactions, and multiple tables can run concurrently as
+independent processes with isolated heaps. A poker room with 20 tables
+running simultaneous NUTS inference: 20 GenServers, 20 posteriors, zero
+shared state.
+
+```elixir
+{:ok, table} = Poker.Table.start_link(players)
+
+# Play in batches (as you would at a real table)
+Poker.Table.play(table, 40)
+IO.inspect(Poker.Table.status(table), label: "After 40 hands")
+
+Poker.Table.play(table, 40)
+IO.inspect(Poker.Table.status(table), label: "After 80 hands")
+
+# Profile with NUTS
+{:ok, table_profiles, table_stats} = Poker.Table.profile(table, num_samples: 300, num_warmup: 300)
+
+IO.puts("\nTable profiling complete (#{table_stats.divergences} divergences)")
+
+# Decision via the table process
+{:ok, table_decision} =
+  Poker.Table.decide(table,
+    [Cards.parse("Qh"), Cards.parse("Qs")],
+    [Cards.parse("7d"), Cards.parse("8d"), Cards.parse("3c")],
+    80, 20)
+
+IO.puts("\nQ♥Q♠ on 7♦8♦3♣, pot=80, to_call=20:")
+IO.puts(Decision.format_decision(table_decision))
+```
+
+## Population Hyperparameters
+
+The hierarchical model learns about the *population* too. These hyperparams
+describe what "typical players at this stake" look like. With more players
+at the table, these tighten — giving better priors for a **new unknown player**.
+
+This is the cold-start problem solved: when a new player sits down, you don't
+start from a flat prior. You start from the population posterior — what you've
+learned about *this stake level* from all the players you've observed.
+
+```elixir
+hyper_data =
+  [
+    {"mu_vpip", "Mean VPIP (logit)", &Nx.to_flat_list/1},
+    {"mu_pfr", "Mean PFR (logit)", &Nx.to_flat_list/1},
+    {"mu_agg", "Mean AGG (log)", &Nx.to_flat_list/1},
+    {"sigma_vpip", "SD VPIP", &Nx.to_flat_list/1},
+    {"sigma_pfr", "SD PFR", &Nx.to_flat_list/1},
+    {"sigma_agg", "SD AGG", &Nx.to_flat_list/1}
+  ]
+  |> Enum.flat_map(fn {key, label, to_list} ->
+    samples = to_list.(trace[key])
+    Enum.map(samples, fn v -> %{"Param" => label, "Value" => v} end)
+  end)
+
+child_hist =
+  Vl.new(width: 200, height: 120)
+  |> Vl.mark(:bar, opacity: 0.7, color: "#4c78a8")
+  |> Vl.encode_field(:x, "Value", type: :quantitative, bin: %{maxbins: 25})
+  |> Vl.encode_field(:y, "Value", type: :quantitative, aggregate: :count, title: "Count")
+
+Vl.new(title: "Population Hyperparameters")
+|> Vl.data_from_values(hyper_data)
+|> Vl.facet([column: [field: "Param", type: :nominal]], child_hist)
+|> Vl.resolve(:scale, x: :independent)
+```
+
+## Hand Evaluation Demo
+
+The cards module handles full Texas Hold'em hand evaluation via Monte Carlo.
+
+```elixir
+# Deal a random hand
+deck = Cards.deck() |> Enum.shuffle()
+{[c1, c2], rest} = Enum.split(deck, 2)
+{board, _} = Enum.split(rest, 5)
+
+IO.puts("Hole cards: #{Cards.card_name(c1)} #{Cards.card_name(c2)}")
+IO.puts("Board: #{Enum.map(board, &Cards.card_name/1) |> Enum.join(" ")}")
+
+{category, kickers} = Cards.evaluate_7([c1, c2 | board])
+hand_names = ~w(High\ Card Pair Two\ Pair Trips Straight Flush Full\ House Quads Straight\ Flush)
+IO.puts("Best hand: #{Enum.at(hand_names, category)}")
+
+flop = Enum.take(board, 3)
+equity = Cards.hand_strength([c1, c2], flop, 1000)
+IO.puts("Flop equity: #{Float.round(equity * 100, 1)}%")
+```
+
+## Study Guide
+
+### Key Concepts
+
+1. **Latent variable inference**: The parameters (VPIP, PFR, AGG, BLUFF) are
+   hidden. We observe only the actions they produce. NUTS inverts this mapping.
+
+2. **Hierarchical modeling**: Population hyperparameters share information
+   across players. A new player at the table inherits the population prior
+   instead of starting from ignorance.
+
+3. **Non-centered parameterization (NCP)**: The transformation `θ_i = μ + σ * z_i`
+   where `z_i ~ N(0,1)` avoids the funnel geometry that traps NUTS in
+   hierarchical models. Without NCP, the sampler gets stuck.
+
+4. **Softmax action model**: Maps continuous utilities to discrete action
+   probabilities. The same architecture used in neural networks for
+   classification — but here the inputs are interpretable parameters.
+
+5. **Decision under uncertainty**: The expected value computation integrates
+   over the full posterior, not just the MAP estimate. When you're uncertain
+   about whether the opponent bluffs, your EV calculation accounts for both
+   possibilities.
+
+6. **Cold-start via hierarchical priors**: When a new player sits down, the
+   population posterior provides an informative starting point. After 20 hands,
+   the individual posterior starts dominating. This is the Bayesian solution
+   to the exploration-exploitation trade-off.
+
+### Exercises
+
+1. **Change the sample size**: Run with 40 hands instead of 80. How much
+   wider are the posteriors? At what hand count do the 95% credible intervals
+   exclude the true value?
+
+2. **Add a fourth player**: Create a "maniac" (`vpip: 0.65, pfr: 0.45,
+   agg: 3.0, bluff: 0.55`). Does the population posterior shift?
+
+3. **Misspecified prior**: Change the population prior to be very tight
+   (σ = 0.1). Does the model still recover the calling station's extreme
+   parameters?
+
+4. **Decision sensitivity**: For the A♥K♥ hand, plot EV as a function of
+   pot size (20 to 200) against each opponent type. Where do the lines cross?
+
+5. **Warm-starting**: Run NUTS on the first 40 hands, then re-run with
+   `warm_start: stats` on all 80. How much faster is the second run?
+
+### Further Reading
+
+**Bayesian inference for games:**
+
+* Chen, B. & Ankenman, J. (2006). *The Mathematics of Poker*. ConJelCo.
+  The foundational text on game-theoretic poker with probabilistic reasoning.
+* Southey, F., Bowling, M., Larson, B., Piccione, C., Burch, N., Billings, D.,
+  & Rayner, C. (2005). Bayes' Bluff: Opponent Modelling in Poker.
+  *Uncertainty in Artificial Intelligence (UAI)*, 550–558.
+  Hierarchical Bayesian opponent modeling — the direct precursor to this notebook.
+
+**Hierarchical models and NCP:**
+
+* Gelman, A. et al. (2013). *Bayesian Data Analysis* (3rd ed.), Chapters 5
+  and 15. The standard reference for hierarchical modeling.
+* Papaspiliopoulos, O., Roberts, G.O., & Sköld, M. (2007). A general
+  framework for the parametrization of hierarchical models. *Statistical
+  Science, 22*(1), 59–73. The theory behind NCP.
+* Betancourt, M. & Girolami, M. (2015). Hamiltonian Monte Carlo for
+  hierarchical models. *Current Trends in Bayesian Methodology with
+  Applications*, 79–101. Why NUTS + NCP works for funnels.
+
+**Softmax and multinomial models:**
+
+* Bishop, C.M. (2006). *Pattern Recognition and Machine Learning*,
+  Section 4.3.4. Softmax regression as the multi-class generalization
+  of logistic regression.
+
+**Expected value and decision theory:**
+
+* Berger, J.O. (1985). *Statistical Decision Theory and Bayesian Analysis*.
+  Springer. The formal framework for decision-making under uncertainty.
+
+## What's Next
+
+This demo shows the core loop: **observe → infer → decide**. Extensions:
+
+* **Position-aware model**: add position (early/mid/late) as a covariate.
+  Early-position raises are stronger than late-position raises.
+* **Street-specific params**: different aggression on flop/turn/river.
+  Many players are aggressive on the flop and passive on the river.
+* **Warm-starting**: re-run NUTS with previous posterior as `warm_start`
+  after each orbit. The mass matrix carries over — 5.8x faster.
+* **Multi-table**: concurrent GenServer tables sharing population hyperparams
+  via ETS. The BEAM runs 20 simultaneous NUTS inferences with zero contention.
+* **Live visualization**: pipe posteriors to ExmcViz via `sample_stream`.
+  Watch the opponent profile update in real time as hands are played.

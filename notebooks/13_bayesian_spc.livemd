@@ -1,6 +1,9 @@
 # Bayesian Statistical Process Control with eXMC
 
 ```elixir
+# CPU only — no GPU required
+System.put_env("EXLA_CPU_ONLY", "true")
+System.put_env("CUDA_VISIBLE_DEVICES", "")
 Mix.install([
   {:exmc, path: Path.expand("../", __DIR__)},
   {:exla, "~> 0.10"},
@@ -9,6 +12,11 @@ Mix.install([
   {:kino, "~> 0.14"},
   {:kino_vega_lite, "~> 0.1"}
 ])
+Application.put_env(:exla, :clients, host: [platform: :host])
+Application.put_env(:exla, :default_client, :host)
+Nx.default_backend(Nx.BinaryBackend)
+Nx.Defn.default_options(compiler: EXLA, client: :host)
+
 
 # EXLA required — BinaryBackend gradient computation crashes on Complex.divide
 ```

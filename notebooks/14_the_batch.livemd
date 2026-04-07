@@ -1,0 +1,803 @@
+# The Batch
+
+## A Story About Knowing Where the Parts Came From
+
+```elixir
+# CPU only — no GPU required
+System.put_env("EXLA_CPU_ONLY", "true")
+System.put_env("CUDA_VISIBLE_DEVICES", "")
+Mix.install([
+  {:exmc, path: Path.expand("../", __DIR__)},
+  {:exla, "~> 0.10"},
+  {:jose, "~> 1.11"},
+  {:kino, "~> 0.14"},
+  {:kino_vega_lite, "~> 0.1"}
+])
+Application.put_env(:exla, :clients, host: [platform: :host])
+Application.put_env(:exla, :default_client, :host)
+Nx.default_backend(Nx.BinaryBackend)
+Nx.Defn.default_options(compiler: EXLA, client: :host)
+
+```
+
+## I. The Warranty Claims
+
+The trouble began, as it often does in manufacturing, with a spreadsheet.
+
+Fourteen warranty claims in March from the Meridian Pro laptop line. Not
+alarming on its own — the Meridian Pro shipped 4,200 units in Q4, and a
+handful of returns is the cost of doing business. The quality team logged
+them, generated the usual Pareto chart, and moved on.
+
+Then April brought nineteen more. May brought twenty-six. By June the
+spreadsheet had acquired a second tab, and the quality manager had acquired
+an ulcer.
+
+The failure mode was consistent: sudden power loss under load, no warning,
+no graceful shutdown. The motherboard was fine. The CPU was fine. The RAM
+passed every diagnostic. But the units were dead, and the customers were
+not happy.
+
+Someone eventually thought to check the bill of materials.
+
+The Meridian Pro uses power supply modules from three suppliers — let us
+call them Atlas, Beacon, and Crest. All three meet the same specification.
+All three pass incoming inspection. All three have been shipping to this
+factory for years without incident.
+
+But not all three were in the dead laptops.
+
+Now, a supplier is not a factory. This is a distinction that most ERP
+systems quietly erase — not by design, but by default configuration. SAP
+has batch management. Oracle has lot genealogy. The capability exists in
+the software. But implementing lot-level traceability adds complexity to
+every inventory transaction, and most manufacturers outside regulated
+industries (aerospace, medical, pharma) do not configure it. Only about
+26% of manufacturers have fully deployed traceability; 51% understand the
+value but have not acted (Future Data Stats, 2024).
+
+The purchase order says "Crest Power Systems, Part No. CPS-2200." It does
+not say which of Crest's two plants made it — the original facility in
+Ohio or the newer one in Guadalajara. It does not say which production
+line, which shift, which week. And yet all of that information exists. It
+is encoded in the lot code stamped on every unit: a string of characters
+that the receiving dock scans into inventory and then, effectively, sends
+to `/dev/null`.
+
+The lot code is the component's birth certificate. It says where it was
+made, when, and on what equipment. A camera on the assembly line could
+read it. An IoT gateway could parse it. The MES could record which lot
+code went into which serial number. The data pipeline from component
+birth certificate to assembled unit is technically trivial and
+organizationally almost nonexistent.
+
+In our story, Crest has two factories. The Ohio plant has been running
+for twelve years. Guadalajara came online eighteen months ago, same
+equipment, same spec, different water, different humidity, different
+operators still climbing the learning curve. The lot code tells you which
+plant. The BOM database does not.
+
+Let us build the data as it should appear — not as the ERP sees it, but
+as it actually is: supplier, factory, batch, part, unit.
+
+```elixir
+# --- The Assembly Plant ---
+# Three PSU suppliers. Each supplier has 1-2 factories.
+# Each factory produces batches (lots). Each batch has a true defect rate.
+# Units are assembled with one PSU from one supplier/factory/batch.
+# We observe: unit survived (1) or failed (0) within 12 months.
+
+defmodule Factory do
+  @doc "Generate a synthetic manufacturing dataset with supplier > factory > batch hierarchy."
+  def generate(opts \\ []) do
+    n_units = Keyword.get(opts, :n_units, 2000)
+    seed = Keyword.get(opts, :seed, 42)
+    :rand.seed(:exsss, {seed, seed + 1, seed + 2})
+
+    # The true hierarchy (hidden — we're trying to infer this)
+    #
+    # Atlas:  one factory (Detroit), tight process control
+    # Beacon: one factory (Shenzhen), slightly noisier
+    # Crest:  two factories — Ohio (mature, reliable) and Guadalajara (new, learning curve)
+    #         Guadalajara batch 3 is the bad one.
+    suppliers = [
+      %{supplier: "Atlas", factories: [
+        %{factory: "Atlas-Detroit", mu: 0.02, sigma: 0.004, n_batches: 8}
+      ]},
+      %{supplier: "Beacon", factories: [
+        %{factory: "Beacon-Shenzhen", mu: 0.03, sigma: 0.008, n_batches: 6}
+      ]},
+      %{supplier: "Crest", factories: [
+        %{factory: "Crest-Ohio", mu: 0.02, sigma: 0.005, n_batches: 5},
+        %{factory: "Crest-Guadalajara", mu: 0.04, sigma: 0.015, n_batches: 4}
+      ]}
+    ]
+
+    # Generate batch-level defect rates
+    batches =
+      for %{supplier: supplier, factories: factories} <- suppliers,
+          %{factory: factory, mu: mu, sigma: sigma, n_batches: nb} <- factories,
+          b <- 1..nb do
+        rate = max(0.001, mu + :rand.normal() * sigma)
+        # Crest-Guadalajara batch 3 is the bad one — new line, bad solder paste lot
+        rate = if factory == "Crest-Guadalajara" and b == 3, do: 0.15, else: rate
+        %{
+          supplier: supplier,
+          factory: factory,
+          batch: b,
+          batch_id: "#{factory}-B#{b}",
+          true_rate: rate
+        }
+      end
+
+    # Assign units to random supplier/factory/batch combinations
+    units =
+      for i <- 1..n_units do
+        batch = Enum.random(batches)
+        ram = Enum.random(["Samsung", "Micron", "SK Hynix"])
+        ssd = Enum.random(["WD", "Kioxia", "Samsung"])
+        failed = if :rand.uniform() < batch.true_rate, do: 1, else: 0
+        ttf = if failed == 1, do: max(0.5, 3.0 + :rand.normal() * 2.0), else: 12.0
+
+        %{
+          unit_id: "MP-#{String.pad_leading(Integer.to_string(i), 5, "0")}",
+          psu_supplier: batch.supplier,
+          psu_factory: batch.factory,
+          psu_batch: batch.batch_id,
+          psu_batch_num: batch.batch,
+          ram_supplier: ram,
+          ssd_supplier: ssd,
+          failed: failed,
+          months_to_event: Float.round(min(ttf, 12.0), 1),
+          censored: failed == 0
+        }
+      end
+
+    %{units: units, batches: batches, suppliers: suppliers}
+  end
+end
+```
+
+```elixir
+data = Factory.generate(n_units: 2000, seed: 42)
+
+total = length(data.units)
+failed = Enum.count(data.units, & &1.failed == 1)
+IO.puts("#{total} units shipped. #{failed} failed within 12 months (#{Float.round(failed/total*100, 1)}%).")
+IO.puts("")
+
+# Failure by supplier
+IO.puts("By supplier:")
+for supplier <- ["Atlas", "Beacon", "Crest"] do
+  units = Enum.filter(data.units, & &1.psu_supplier == supplier)
+  f = Enum.count(units, & &1.failed == 1)
+  IO.puts("  #{supplier}: #{length(units)} units, #{f} failures (#{Float.round(f/length(units)*100, 1)}%)")
+end
+
+IO.puts("")
+IO.puts("By factory (what the lot code tells you):")
+for factory <- data.batches |> Enum.map(& &1.factory) |> Enum.uniq() |> Enum.sort() do
+  units = Enum.filter(data.units, & &1.psu_factory == factory)
+  f = Enum.count(units, & &1.failed == 1)
+  IO.puts("  #{factory}: #{length(units)} units, #{f} failures (#{Float.round(f/length(units)*100, 1)}%)")
+end
+```
+
+The supplier-level numbers look almost reasonable. All three are in the
+low single digits. A frequentist would compute three proportions, run a
+chi-squared test, and possibly conclude there is no statistically
+significant difference.
+
+But the factory-level numbers — if you have them — tell a different story.
+Crest-Ohio looks like Atlas. Crest-Guadalajara does not. And within
+Guadalajara, the damage is concentrated in one batch.
+
+The question is not "are these three suppliers different?" It is not even
+"are these five factories different?" The question is: "is there a *batch*
+hiding inside one *factory* of one *supplier* that is killing our laptops?"
+
+This is the question that a lot code on a component answers — if anyone
+bothers to read it. A $30 camera on the assembly line, an OCR model that
+runs on the same BEAM node as the quality system, a single `INSERT INTO
+unit_bom (unit_serial, component_part, lot_code)` — and the hierarchy is
+captured. Without it, Crest-Ohio and Crest-Guadalajara are the same
+company, and the signal drowns in the average.
+
+```elixir
+alias VegaLite, as: Vl
+
+# Failure rate by batch
+batch_stats =
+  data.units
+  |> Enum.group_by(& &1.psu_batch)
+  |> Enum.map(fn {batch_id, units} ->
+    f = Enum.count(units, & &1.failed == 1)
+    supplier = hd(units).psu_supplier
+    factory = hd(units).psu_factory
+    %{"batch" => batch_id, "supplier" => supplier, "factory" => factory,
+      "n" => length(units), "failures" => f,
+      "rate" => Float.round(f / max(length(units), 1) * 100, 1)}
+  end)
+  |> Enum.sort_by(& &1["rate"], :desc)
+
+Vl.new(width: 700, height: 300, title: "Failure Rate by PSU Batch (colored by factory)")
+|> Vl.data_from_values(batch_stats)
+|> Vl.mark(:bar)
+|> Vl.encode_field(:x, "batch", type: :nominal, sort: "-y", axis: %{label_angle: -45})
+|> Vl.encode_field(:y, "rate", type: :quantitative, title: "Failure %")
+|> Vl.encode_field(:color, "factory", type: :nominal)
+```
+
+There it is. One bar standing above the rest like a lighthouse in a
+parking lot. Crest-Guadalajara batch 3.
+
+But we are getting ahead of ourselves. The quality manager does not have
+the luxury of ground truth. She has warranty claims, a bill of materials
+database, and the unsettling feeling that the chi-squared test is missing
+something. What she needs is a model that can find the lighthouse without
+being told where to look.
+
+## II. The Hierarchy
+
+The insight — and it is an old one, though manufacturing has been slow to
+adopt it — is that suppliers, factories, and batches are not independent
+categories to be tested pairwise. They are levels of a hierarchy, and the
+hierarchy carries information.
+
+```
+Industry baseline
+  └── Supplier (Atlas, Beacon, Crest)           ← the company
+        └── Factory (Crest-Ohio, Crest-Guadalajara) ← where it's made
+              └── Batch (week 12, shift B)          ← when it's made
+                    └── Unit (laptop SN-04827)       ← what it went into
+```
+
+A batch is not just a batch. It is a batch from a *factory* of a
+*supplier*, and both carry track records. When we see 3 failures out of
+95 units from Crest-Guadalajara batch 3, we should interpret that number
+in light of what we know about Guadalajara (new, still calibrating), what
+we know about Crest (decent company, Ohio plant is solid), and what we
+know about the industry (2-3% baseline). Each level of the hierarchy is
+a lens that focuses the estimate.
+
+The model:
+
+```
+Industry defect rate:     mu ~ Normal(0, 1)                [logit scale]
+Supplier variation:       sigma_s ~ HalfNormal(1)
+Supplier quality:         theta_s ~ Normal(mu, sigma_s)     [for each supplier]
+Factory variation:        sigma_f ~ HalfNormal(1)
+Factory quality:          gamma_f ~ Normal(theta_s, sigma_f) [for each factory]
+Batch variation:          sigma_b ~ HalfNormal(1)
+Batch quality:            phi_b ~ Normal(gamma_f, sigma_b)   [for each batch]
+Unit failure:             y_u ~ Bernoulli(logistic(phi_b))   [for each unit]
+```
+
+This is a four-level hierarchy. The industry rate anchors the suppliers.
+The suppliers anchor their factories. The factories anchor their batches.
+The batches determine the unit failure probabilities. Information flows
+in both directions: a bad batch raises suspicion of its factory, a good
+factory tempers alarm about a single batch with few observations, and a
+reliable supplier protects a new factory from being condemned on thin
+evidence.
+
+The technical term is *partial pooling*. It is the Bayesian answer to a
+question that frequentist statistics struggles with: how do you estimate
+the defect rate of a batch with only 30 units and 2 failures? The
+frequentist answer is 6.7%, plus or minus a confidence interval wide
+enough to park a truck in. The Bayesian answer is: 6.7% is what the data
+says, but the factory's other batches say 3.5%, the supplier's other
+factory says 2%, and the industry says 2.5%, so the best estimate is
+somewhere in between — pulled toward the factory mean, but not all the
+way, because those 2 failures are trying to tell us something.
+
+```elixir
+alias Exmc.{Builder, Sampler}
+alias Exmc.Dist.{Normal, HalfNormal, Custom}
+
+defmodule BOM do
+  def t(v), do: Nx.tensor(v, type: :f64)
+
+  @doc "Encode supplier/factory/batch membership as integer indices."
+  def encode(units, batches) do
+    supplier_names = batches |> Enum.map(& &1.supplier) |> Enum.uniq() |> Enum.sort()
+    factory_names = batches |> Enum.map(& &1.factory) |> Enum.uniq() |> Enum.sort()
+    batch_ids = batches |> Enum.map(& &1.batch_id) |> Enum.sort()
+
+    supplier_idx = Map.new(supplier_names |> Enum.with_index())
+    factory_idx = Map.new(factory_names |> Enum.with_index())
+    batch_idx = Map.new(batch_ids |> Enum.with_index())
+
+    # Mappings: batch -> factory -> supplier
+    batch_to_factory = Map.new(batches, fn b ->
+      {batch_idx[b.batch_id], factory_idx[b.factory]}
+    end)
+    factory_to_supplier = Map.new(batches, fn b ->
+      {factory_idx[b.factory], supplier_idx[b.supplier]}
+    end)
+
+    unit_batch_indices = Enum.map(units, fn u -> batch_idx[u.psu_batch] end)
+    unit_outcomes = Enum.map(units, fn u -> u.failed * 1.0 end)
+
+    %{
+      supplier_names: supplier_names,
+      factory_names: factory_names,
+      batch_ids: batch_ids,
+      n_suppliers: length(supplier_names),
+      n_factories: length(factory_names),
+      n_batches: length(batch_ids),
+      n_units: length(units),
+      batch_to_factory: batch_to_factory,
+      factory_to_supplier: factory_to_supplier,
+      unit_batch: Nx.tensor(unit_batch_indices, type: :s64),
+      outcomes: Nx.tensor(unit_outcomes, type: :f64)
+    }
+  end
+end
+```
+
+```elixir
+encoded = BOM.encode(data.units, data.batches)
+IO.puts("Encoded: #{encoded.n_suppliers} suppliers, #{encoded.n_factories} factories, #{encoded.n_batches} batches, #{encoded.n_units} units")
+IO.puts("Suppliers: #{inspect(encoded.supplier_names)}")
+IO.puts("Factories: #{inspect(encoded.factory_names)}")
+IO.puts("Batches: #{length(encoded.batch_ids)}")
+```
+
+```elixir
+# Build the 4-level hierarchical model:
+# industry -> supplier -> factory -> batch -> unit
+n_s = encoded.n_suppliers
+n_f = encoded.n_factories
+n_b = encoded.n_batches
+
+# Pack mappings as tensors for indexing inside the likelihood
+b2f = Nx.tensor(Enum.map(0..(n_b - 1), fn b -> encoded.batch_to_factory[b] end), type: :s64)
+f2s = Nx.tensor(Enum.map(0..(n_f - 1), fn f -> encoded.factory_to_supplier[f] end), type: :s64)
+
+obs_data = Nx.stack([encoded.outcomes, Nx.as_type(encoded.unit_batch, :f64)], axis: 1)
+
+ir =
+  Builder.new_ir()
+  |> Builder.data(obs_data)
+  # Industry-level
+  |> Builder.rv("mu", Normal, %{mu: BOM.t(-3.0), sigma: BOM.t(1.0)})
+  # Supplier-level
+  |> Builder.rv("sigma_s", HalfNormal, %{sigma: BOM.t(1.0)})
+  |> Builder.rv("theta", Normal, %{mu: BOM.t(0.0), sigma: BOM.t(1.0)}, shape: {n_s})
+  # Factory-level
+  |> Builder.rv("sigma_f", HalfNormal, %{sigma: BOM.t(1.0)})
+  |> Builder.rv("gamma", Normal, %{mu: BOM.t(0.0), sigma: BOM.t(1.0)}, shape: {n_f})
+  # Batch-level
+  |> Builder.rv("sigma_b", HalfNormal, %{sigma: BOM.t(1.0)})
+  |> Builder.rv("phi", Normal, %{mu: BOM.t(0.0), sigma: BOM.t(1.0)}, shape: {n_b})
+
+# Custom likelihood: 4-level hierarchy + Bernoulli outcomes
+logpdf_fn = fn _x, params ->
+  data = params.__obs_data
+  outcomes = data[[.., 0]]
+  batch_indices = Nx.as_type(data[[.., 1]], :s64)
+
+  mu = params.mu
+  sigma_s = Nx.max(params.sigma_s, BOM.t(1.0e-6))
+  sigma_f = Nx.max(params.sigma_f, BOM.t(1.0e-6))
+  sigma_b = Nx.max(params.sigma_b, BOM.t(1.0e-6))
+  theta = params.theta  # {n_suppliers}
+  gamma = params.gamma  # {n_factories}
+  phi = params.phi      # {n_batches}
+
+  # Level 1: theta_s ~ Normal(mu, sigma_s)
+  lp_theta = Nx.sum(Nx.subtract(
+    Nx.multiply(BOM.t(-0.5), Nx.pow(Nx.divide(Nx.subtract(theta, mu), sigma_s), 2)),
+    Nx.log(sigma_s)
+  ))
+
+  # Level 2: gamma_f ~ Normal(theta_{supplier(f)}, sigma_f)
+  theta_for_factory = Nx.take(theta, f2s)
+  lp_gamma = Nx.sum(Nx.subtract(
+    Nx.multiply(BOM.t(-0.5), Nx.pow(Nx.divide(Nx.subtract(gamma, theta_for_factory), sigma_f), 2)),
+    Nx.log(sigma_f)
+  ))
+
+  # Level 3: phi_b ~ Normal(gamma_{factory(b)}, sigma_b)
+  gamma_for_batch = Nx.take(gamma, b2f)
+  lp_phi = Nx.sum(Nx.subtract(
+    Nx.multiply(BOM.t(-0.5), Nx.pow(Nx.divide(Nx.subtract(phi, gamma_for_batch), sigma_b), 2)),
+    Nx.log(sigma_b)
+  ))
+
+  # Level 4: y_u ~ Bernoulli(sigmoid(phi_{batch(u)}))
+  phi_for_unit = Nx.take(phi, batch_indices)
+  log_p = Nx.log_sigmoid(phi_for_unit)
+  log_1mp = Nx.log(Nx.max(Nx.subtract(BOM.t(1.0), Nx.sigmoid(phi_for_unit)), BOM.t(1.0e-10)))
+
+  ll = Nx.sum(Nx.add(
+    Nx.multiply(outcomes, log_p),
+    Nx.multiply(Nx.subtract(BOM.t(1.0), outcomes), log_1mp)
+  ))
+
+  Nx.add(Nx.add(Nx.add(lp_theta, lp_gamma), lp_phi), ll)
+end
+
+dist = Custom.new(logpdf_fn, support: :real)
+
+ir =
+  Custom.rv(ir, "lik", dist, %{
+    mu: "mu", sigma_s: "sigma_s", sigma_f: "sigma_f", sigma_b: "sigma_b",
+    theta: "theta", gamma: "gamma", phi: "phi",
+    __obs_data: "__obs_data"
+  })
+  |> Builder.obs("lik_obs", "lik", Nx.tensor(0.0, type: :f64))
+```
+
+```elixir
+# Sample — this is where the hierarchy reveals itself
+{trace, stats} = Sampler.sample(ir,
+  %{
+    "mu" => -3.5,
+    "sigma_s" => 0.3,
+    "sigma_f" => 0.3,
+    "sigma_b" => 0.3,
+    "theta" => Nx.broadcast(Nx.tensor(-3.5, type: :f64), {n_s}),
+    "gamma" => Nx.broadcast(Nx.tensor(-3.5, type: :f64), {n_f}),
+    "phi" => Nx.broadcast(Nx.tensor(-3.5, type: :f64), {n_b})
+  },
+  num_warmup: 1000,
+  num_samples: 1000,
+  ncp: false
+)
+
+IO.puts("Divergences: #{stats.divergences}")
+
+# Industry-level
+mu_mean = Nx.mean(trace["mu"]) |> Nx.to_number()
+IO.puts("Industry defect rate (logit): #{Float.round(mu_mean, 2)} = #{Float.round(1/(1+:math.exp(-mu_mean))*100, 1)}%")
+```
+
+## III. The Revelation
+
+Now we ask the model what it found.
+
+```elixir
+# Extract batch-level defect rates from posterior
+phi_samples = trace["phi"]  # {n_samples, n_batches}
+phi_mean = Nx.mean(phi_samples, axes: [0]) |> Nx.to_flat_list()
+phi_sd = Nx.standard_deviation(phi_samples, axes: [0]) |> Nx.to_flat_list()
+
+# Convert from logit to probability scale
+batch_posteriors =
+  Enum.zip([encoded.batch_ids, phi_mean, phi_sd])
+  |> Enum.map(fn {id, mu, sd} ->
+    rate = 1 / (1 + :math.exp(-mu))
+    # Also get the true rate for comparison
+    true_batch = Enum.find(data.batches, & &1.batch_id == id)
+    supplier = true_batch.supplier
+    %{
+      "batch" => id,
+      "supplier" => supplier,
+      "posterior_rate" => Float.round(rate * 100, 1),
+      "posterior_sd" => Float.round(sd, 2),
+      "true_rate" => Float.round(true_batch.true_rate * 100, 1)
+    }
+  end)
+  |> Enum.sort_by(& &1["posterior_rate"], :desc)
+
+# Print the top 10 batches by estimated defect rate
+IO.puts("Top 10 batches by posterior defect rate:")
+IO.puts(String.pad_trailing("Batch", 15) <>
+  String.pad_trailing("Posterior %", 14) <>
+  String.pad_trailing("True %", 10) <>
+  "Supplier")
+IO.puts(String.duplicate("-", 50))
+
+Enum.take(batch_posteriors, 10)
+|> Enum.each(fn b ->
+  IO.puts(
+    String.pad_trailing(b["batch"], 15) <>
+    String.pad_trailing("#{b["posterior_rate"]}%", 14) <>
+    String.pad_trailing("#{b["true_rate"]}%", 10) <>
+    b["supplier"]
+  )
+end)
+```
+
+```elixir
+# Visualize: posterior defect rates with uncertainty
+posterior_chart_data =
+  batch_posteriors
+  |> Enum.map(fn b ->
+    mu_logit = Enum.find(Enum.zip(encoded.batch_ids, phi_mean), fn {id, _} -> id == b["batch"] end) |> elem(1)
+    sd_logit = Enum.find(Enum.zip(encoded.batch_ids, phi_sd), fn {id, _} -> id == b["batch"] end) |> elem(1)
+    lo = 1/(1+:math.exp(-(mu_logit - 1.96*sd_logit))) * 100
+    hi = 1/(1+:math.exp(-(mu_logit + 1.96*sd_logit))) * 100
+    Map.merge(b, %{"lo" => Float.round(lo, 1), "hi" => Float.round(hi, 1)})
+  end)
+
+Vl.new(width: 700, height: 350, title: "Posterior Defect Rate by Batch (with 95% credible interval)")
+|> Vl.data_from_values(posterior_chart_data)
+|> Vl.layers([
+  # Error bars
+  Vl.new()
+  |> Vl.mark(:rule)
+  |> Vl.encode_field(:x, "batch", type: :nominal, sort: "-y", axis: %{label_angle: -45})
+  |> Vl.encode_field(:y, "lo", type: :quantitative, title: "Defect %")
+  |> Vl.encode_field(:y2, "hi"),
+  # Points
+  Vl.new()
+  |> Vl.mark(:point, size: 60, filled: true)
+  |> Vl.encode_field(:x, "batch", type: :nominal, sort: "-y")
+  |> Vl.encode_field(:y, "posterior_rate", type: :quantitative)
+  |> Vl.encode_field(:color, "supplier", type: :nominal),
+  # True rate
+  Vl.new()
+  |> Vl.mark(:tick, color: "red", thickness: 2, size: 15)
+  |> Vl.encode_field(:x, "batch", type: :nominal, sort: "-y")
+  |> Vl.encode_field(:y, "true_rate", type: :quantitative)
+])
+```
+
+The red ticks are the truth. The dots are what the model believes. The
+vertical lines are what the model admits it doesn't know.
+
+Notice what happened to Crest-Guadalajara batch 3. The model did not need to be told
+that this batch was defective. It inferred it from the warranty claims,
+mediated through the hierarchy: Crest's other batches are fine, the industry
+rate is low, but this one batch has too many failures to explain away by
+partial pooling. The posterior pulled it toward Crest's mean and then gave
+up — the data was too insistent.
+
+Now notice what happened to the small batches. Atlas batch 2 might have
+had 1 failure out of 40 units — a raw rate of 2.5%. But the model
+estimates it at something closer to Atlas's overall rate, because 40 units
+is not enough evidence to override the supplier's track record. The
+credible interval is wide. The model is honest about what it doesn't know.
+
+A chi-squared test would have told us that Crest, as a supplier, is not
+statistically different from Atlas or Beacon. It would have been correct,
+and useless. The problem was never Crest. The problem was Crest-Guadalajara batch 3.
+
+## IV. The Supplier Scorecard
+
+```elixir
+# Supplier-level posteriors
+theta_samples = trace["theta"]  # {n_samples, n_suppliers}
+theta_mean = Nx.mean(theta_samples, axes: [0]) |> Nx.to_flat_list()
+theta_sd = Nx.standard_deviation(theta_samples, axes: [0]) |> Nx.to_flat_list()
+
+IO.puts("Supplier Quality (posterior defect rate):")
+IO.puts(String.pad_trailing("Supplier", 12) <>
+  String.pad_trailing("Rate", 10) <>
+  String.pad_trailing("95% CI", 20) <>
+  "True rate")
+IO.puts(String.duplicate("-", 55))
+
+Enum.zip([encoded.supplier_names, theta_mean, theta_sd])
+|> Enum.each(fn {name, mu, sd} ->
+  rate = 1/(1+:math.exp(-mu)) * 100
+  lo = 1/(1+:math.exp(-(mu-1.96*sd))) * 100
+  hi = 1/(1+:math.exp(-(mu+1.96*sd))) * 100
+  true_mu = data.suppliers[name].mu * 100
+  IO.puts(
+    String.pad_trailing(name, 12) <>
+    String.pad_trailing("#{Float.round(rate, 1)}%", 10) <>
+    String.pad_trailing("[#{Float.round(lo, 1)}%, #{Float.round(hi, 1)}%]", 20) <>
+    "#{Float.round(true_mu, 1)}%"
+  )
+end)
+```
+
+The supplier scorecard is less dramatic than the batch analysis, and that
+is the point. Crest's supplier-level estimate is slightly elevated, but
+the model does not blame the company. It blames the factory.
+
+```elixir
+# Factory-level posteriors — this is what the lot code buys you
+gamma_samples = trace["gamma"]  # {n_samples, n_factories}
+gamma_mean = Nx.mean(gamma_samples, axes: [0]) |> Nx.to_flat_list()
+gamma_sd = Nx.standard_deviation(gamma_samples, axes: [0]) |> Nx.to_flat_list()
+
+IO.puts("Factory Quality (posterior defect rate):")
+IO.puts(String.pad_trailing("Factory", 25) <>
+  String.pad_trailing("Rate", 10) <>
+  "95% CI")
+IO.puts(String.duplicate("-", 55))
+
+Enum.zip([encoded.factory_names, gamma_mean, gamma_sd])
+|> Enum.each(fn {name, mu, sd} ->
+  rate = 1/(1+:math.exp(-mu)) * 100
+  lo = 1/(1+:math.exp(-(mu-1.96*sd))) * 100
+  hi = 1/(1+:math.exp(-(mu+1.96*sd))) * 100
+  IO.puts(
+    String.pad_trailing(name, 25) <>
+    String.pad_trailing("#{Float.round(rate, 1)}%", 10) <>
+    "[#{Float.round(lo, 1)}%, #{Float.round(hi, 1)}%]"
+  )
+end)
+```
+
+Crest-Ohio looks like Atlas-Detroit. Crest-Guadalajara does not. The model
+has separated what the purchase order conflates. Without the lot code,
+without the camera on the line, without that one `INSERT` statement in
+the MES, these two factories are invisible — averaged into a single
+supplier-level number that hides the signal in the noise.
+
+If we had only looked at supplier-level data — as most quality systems do
+— we would have either blamed all of Crest or blamed none of it.
+
+## V. The Prediction
+
+The model's final trick is answering the question that keeps the quality
+manager awake: given a unit's bill of materials, what is its probability
+of failing?
+
+```elixir
+# For each unit, compute posterior failure probability
+# (using the posterior mean of its batch's phi)
+phi_means_map = Map.new(Enum.zip(encoded.batch_ids, phi_mean))
+
+unit_predictions =
+  data.units
+  |> Enum.map(fn u ->
+    phi_val = phi_means_map[u.psu_batch]
+    pred_prob = 1/(1+:math.exp(-phi_val))
+    %{
+      unit: u.unit_id,
+      supplier: u.psu_supplier,
+      batch: u.psu_batch,
+      predicted_fail_prob: Float.round(pred_prob * 100, 1),
+      actually_failed: u.failed == 1
+    }
+  end)
+
+# How many units from the bad batch are still in the field?
+bad_batch_units = Enum.filter(unit_predictions, & &1.batch == "Crest-Guadalajara-B3")
+bad_alive = Enum.count(bad_batch_units, &(not &1.actually_failed))
+bad_total = length(bad_batch_units)
+bad_pred = hd(bad_batch_units).predicted_fail_prob
+
+IO.puts("Crest-Guadalajara batch 3:")
+IO.puts("  #{bad_total} units shipped")
+IO.puts("  #{bad_total - bad_alive} already failed")
+IO.puts("  #{bad_alive} still in the field")
+IO.puts("  Predicted failure probability: #{bad_pred}%")
+IO.puts("")
+IO.puts("Decision: proactive recall of #{bad_alive} units saves")
+IO.puts("  ~#{round(bad_alive * bad_pred / 100)} additional warranty claims")
+IO.puts("  plus the customer goodwill that no spreadsheet can quantify.")
+```
+
+## VI. What the Spreadsheet Could Not See
+
+The traditional quality control system tracks supplier-level metrics:
+incoming inspection pass rates, warranty claim counts, quarterly
+business reviews with bar charts. It operates at the wrong level of
+granularity.
+
+The hierarchical Bayesian model operates at every level simultaneously.
+It knows that a supplier is not a monolith — it is a collection of
+batches, each produced on a specific week with specific raw materials
+and specific machine calibrations. It knows that a unit is not an
+abstraction — it is a specific combination of parts from specific
+batches, and its fate is written in its bill of materials.
+
+| What you get                         | Traditional SPC      | Hierarchical Bayes                  |
+| ------------------------------------ | -------------------- | ----------------------------------- |
+| Supplier ranking                     | Yes (point estimate) | Yes (with uncertainty)              |
+| Factory-level detection              | Not tracked          | Automatic (if lot code captured)    |
+| Batch-level detection                | Only if you look     | Automatic (partial pooling)         |
+| Small-sample batches                 | Noisy or ignored     | Stabilized by hierarchy             |
+| Root cause attribution               | Manual investigation | Posterior decomposition by level    |
+| Predictive: which units are at risk? | No                   | Yes (from BOM)                      |
+| Decision support: recall this batch? | Gut feeling          | P(defective) with credible interval |
+| New factory risk assessment          | Wait for failures    | Partial pooling from supplier prior |
+
+The bill of materials is not just a record of what went into a product.
+It is the genome of the product's reliability. Every part carries the
+statistical fingerprint of its supplier, its factory, and its batch. The
+lot code is printed on every component. The information exists. A $30
+camera, an OCR model, a single database column — and the four-level
+hierarchy is captured at the speed of the assembly line.
+
+The question is not whether to track this information — it is already
+printed on every part that arrives at the dock. The question is whether
+to read it.
+
+```elixir
+# Final visualization: predicted risk by unit, colored by actual outcome
+risk_data =
+  unit_predictions
+  |> Enum.take(500)
+  |> Enum.with_index()
+  |> Enum.map(fn {u, i} ->
+    %{"unit" => i, "risk" => u.predicted_fail_prob,
+      "outcome" => if(u.actually_failed, do: "Failed", else: "Survived"),
+      "batch" => u.batch}
+  end)
+
+Vl.new(width: 700, height: 250, title: "Predicted Failure Risk by Unit (first 500)")
+|> Vl.data_from_values(risk_data)
+|> Vl.mark(:point, size: 20, opacity: 0.6)
+|> Vl.encode_field(:x, "unit", type: :quantitative, title: "Unit index")
+|> Vl.encode_field(:y, "risk", type: :quantitative, title: "P(failure) %")
+|> Vl.encode_field(:color, "outcome", type: :nominal,
+  scale: %{domain: ["Failed", "Survived"], range: ["firebrick", "steelblue"]})
+```
+
+The red dots above the crowd are Crest-Guadalajara batch 3. Some of them have already
+failed. The rest are waiting.
+
+---
+
+*The names Atlas, Beacon, and Crest are fictional. The problem is not.
+Every manufacturer with multiple suppliers and batch-level traceability
+has the data to run this model. Most do not.*
+
+*Model: four-level hierarchical Bayesian logistic regression with partial
+pooling across supplier, factory, and batch levels. Inference via NUTS
+(eXMC). 2,000 units, 23 batches, 5 factories, 3 suppliers, 1,000
+posterior samples.*
+
+### References
+
+**Statistical modeling:**
+
+* Gelman, A. & Hill, J. (2007). *Data Analysis Using Regression and
+  Multilevel/Hierarchical Models*. Cambridge University Press. Chapter 13.
+* Gelman, A. et al. (2013). *Bayesian Data Analysis*, 3rd ed. Chapter 5
+  (hierarchical models) and Chapter 15 (hierarchical linear models).
+* Montgomery, D. C. (2019). *Introduction to Statistical Quality Control*,
+  8th ed. Wiley.
+* Meeker, W. Q. & Escobar, L. A. (1998). *Statistical Methods for
+  Reliability Data*. Wiley.
+
+**Traceability standards:**
+
+* IPC-1782B — *Standard for Manufacturing and Supply Chain Traceability of
+  Electronic Products*. Defines four levels (M1-M4, P1-P4) from basic lot
+  tracking to full component-level genealogy. Level 3+ requires individual
+  component lot/serial linked to board serial number.
+* IATF 16949 (clause 8.5.2) — Automotive quality: risk-based traceability
+  plans, unique identifiers, supplier flow-down. AIAG companion guideline
+  includes a "traceability fire drill" exercise.
+* FDA 21 CFR Part 820.65 — Medical device traceability: control numbers
+  for each unit, lot, or batch; Device History Record (DHR) linking
+  components to finished device serial numbers.
+* AS9100 Rev D (clause 8.5.2) — Aerospace: serial and lot numbers for
+  every component in an assembly; flow-down to all sub-tier suppliers.
+* SEMI T23 (2019) — Semiconductor: unique Device ID per chip, propagated
+  from wafer through multi-chip packaging to point of use.
+
+**The gap between possible and practiced:**
+
+* Only ~26% of manufacturers are "Frontrunners" with full traceability
+  adoption; 51% understand value but have not deployed. Source: Future
+  Data Stats, *Supply Chain Traceability Market* (2024).
+* Dabbene, F., Gay, P. & Sacco, N. (2014). "Design of traceability systems
+  for product recall." *Int. J. Production Research*, 53(2), 511-531.
+  Introduced batch dispersion cost (BDC) as a quantitative measure of
+  traceability performance.
+* Dai, B. et al. (2021). "Interactions of traceability and reliability
+  optimization in a competitive supply chain with product recall."
+  *European J. Operational Research*, 290(1), 116-131. Found suppliers
+  tend to opt out of traceability due to incentive misalignment.
+
+**The cost of not tracing:**
+
+* Takata airbag recall (2013-present): 67 million units, $12B+ cost,
+  bankruptcy. Scope could not be bounded due to lack of lot-level records
+  at the Mexican subsidiary. Contrast: GM Chevrolet Volt (2013) recalled
+  4 units using barcode/RFID traceability within one month.
+* Companies with robust electronic traceability reduce recall costs by
+  > 80% through targeted action vs. sweeping withdrawals. Average recall
+  > cost: $10-100M per incident. Source: Kearney (2023), Cat Squared (2024).
+
+**Technology:**
+
+* IPC-1782 Level 2+ requires automated data collection for >90% of
+  traceability data points. Cogiscan Co-NECT provides machine interfaces
+  for pick-and-place that capture supplier lot, reference designator, and
+  moisture sensitivity data per board serial.
+* Data Matrix 2D barcodes tolerate partial damage and encode up to 3,116
+  characters — the dominant format for direct part marking (DPM).
+* RFID: $15.5B market (2024), projected $37.7B by 2032. Manufacturing
+  ROI typically 12-24 months. Source: TechnoWave Group (2025).

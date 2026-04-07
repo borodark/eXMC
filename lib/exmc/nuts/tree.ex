@@ -1322,7 +1322,8 @@ defmodule Exmc.NUTS.Tree do
 
   # --- Merge operations ---
 
-  defp merge_subtrees(first, second, epsilon, inv_mass_diag, rng, inv_mass_list) do
+  @doc false
+  def merge_subtrees(first, second, epsilon, inv_mass_diag, rng, inv_mass_list) do
     combined_log_weight = log_sum_exp(first.log_sum_weight, second.log_sum_weight)
     combined_n_steps = first.n_steps + second.n_steps
     combined_accept_sum = first.accept_sum + second.accept_sum
@@ -1410,7 +1411,8 @@ defmodule Exmc.NUTS.Tree do
     {merged, rng}
   end
 
-  defp merge_trajectories(traj, subtree, go_right, inv_mass_diag, rng, inv_mass_list) do
+  @doc false
+  def merge_trajectories(traj, subtree, go_right, inv_mass_diag, rng, inv_mass_list) do
     combined_log_weight = log_sum_exp(traj.log_sum_weight, subtree.log_sum_weight)
     combined_n_steps = traj.n_steps + subtree.n_steps
     combined_accept_sum = traj.accept_sum + subtree.accept_sum
@@ -1508,7 +1510,8 @@ defmodule Exmc.NUTS.Tree do
   # Unlike the endpoint criterion (q+-q-), this weights all components uniformly
   # regardless of inv_mass scale, preventing premature termination in hierarchical
   # models with large inv_mass range.
-  defp check_uturn_rho(rho, pl, pr, inv_mass_list) do
+  @doc false
+  def check_uturn_rho(rho, pl, pr, inv_mass_list) do
     {dot_right, dot_left} = zip_reduce_rho(rho, pl, pr, inv_mass_list, 0.0, 0.0)
     dot_right < 0.0 or dot_left < 0.0
   end
@@ -1526,7 +1529,8 @@ defmodule Exmc.NUTS.Tree do
 
   # --- Helpers ---
 
-  defp log_sum_exp(a, b) do
+  @doc false
+  def log_sum_exp(a, b) do
     m = max(a, b)
 
     if m == :neg_infinity or m == -1.0e300 do

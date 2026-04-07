@@ -70,7 +70,8 @@ defmodule Exmc.MixProject do
       {:emlx, "~> 0.2", optional: true},
       {:rustler, "~> 0.36", runtime: false},
       {:jason, "~> 1.4"},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:propcheck, "~> 1.4", only: :test, runtime: false}
     ]
   end
 end
