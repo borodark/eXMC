@@ -32,15 +32,15 @@ this quarter, and the uncertainty around that count (based on team size,
 investigation depth, and detection coverage).
 
 | Office     | Incidents (y) | Uncertainty (σ) | Staff |
-|------------|---------------|-----------------|-------|
-| HQ         | 28            | 8               | 120   |
-| Northeast  | 8             | 5               | 45    |
-| Southeast  | 3             | 7               | 30    |
-| Midwest    | 7             | 5               | 50    |
-| Southwest  | 2             | 4               | 35    |
-| West Coast | 4             | 6               | 40    |
-| Northwest  | 18            | 5               | 55    |
-| Remote     | 12            | 9               | 20    |
+| ---------- | ------------- | ---------------- | ----- |
+| HQ         | 28            | 8                | 120   |
+| Northeast  | 8             | 5                | 45    |
+| Southeast  | 3             | 7                | 30    |
+| Midwest    | 7             | 5                | 50    |
+| Southwest  | 2             | 4                | 35    |
+| West Coast | 4             | 6                | 40    |
+| Northwest  | 18            | 5                | 55    |
+| Remote     | 12            | 9                | 20    |
 
 You are the CISO. You need to answer three questions:
 
@@ -225,15 +225,15 @@ office_summary
 
 The **shrinkage** column tells the story:
 
-- **HQ** reported 28 incidents. After borrowing strength from the other
+* **HQ** reported 28 incidents. After borrowing strength from the other
   offices, its posterior drops to ~15–18. The model says: "no other office
   sees rates that high — some of your count is noise from having better
   detection." The shrinkage is ~35–45%.
-- **Southeast** reported 3 incidents with high uncertainty (σ = 7). Its
+* **Southeast** reported 3 incidents with high uncertainty (σ = 7). Its
   posterior is pulled *up* toward the company mean — maybe to 6 or 7. The
   model says: "your count is noisy; the company-wide evidence suggests
   your true rate is probably higher than 3."
-- **Northwest** reported 18 with tight uncertainty (σ = 5). Its posterior
+* **Northwest** reported 18 with tight uncertainty (σ = 5). Its posterior
   stays high — the data are precise enough to resist full pooling.
 
 This is the answer to the CISO's third question. Southeast's low count
@@ -401,16 +401,16 @@ first accounts for measurement uncertainty. The second doesn't.
 The same model scales beyond one company. Verizon's DBIR reports incident
 counts by industry sector — the data structure is identical:
 
-| Sector | Incidents | Reporting uncertainty |
-|---|---|---|
-| Healthcare | 525 | high (HIPAA mandates reporting) |
-| Finance | 690 | medium (regulatory, good detection) |
-| Retail | 241 | high (variable detection maturity) |
-| Manufacturing | 186 | very high (OT environments, poor visibility) |
-| Education | 312 | high (open networks, limited SOC) |
-| Government | 420 | medium (mandated reporting, variable detection) |
-| Tech | 456 | low (mature SOCs, good tooling) |
-| Utilities | 98 | very high (ICS, air-gapped, limited monitoring) |
+| Sector        | Incidents | Reporting uncertainty                           |
+| ------------- | --------- | ----------------------------------------------- |
+| Healthcare    | 525       | high (HIPAA mandates reporting)                 |
+| Finance       | 690       | medium (regulatory, good detection)             |
+| Retail        | 241       | high (variable detection maturity)              |
+| Manufacturing | 186       | very high (OT environments, poor visibility)    |
+| Education     | 312       | high (open networks, limited SOC)               |
+| Government    | 420       | medium (mandated reporting, variable detection) |
+| Tech          | 456       | low (mature SOCs, good tooling)                 |
+| Utilities     | 98        | very high (ICS, air-gapped, limited monitoring) |
 
 The hierarchical model borrows strength across sectors. A sector with 98
 reported incidents and "very high" reporting uncertainty (Utilities) gets

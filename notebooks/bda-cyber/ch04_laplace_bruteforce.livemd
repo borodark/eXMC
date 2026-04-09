@@ -215,9 +215,9 @@ will mislead. That's when NUTS (Ch 5) earns its keep.
 
 In a production alert-scoring pipeline:
 
-- **Grid (200×200):** ~40,000 density evaluations. Fine for 2D, dead at 5D.
-- **Laplace:** ~20 Newton iterations + 1 Hessian. Milliseconds at any dimension.
-- **NUTS (500 samples):** Seconds to minutes. Best posterior, highest cost.
+* **Grid (200×200):** ~40,000 density evaluations. Fine for 2D, dead at 5D.
+* **Laplace:** ~20 Newton iterations + 1 Hessian. Milliseconds at any dimension.
+* **NUTS (500 samples):** Seconds to minutes. Best posterior, highest cost.
 
 The real-time scoring system uses Laplace. The nightly recalibration uses
 NUTS. Both are correct for their context.

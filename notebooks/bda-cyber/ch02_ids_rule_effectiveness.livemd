@@ -167,7 +167,8 @@ posterior_pdf =
       )
       |> Nx.to_number()
 
-    %{theta: theta, density: :math.exp(log_p)}
+    density = if is_number(log_p), do: :math.exp(log_p), else: 0.0
+    %{theta: theta, density: density}
   end
 
 %{alpha: alpha, beta: beta_param, posterior_mean: Float.round(alpha / (alpha + beta_param), 4)}
@@ -245,9 +246,12 @@ priors = [
   %{label: "Vendor Beta(475,25)", a0: 475.0, b0: 25.0}
 ]
 
+# Wide grid to cover all posteriors — Vendor Beta(518,182) peaks at 0.74
+wide_grid = Nx.linspace(0.05, 0.85, n: 600) |> Nx.to_list()
+
 prior_sensitivity_data =
   for %{label: label, a0: a0, b0: b0} <- priors,
-      theta <- grid do
+      theta <- wide_grid do
     a = a0 + k
     b = b0 + n - k
 
@@ -255,7 +259,8 @@ prior_sensitivity_data =
       Beta.logpdf(Nx.tensor(theta), %{alpha: Nx.tensor(a), beta: Nx.tensor(b)})
       |> Nx.to_number()
 
-    %{theta: theta, density: :math.exp(log_p), prior: label}
+    density = if is_number(log_p), do: :math.exp(log_p), else: 0.0
+    %{theta: theta, density: density, prior: label}
   end
 
 Vl.new(width: 600, height: 320, title: "Posterior vs prior strength — IDS Rule TP Rate")
@@ -314,7 +319,7 @@ rule_posteriors =
 # Posterior densities for all five rules
 multi_rule_data =
   for %{rule: rule, investigated: ni, true_pos: ki} <- rules,
-      theta <- Nx.linspace(0.0, 0.70, n: 300) |> Nx.to_list() do
+      theta <- Nx.linspace(0.001, 0.70, n: 300) |> Nx.to_list() do
     ai = ki + 1
     bi = ni - ki + 1
 
@@ -322,7 +327,8 @@ multi_rule_data =
       Beta.logpdf(Nx.tensor(theta), %{alpha: Nx.tensor(ai * 1.0), beta: Nx.tensor(bi * 1.0)})
       |> Nx.to_number()
 
-    %{theta: theta, density: :math.exp(log_p), rule: rule}
+    density = if is_number(log_p), do: :math.exp(log_p), else: 0.0
+    %{theta: theta, density: density, rule: rule}
   end
 
 Vl.new(width: 600, height: 320, title: "Posterior TP rate — five IDS rules")
