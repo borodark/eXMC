@@ -8,7 +8,7 @@ defmodule Exmc.JIT do
   - **EMLX**: Metal GPU acceleration on macOS via MLX, f32 only. Default on macOS
     when EXLA is not installed.
   - **Vulkan**: Cross-platform GPU compute (FreeBSD NVIDIA, Linux NVIDIA/AMD/Intel,
-    macOS via MoltenVK). f32 compute, f64 storage. No kernel fusion in v0.1.
+    macOS via MoltenVK). f64 compute throughout. No kernel fusion in v0.1.
     Opt-in via `config :exmc, :compiler, :vulkan`.
   - **Evaluator**: Pure Elixir fallback (BinaryBackend). Very slow but always works.
 
@@ -42,11 +42,11 @@ defmodule Exmc.JIT do
         fun
 
       Nx.Vulkan ->
-        # Vulkan has no Nx.Defn.Compiler of its own (no kernel fusion in
-        # v0.1). Dispatch each defn op through Nx.Defn.Evaluator with
-        # Nx.Vulkan.Backend as the default — every Nx.* call lands on the
-        # GPU. The helper takes care of init() and the global backend.
-        Nx.Vulkan.jit(fun, opts)
+        # VulkanoBackend implements compute callbacks (binary/unary
+        # SPV ops + host fallbacks). Evaluator dispatches each defn
+        # op through the default backend, which is set globally to
+        # VulkanoBackend at application boot.
+        Nx.Defn.jit(fun, [{:compiler, Nx.Defn.Evaluator} | opts])
 
       compiler ->
         opts = translate_opts(compiler, opts)
@@ -77,7 +77,8 @@ defmodule Exmc.JIT do
     case detect_compiler() do
       EXLA -> EXLA.Backend
       EMLX -> EMLX.Backend
-      Nx.Vulkan -> Nx.Vulkan.Backend
+      Nx.Vulkan -> Nx.Vulkan.VulkanoBackend
+
       nil -> Nx.BinaryBackend
     end
   end
@@ -86,13 +87,41 @@ defmodule Exmc.JIT do
   Working float precision for the detected compiler.
 
   Returns `:f64` for EXLA/Evaluator, `:f32` for EMLX (Metal limitation).
+  Override via `Application.put_env(:exmc, :force_precision, :f32)`
+  for the W2 validator's matched-precision mode (otherwise the
+  validator compares f32 Vulkan against f64 EXLA, masking shader
+  correctness behind precision-gap artifacts for fat-tailed
+  distributions).
   """
   def precision do
+    case Application.get_env(:exmc, :force_precision) do
+      :f32 -> :f32
+      :f64 -> :f64
+      _ -> detected_precision()
+    end
+  end
+
+  defp detected_precision do
     case detect_compiler() do
       EMLX -> :f32
-      # Vulkan compute shaders are f32-only; f64 storage round-trips for
-      # mass-matrix accumulators but per-step ops drop to f32.
-      Nx.Vulkan -> :f32
+      # VulkanoBackend supports f64 on every NVIDIA GPU we have tested
+      # (Kepler GT 650M/750M, Ampere RTX 3060 Ti — three-host bit-exact
+      # confirmation via research/regime_grad_diff_mac.exs, per D87 update).
+      # Defaulting to f64 avoids the class of silent sampler collapse the
+      # regime model triggered at f32. Override with
+      # `config :exmc, :force_precision, :f32` on hardware without f64
+      # support or for f32 throughput.
+      #
+      # We intentionally do NOT gate on `Nx.Vulkan.has_f64?/0`. That
+      # NIF probes the legacy spirit C++ path (`g_vk_ctx.has_float64`,
+      # only populated by `Nx.Vulkan.init/0`) and returns false on
+      # super-io — where vulkano f64 works end-to-end — because vulkano
+      # never touches g_vk_ctx. Gating here would silently keep the
+      # f32 default on working hardware. If a genuinely f64-lacking
+      # Vulkan device shows up on the fleet, the operator sets
+      # `config :exmc, :force_precision, :f32`. Fixing has_f64? to
+      # route through vulkano is filed against nx_vulkan.
+      Nx.Vulkan -> :f64
       _ -> :f64
     end
   end

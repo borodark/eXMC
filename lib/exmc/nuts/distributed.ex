@@ -126,7 +126,9 @@ defmodule Exmc.NUTS.Distributed do
   defp run_coordinator_warmup(ir, init_values, opts, compile_opts) do
     compiled = Compiler.compile_for_sampling(ir, compile_opts)
 
-    {_vag_fn, _step_fn, pm, ncp_info, _multi_step_fn} = compiled
+    # Compiler returns a 6-tuple (vag, step, pm, ncp_info, multi_step,
+    # chain_meta). We only need pm + ncp_info here.
+    {_vag_fn, _step_fn, pm, ncp_info, _multi_step_fn, _chain_meta} = compiled
 
     if pm.size == 0 do
       tuning = %{

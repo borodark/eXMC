@@ -85,7 +85,8 @@ defmodule Exmc.NUTS.Tree do
       Application.get_env(:exmc, :full_tree_nif, false) and
         multi_step_fn != nil and inv_mass_list != nil and
         nif_available?() and max_depth <= 10 and
-        Process.get(:exmc_supervised, false) == false
+        Process.get(:exmc_supervised, false) == false and
+        not warmup_downgrade?()
 
     result =
       if use_full_tree do
@@ -308,7 +309,8 @@ defmodule Exmc.NUTS.Tree do
     # chains from q0 in bulk, then slice into them for each subtree. This reduces
     # JIT dispatch calls from O(max_depth) to O(1-2).
     spec_buf =
-      if multi_step_fn && Application.get_env(:exmc, :speculative_precompute, true) do
+      if multi_step_fn && Application.get_env(:exmc, :speculative_precompute, true) &&
+           not warmup_downgrade?() do
         %{
           fwd: nil,
           bwd: nil,
@@ -612,63 +614,262 @@ defmodule Exmc.NUTS.Tree do
   end
 
   # Dispatch K leapfrog steps. The fused Vulkan-chain shader is
-  # selected only when ALL of the following are true (matched in
-  # the function heads below): a `{mu, sigma}` meta is set in app
-  # config (signalling univariate Normal), the active compiler is
-  # Nx.Vulkan, and the model dimension fits the shader's
-  # single-workgroup assumption (d ≤ 256). Otherwise, fall through
-  # to the existing JIT'd `multi_step_fn`. Output contract is
-  # identical in both branches: `{all_q, all_p, all_logp, all_grad}`.
+  # selected based on a tagged-tuple meta in app config:
+  #
+  #   {:normal,      mu, sigma}                — leapfrog_chain_normal
+  #   {:exponential, lambda}                   — leapfrog_chain_exponential
+  #   {:studentt,    mu, sigma, nu}            — leapfrog_chain_studentt
+  #   {:cauchy,      loc, scale}               — leapfrog_chain_cauchy
+  #   {:halfnormal,  sigma}                    — leapfrog_chain_halfnormal
+  #
+  # Set via `Application.put_env(:exmc, :fused_leapfrog_meta, meta)`.
+  # The legacy name `:fused_leapfrog_normal_meta` (a 2-tuple
+  # `{mu, sigma}`) is still honored for backward compat.
+  #
+  # Active compiler must be `Nx.Vulkan`; model dimension must be
+  # ≤ 256 (single-workgroup shaders). Otherwise falls through to
+  # the JIT'd `multi_step_fn`. Output contract is identical in all
+  # branches: `{all_q, all_p, all_logp, all_grad}`.
   defp dispatch_multi_step(spec_buf, q, p, grad, eps_t, n_t, k, dir_sign) do
+    # H1 diagnostic: count chain dispatches per sampling run. Set
+    # via process dictionary so it's zero-overhead when not enabled.
+    # Read with `Process.get(:exmc_dispatch_count)` after sampling.
+    if Process.get(:exmc_count_dispatches) do
+      Process.put(:exmc_dispatch_count, (Process.get(:exmc_dispatch_count) || 0) + 1)
+      Process.put(:exmc_dispatch_k_sum, (Process.get(:exmc_dispatch_k_sum) || 0) + k)
+    end
+
     do_dispatch(
-      Application.get_env(:exmc, :fused_leapfrog_normal_meta),
+      fused_leapfrog_meta(),
       Exmc.JIT.detect_compiler(),
       spec_buf, q, p, grad, eps_t, n_t, k, dir_sign
     )
   end
 
+  # Read the tagged meta. Priority order:
+  #   1. Process dictionary `:exmc_chain_meta` — set by Sampler at
+  #      sample-time when ChainShaderCodegen.detect_meta/1 succeeded
+  #      (Phases A+B auto-routing).
+  #   2. Application env `:fused_leapfrog_meta` — explicit user opt-in.
+  #   3. Legacy `:fused_leapfrog_normal_meta` (2-tuple `{mu, sigma}`)
+  #      — backward compat; promoted to `{:normal, mu, sigma}`.
+  defp fused_leapfrog_meta do
+    normalize_meta(
+      Process.get(:exmc_chain_meta) ||
+        Application.get_env(:exmc, :fused_leapfrog_meta) ||
+        Application.get_env(:exmc, :fused_leapfrog_normal_meta)
+    )
+  end
+
+  defp normalize_meta({mu, sigma}) when is_number(mu) and is_number(sigma),
+    do: {:normal, mu, sigma}
+
+  defp normalize_meta(other), do: other
+
+  # D91 Option C — during warmup under the Vulkan compiler, force the
+  # tree builder onto the plain per-leaf step_fn path (literal K=1).
+  # See research/D91_MAC248_OPTION_C_PLAN.md. Gated on Nx.Vulkan so
+  # EXLA/EMLX are complete no-ops (their fused warmup is already stable).
+  # Flag is Process.put by Sampler around the warmup block and deleted
+  # before sampling, so the sampling hot path keeps full fused K=32.
+  defp warmup_downgrade? do
+    Process.get(:exmc_warmup_phase, false) == true and
+      Exmc.JIT.detect_compiler() == Nx.Vulkan
+  end
+
+  # Per-distribution dispatch — one defp clause per chain shader.
+  # All require Nx.Vulkan as the active compiler and d ≤ 256 (the
+  # single-workgroup shader assumption).
+
   defp do_dispatch(
-         {mu, sigma},
+         {:normal, _mu, _sigma} = meta,
          Nx.Vulkan,
-         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = _spec_buf,
-         q, p, _grad, _eps_t, _n_t, k, dir_sign
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
        )
-       when is_number(mu) and is_number(sigma) and is_integer(d) and d <= 256 do
-    signed_eps = dir_sign * epsilon
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
 
-    {:ok, {q_chain, p_chain, grad_chain, logp_chain}} =
-      Nx.Vulkan.leapfrog_chain_normal(
-        vulkan_upload(q),
-        vulkan_upload(p),
-        vulkan_upload(inv_mass),
-        k, signed_eps, mu, sigma
-      )
+  defp do_dispatch(
+         {:exponential, _lambda} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
 
-    {
-      vulkan_to_tensor(q_chain, {k, d}),
-      vulkan_to_tensor(p_chain, {k, d}),
-      vulkan_to_tensor(logp_chain, {k}),
-      vulkan_to_tensor(grad_chain, {k, d})
-    }
+  defp do_dispatch(
+         {:studentt, _mu, _sigma, _nu, _logp_const} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
+
+  defp do_dispatch(
+         {:cauchy, _loc, _scale, _log_pi_scale} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
+
+  defp do_dispatch(
+         {:weibull, _weibull_k, _lambda, _logp_const} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
+
+  defp do_dispatch(
+         {:halfnormal, _sigma, _log_const} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
+
+  # Synthesized chain shaders (Phase 1).
+  defp do_dispatch(
+         {:beta, _alpha, _beta} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
+
+  defp do_dispatch(
+         {:gamma, _alpha, _beta} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
+
+  defp do_dispatch(
+         {:lognormal, _mu, _sigma} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+  end
+
+  # Mission II R2.5: custom-likelihood synthesised shader. Same routing
+  # as the family clauses above; the new path is at the dispatch.ex /
+  # Native shim layer, not here.
+  defp do_dispatch(
+         {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin} = meta,
+         Nx.Vulkan,
+         %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
+         q, p, grad, eps_t, n_t, k, dir_sign
+       )
+       when is_integer(d) and d <= 256 do
+    route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
   end
 
   defp do_dispatch(_meta, _compiler, spec_buf, q, p, grad, eps_t, n_t, _k, _dir_sign) do
     spec_buf.multi_step_fn.(q, p, grad, eps_t, spec_buf.inv_mass_diag, n_t)
   end
 
-  defp vulkan_upload(%Nx.Tensor{} = t) do
-    {:ok, ref} = t |> Nx.as_type(:f32) |> Nx.to_binary() |> Nx.Vulkan.upload_binary()
-    ref
+  # Route a chain dispatch through one of three paths:
+  #
+  # 1. **EXLA fallback** when the meta is `:evicted` by the suspect
+  #    tracker — even attempting Vulkan is wasted wall-time, since
+  #    we already know this shader times out. (W6 Phase 1)
+  # 2. **Through Nx.Vulkan.Node** with watchdog when `:gpu_node`
+  #    routing is enabled AND the node is alive AND not evicted.
+  #    Records timeouts via the suspect tracker; on success clears
+  #    the counter. (W6 Phase 0 + Phase 1 instrumentation)
+  # 3. **Direct dispatch via `Exmc.NUTS.Vulkan.Dispatch.chain`** in
+  #    the default case (gpu_node disabled, no node hop).
+  defp route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf) do
+    # Task #171 Step 1: coordinator hook. When the calling Task has
+    # been tagged with {coord_pid, obs} in its process dict (set by
+    # BatchedSampler before sample_compiled in Step 3), attempt
+    # multi-instance batching via BatchCoordinator.request_chain.
+    # The coordinator may return {:fallback, _reason} when the
+    # request can't be batched (e.g. Step 1's stub, or future
+    # unsupported-meta cases) — fall through to the direct path
+    # below. Process dict is per-Task so no cross-talk between
+    # concurrent samplers.
+    case Process.get(:exmc_chain_coord) do
+      {coord_pid, obs} when is_pid(coord_pid) ->
+        case Exmc.NUTS.Vulkan.BatchCoordinator.request_synth_chain(
+               coord_pid, meta, q, p, inv_mass, obs, epsilon, k, dir_sign
+             ) do
+          {:fallback, _reason} ->
+            route_chain_direct(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+
+          result ->
+            result
+        end
+
+      _ ->
+        route_chain_direct(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+    end
   end
 
-  defp vulkan_to_tensor(ref, shape) do
-    n_elements = shape |> Tuple.to_list() |> Enum.reduce(1, &*/2)
-    {:ok, bin} = Nx.Vulkan.Native.download_binary(ref, n_elements * 4)
+  defp route_chain_direct(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf) do
+    cond do
+      suspect_evicted?(meta) ->
+        spec_buf.multi_step_fn.(q, p, grad, eps_t, spec_buf.inv_mass_diag, n_t)
 
-    bin
-    |> Nx.from_binary(:f32, backend: Nx.BinaryBackend)
-    |> Nx.reshape(shape)
-    |> Nx.as_type(Exmc.JIT.precision())
+      Application.get_env(:exmc, :gpu_node, false) and Nx.Vulkan.Node.alive?() ->
+        result =
+          Nx.Vulkan.Node.with_node(fn ->
+            Exmc.NUTS.Vulkan.Dispatch.chain(meta, d, epsilon, inv_mass, q, p, k, dir_sign)
+          end)
+
+        case result do
+          {:error, :node_timeout} ->
+            _ = suspect_record_timeout(meta)
+            spec_buf.multi_step_fn.(q, p, grad, eps_t, spec_buf.inv_mass_diag, n_t)
+
+          {:error, _other} ->
+            spec_buf.multi_step_fn.(q, p, grad, eps_t, spec_buf.inv_mass_diag, n_t)
+
+          result ->
+            _ = suspect_record_success(meta)
+            result
+        end
+
+      true ->
+        Exmc.NUTS.Vulkan.Dispatch.chain(meta, d, epsilon, inv_mass, q, p, k, dir_sign)
+    end
+  end
+
+  defp suspect_evicted?(meta) do
+    if Exmc.NUTS.Vulkan.SuspectTracker.alive?(),
+      do: Exmc.NUTS.Vulkan.SuspectTracker.evicted?(meta),
+      else: false
+  end
+
+  defp suspect_record_timeout(meta) do
+    if Exmc.NUTS.Vulkan.SuspectTracker.alive?(),
+      do: Exmc.NUTS.Vulkan.SuspectTracker.record_timeout(meta)
+  end
+
+  defp suspect_record_success(meta) do
+    if Exmc.NUTS.Vulkan.SuspectTracker.alive?(),
+      do: Exmc.NUTS.Vulkan.SuspectTracker.record_success(meta)
   end
 
   # Slice n_steps rows from the direction's buffer at the current cursor.
@@ -866,13 +1067,96 @@ defmodule Exmc.NUTS.Tree do
          multi_step_fn,
          inv_mass_list
        ) do
+    # D91 Option C — during Vulkan warmup, bypass every fused/cached path
+    # (use_synth_chain / use_nif_subtree / depth>=4 cached) and take the
+    # plain per-leaf step_fn path. That routes through Nx.Defn.Evaluator
+    # → VulkanoBackend host fallback → BinaryBackend f64 (same one-step-
+    # at-a-time behavior EXLA/CPU already use), so dual averaging sees
+    # per-leaf accept_stat instead of a fused 32-step overshoot.
+    if warmup_downgrade?() do
+      build_subtree(
+        step_fn,
+        q,
+        p,
+        grad,
+        epsilon,
+        inv_mass_diag,
+        depth,
+        rng,
+        joint_logp_0,
+        inv_mass_list
+      )
+    else
+      dispatch_subtree_hot(
+        step_fn,
+        q,
+        p,
+        grad,
+        epsilon,
+        inv_mass_diag,
+        depth,
+        rng,
+        joint_logp_0,
+        multi_step_fn,
+        inv_mass_list
+      )
+    end
+  end
+
+  defp dispatch_subtree_hot(
+         step_fn,
+         q,
+         p,
+         grad,
+         epsilon,
+         inv_mass_diag,
+         depth,
+         rng,
+         joint_logp_0,
+         multi_step_fn,
+         inv_mass_list
+       ) do
     nif_threshold = Application.get_env(:exmc, :nif_depth_threshold, 2)
 
     use_nif_subtree =
       Application.get_env(:exmc, :use_nif, true) and nif_available?() and
         multi_step_fn != nil and inv_mass_list != nil and depth >= nif_threshold
 
+    # Plan B' (docs/PLAN_B_PRIME_ONE_NIF.md): when the vulkan compiler
+    # is active AND the IR synthesised a chain_meta, route subtree
+    # construction through the GPU chain shader (one vkQueueSubmit per
+    # subtree, K=2^depth leapfrog steps). This bypasses build_subtree_nif
+    # / build_subtree_cached / build_subtree (all of which dispatch
+    # through multi_step_fn → Nx.Defn.Evaluator → VulkanoBackend per-op
+    # → BinaryBackend host fallback, producing zero GPU work).
+    #
+    # chain_meta is read from process dict via fused_leapfrog_meta() (set
+    # by Sampler.sample_from_compiled when ChainShaderCodegen.detect_meta/1
+    # succeeded at compile time). Sufficient for production today
+    # (Instrument GenServers don't use Task.async for sampling).
+    # TODO: thread chain_meta as explicit param to be Task.async-safe
+    # (see PLAN_B_PRIME open question #2).
+    chain_meta = fused_leapfrog_meta()
+
+    use_synth_chain =
+      chain_meta != nil and Exmc.JIT.detect_compiler() == Nx.Vulkan and
+        depth >= 1 and inv_mass_list != nil
+
     cond do
+      use_synth_chain ->
+        synth_chain_subtree(
+          chain_meta,
+          q,
+          p,
+          grad,
+          epsilon,
+          inv_mass_diag,
+          depth,
+          rng,
+          joint_logp_0,
+          inv_mass_list
+        )
+
       use_nif_subtree ->
         build_subtree_nif(
           multi_step_fn,
@@ -1038,13 +1322,23 @@ defmodule Exmc.NUTS.Tree do
       # joint_logp computed inside JIT — just extract the scalar
       joint_logp_new = Nx.to_number(joint_logp_t)
 
-      # Guard against NaN/Inf from numerical issues (e.g., log(0) gradient)
+      # Guard against NaN/Inf from numerical issues (e.g., log(0) gradient,
+      # or vulkano f32 dispatch that hits a numerical edge case and emits
+      # NaN into the trajectory tensors while joint_logp_new is still
+      # finite — that would later poison the flat-list arithmetic in
+      # zip_add). Re-check tensor finiteness here so both forms route
+      # cleanly to the divergent fallback.
       {divergent, log_weight, accept_prob} =
-        if is_number(joint_logp_new) do
-          d = joint_logp_new - joint_logp_0
-          {d < -1000.0, d, min(1.0, :math.exp(min(d, 0.0)))}
-        else
-          {true, -1001.0, 0.0}
+        cond do
+          not is_number(joint_logp_new) ->
+            {true, -1001.0, 0.0}
+
+          not all_finite?(q_new) or not all_finite?(p_new) ->
+            {true, -1001.0, 0.0}
+
+          true ->
+            d = joint_logp_new - joint_logp_0
+            {d < -1000.0, d, min(1.0, :math.exp(min(d, 0.0)))}
         end
 
       # When divergent, fall back to original q/p to avoid NaN in flat lists
@@ -1264,6 +1558,86 @@ defmodule Exmc.NUTS.Tree do
     end
 
     # Run the same recursive build_subtree — identical RNG, early termination, merges
+    build_subtree(
+      cached_step_fn,
+      q,
+      p,
+      grad,
+      epsilon,
+      inv_mass_diag,
+      depth,
+      rng,
+      joint_logp_0,
+      inv_mass_list
+    )
+  end
+
+  # --- Plan B' synth-chain subtree builder (docs/PLAN_B_PRIME_ONE_NIF.md) ---
+  #
+  # When the IR compiled with a synthesisable chain_meta, this replaces
+  # the build_subtree_cached path entirely for the vulkan compiler. The
+  # chain shader NIF computes all K=2^depth leapfrog states in one
+  # vkQueueSubmit dispatch — vs build_subtree_cached's JIT'd multi_step_fn
+  # which (under :compiler, :vulkan + :vulkan_backend, :vulkano) routes
+  # through Nx.Defn.Evaluator + VulkanoBackend per-op fallbacks to
+  # BinaryBackend, producing zero GPU work.
+  #
+  # Same caching pattern as build_subtree_cached: pre-compute the chain,
+  # provide a cached_step_fn that slices the buffer, run the same
+  # recursive build_subtree with the cached step_fn. This preserves the
+  # tree-building / U-turn / multinomial logic exactly.
+  defp synth_chain_subtree(
+         chain_meta,
+         q,
+         p,
+         grad,
+         epsilon,
+         inv_mass_diag,
+         depth,
+         rng,
+         joint_logp_0,
+         inv_mass_list
+       ) do
+    n_steps = trunc(:math.pow(2, depth))
+    d = Nx.axis_size(q, 0)
+
+    # build_subtree_cached gets a signed epsilon (positive for forward,
+    # negative for backward). Dispatch.chain takes (abs_epsilon, dir_sign)
+    # separately and computes the sign internally.
+    dir_sign = if epsilon >= 0, do: 1, else: -1
+    abs_eps = abs(epsilon)
+
+    # The actual GPU dispatch — one vkQueueSubmit per call.
+    {all_q, all_p, all_logp, all_grad} =
+      Exmc.NUTS.Vulkan.Dispatch.chain(
+        chain_meta, d, abs_eps, inv_mass_diag, q, p, n_steps, dir_sign
+      )
+
+    # Copy to BinaryBackend for cheap Elixir-side arithmetic.
+    all_q = Nx.backend_copy(all_q, Nx.BinaryBackend)
+    all_p = Nx.backend_copy(all_p, Nx.BinaryBackend)
+    all_logp = Nx.backend_copy(all_logp, Nx.BinaryBackend)
+    all_grad = Nx.backend_copy(all_grad, Nx.BinaryBackend)
+    raw_logps = Nx.to_flat_list(Nx.slice(all_logp, [0], [n_steps])) |> List.to_tuple()
+
+    counter = :atomics.new(1, signed: false)
+    half = Nx.tensor(0.5, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+
+    cached_step_fn = fn _q, _p, _grad, _eps, _inv_mass ->
+      idx = :atomics.get(counter, 1)
+      :atomics.put(counter, 1, idx + 1)
+
+      q_new = Nx.slice(all_q, [idx, 0], [1, d]) |> Nx.reshape({d})
+      p_new = Nx.slice(all_p, [idx, 0], [1, d]) |> Nx.reshape({d})
+      logp_new = Nx.tensor(elem(raw_logps, idx), type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+      grad_new = Nx.slice(all_grad, [idx, 0], [1, d]) |> Nx.reshape({d})
+
+      ke = Nx.multiply(half, Nx.sum(Nx.multiply(p_new, Nx.multiply(inv_mass_diag, p_new))))
+      jlp = Nx.subtract(logp_new, ke)
+
+      {q_new, p_new, logp_new, grad_new, jlp}
+    end
+
     build_subtree(
       cached_step_fn,
       q,
@@ -1587,9 +1961,34 @@ defmodule Exmc.NUTS.Tree do
     zip_reduce_rho(rs, pls, prs, ims, dr + v * pr, dl + v * pl)
   end
 
-  # Element-wise list addition (for accumulating momentum sum ρ)
+  # Element-wise list addition (for accumulating momentum sum ρ).
+  # Defensive against :nan/:infinity/:neg_infinity atoms that can flow
+  # in from Nx.to_flat_list on tensors that contain NaN/Inf (the
+  # vulkano f32 dispatch path is one source; the NIF subtree
+  # constructor at nif_subtree_to_elixir/2 doesn't sanitize). When an
+  # operand is non-numeric, treat it as 0.0 — the trajectory it came
+  # from is already flagged divergent upstream, so the rho_list
+  # contribution is mathematically irrelevant; we just need to not
+  # crash Erlang arithmetic.
   defp zip_add([], []), do: []
-  defp zip_add([a | as_], [b | bs]), do: [a + b | zip_add(as_, bs)]
+  defp zip_add([a | as_], [b | bs]) when is_number(a) and is_number(b) do
+    [a + b | zip_add(as_, bs)]
+  end
+  defp zip_add([a | as_], [b | bs]) do
+    [finite_or_zero(a) + finite_or_zero(b) | zip_add(as_, bs)]
+  end
+
+  defp finite_or_zero(x) when is_number(x), do: x
+  defp finite_or_zero(_), do: 0.0
+
+  # Cheap finiteness check on an Nx tensor that may live on any backend.
+  # Sum + finite-check on the scalar result avoids a full element-wise
+  # walk: if any element is NaN/Inf, the sum will be NaN/Inf too.
+  # Returns true iff every element is a finite real.
+  defp all_finite?(tensor) do
+    s = tensor |> Nx.sum() |> Nx.to_number()
+    is_number(s)
+  end
 
   # --- Helpers ---
 

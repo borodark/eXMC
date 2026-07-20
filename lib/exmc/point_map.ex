@@ -169,7 +169,11 @@ defmodule Exmc.PointMap do
 
   defp inverse_transform(nil, x), do: x
   defp inverse_transform(:log, x), do: Nx.log(x)
-  defp inverse_transform(:softplus, x), do: Nx.log(Nx.expm1(x))
+  defp inverse_transform(:softplus, x) do
+    # Numerically stable: log(expm1(x)) = x + log(1 - exp(-x)).
+    # Avoids exp(x) overflow at large x (PATH_TO_FULL_PASS step 2a).
+    Nx.add(x, Nx.log1p(Nx.negate(Nx.exp(Nx.negate(x)))))
+  end
   defp inverse_transform(:logit, x), do: Nx.subtract(Nx.log(x), Nx.log1p(Nx.negate(x)))
   defp inverse_transform(:stick_breaking, x), do: Transform.inverse_stick_breaking(x)
 end

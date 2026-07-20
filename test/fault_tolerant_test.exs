@@ -17,7 +17,8 @@ defmodule Exmc.FaultTolerantTest do
       |> Builder.rv("x", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
       |> Rewrite.apply()
 
-    {vag_fn, step_fn, pm, _ncp_info, _multi_step_fn} = Exmc.Compiler.compile_for_sampling(ir)
+    {vag_fn, step_fn, pm, _ncp_info, _multi_step_fn, _chain_meta} =
+      Exmc.Compiler.compile_for_sampling(ir)
     {vag_fn, step_fn, pm}
   end
 
