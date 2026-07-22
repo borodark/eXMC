@@ -134,7 +134,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
   def init({batched_meta, batch_size, opts}) do
     # Tag the coordinator process for DTrace consumers. No-op on
     # BEAMs built without dynamic-trace.
-    :dyntrace.put_tag("BatchCoord")
+    Exmc.Dyntrace.put_tag("BatchCoord")
 
     {:ok,
      %{
@@ -281,7 +281,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
     # USDT probe — flush event. Lets DTrace consumers track
     # batch_size_actual vs batch_size_target (partial-flush detection
     # for the #159 go/no-go decision).
-    :dyntrace.p(
+    Exmc.Dyntrace.p(
       n_instances,
       state.batch_size,
       k0,
@@ -309,7 +309,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
 
     # USDT probe — dispatch latency. Quantizable in DTrace for
     # per-instance and tail-latency views.
-    :dyntrace.p(
+    Exmc.Dyntrace.p(
       n_instances,
       k0,
       dispatch_us,
@@ -391,7 +391,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
 
     # USDT probe — chain flush event. Distinct from coord_flush so
     # the dtrace harness can tell which pathway is firing.
-    :dyntrace.p(
+    Exmc.Dyntrace.p(
       n_instances,
       state.batch_size,
       k0,
@@ -438,7 +438,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
         state
 
       results when is_list(results) and length(results) == n_instances ->
-        :dyntrace.p(
+        Exmc.Dyntrace.p(
           n_instances,
           k0,
           dispatch_us,

@@ -113,7 +113,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     # Tag "vk_leap_in": entry-side hash of q_bin xor p_bin so a DTrace
     # consumer can pair this with the cpu_leap_in probe emitted by
     # Leapfrog.step.
-    :dyntrace.p(
+    Exmc.Dyntrace.p(
       :erlang.phash2(q_bin), :erlang.phash2(p_bin),
       k, d,
       "vk_leap_in", "", "", ""
@@ -124,7 +124,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
         q_bin, p_bin, extras_bin, push, k, spv_path
       )
 
-    :dyntrace.p(
+    Exmc.Dyntrace.p(
       :erlang.phash2(q_chain_bin), :erlang.phash2(p_chain_bin),
       :erlang.phash2(grad_chain_bin), :erlang.phash2(logp_chain_bin),
       "vk_leap_out", "", "", ""

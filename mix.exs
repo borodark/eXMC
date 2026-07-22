@@ -65,9 +65,10 @@ defmodule Exmc.MixProject do
 
   defp deps do
     [
-      {:nx, "~> 0.10.0"},
-      {:exla, "~> 0.10", optional: true},
-      {:emlx, "~> 0.2", optional: true},
+      nx_dep(),
+      exla_dep(),
+      # EMLX (Apple Metal / MLX) is postponed until real Apple hardware is
+      # available to develop and test against — see `Exmc.JIT` moduledoc.
       # Cross-platform GPU compute via Vulkan (FreeBSD + Linux non-CUDA + macOS via MoltenVK).
       # GitHub source until nx_vulkan reaches hex.pm. Override with
       # `NX_VULKAN_PATH=/path/to/nx_vulkan mix deps.get` for local iteration.
@@ -95,4 +96,19 @@ defmodule Exmc.MixProject do
 
   defp nx_vulkan_dep(path),
     do: {:nx_vulkan, path: path, optional: true}
+
+  # nx + exla: default to the hex 0.13 release. For local iteration against the
+  # elixir-nx/nx monorepo (e.g. an unreleased EXLA fix), point at the checkout:
+  #
+  #     NX_PATH=/path/to/nx mix deps.get   # expects $NX_PATH/nx and $NX_PATH/exla
+  #
+  # The path deps `override: true` so exla's own `{:nx, path: "../nx"}` resolves
+  # to the same tree.
+  defp nx_dep, do: nx_dep(System.get_env("NX_PATH"))
+  defp nx_dep(nil), do: {:nx, "~> 0.13"}
+  defp nx_dep(path), do: {:nx, path: Path.join(path, "nx"), override: true}
+
+  defp exla_dep, do: exla_dep(System.get_env("NX_PATH"))
+  defp exla_dep(nil), do: {:exla, "~> 0.13", optional: true}
+  defp exla_dep(path), do: {:exla, path: Path.join(path, "exla"), optional: true, override: true}
 end
