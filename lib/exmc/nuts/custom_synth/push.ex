@@ -156,6 +156,14 @@ defmodule Exmc.NUTS.CustomSynth.Push do
     [scalar(params, :mu), scalar(params, :sigma), scalar(params, :lower), scalar(params, :upper)]
   end
 
+  defp prior_param_floats({_id, Exmc.Dist.Gamma, params}) do
+    [scalar(params, :alpha), scalar(params, :beta)]
+  end
+
+  defp prior_param_floats({_id, Exmc.Dist.Beta, params}) do
+    [scalar(params, :alpha), scalar(params, :beta)]
+  end
+
   defp prior_param_floats({id, mod, _params}) do
     raise "Push.prior_param_floats/1 has no encoder for prior #{id} (#{inspect(mod)}). " <>
             "Add a clause matching the distribution + the scalar fields it requires."
