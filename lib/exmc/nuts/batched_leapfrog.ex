@@ -13,7 +13,12 @@ defmodule Exmc.NUTS.BatchedLeapfrog do
   import Nx.Defn
 
   @max_steps 1024
-  @data_sentinel Nx.tensor(0.0, type: :f32, backend: Nx.BinaryBackend)
+
+  # Sentinel value passed as the `data` arg when the caller didn't
+  # supply one. Built lazily inside build/4 because @-attributes freeze
+  # at module load time and would lock the type before the Vulkan
+  # compiler flip (jit.ex:124 defaults to :f64) took effect.
+  defp data_sentinel(fp), do: Nx.tensor(0.0, type: fp, backend: Nx.BinaryBackend)
 
   @doc """
   Build a batched multi-step function for the given logp_fn and dimension.
@@ -41,9 +46,33 @@ defmodule Exmc.NUTS.BatchedLeapfrog do
         Keyword.merge([on_conflict: :reuse], jit_opts)
       )
 
-    data = obs_data || @data_sentinel
+    data = obs_data || data_sentinel(fp)
+    max_steps = @max_steps
+
     fn q, p, grad, eps, inv_mass, n_steps ->
-      raw.(q, p, grad, eps, inv_mass, n_steps, data)
+      try do
+        raw.(q, p, grad, eps, inv_mass, n_steps, data)
+      rescue
+        ArithmeticError ->
+          # Divide-by-zero or overflow inside one of the while-loop's
+          # value_and_grad calls. On EXLA this would produce IEEE
+          # inf/nan that flow through and the tree builder's divergence
+          # check handles them; on BinaryBackend the Complex.divide path
+          # raises instead, which would crash the entire sampler. Return
+          # chains filled with -1e300 logp so every leaf the tree builder
+          # extracts trips the divergence threshold cleanly.
+          neg_huge_scalar = Nx.tensor(-1.0e300, type: fp, backend: Nx.BinaryBackend)
+
+          zero_d_chain =
+            Nx.broadcast(
+              Nx.tensor(0.0, type: fp, backend: Nx.BinaryBackend),
+              {max_steps, d}
+            )
+
+          neg_huge_logp = Nx.broadcast(neg_huge_scalar, {max_steps})
+
+          {zero_d_chain, zero_d_chain, neg_huge_logp, zero_d_chain}
+      end
     end
   end
 

@@ -56,6 +56,23 @@ defmodule Exmc.NUTS.Sampler do
   end
 
   @doc """
+  Replace the `multi_step_fn` slot (position 5) of a compiled tuple
+  with a custom adapter — e.g. `BatchCoordinator.coordinator_step_fn/2`
+  to route the speculative-precompute path through a shared batch
+  coordinator instead of per-instance JIT'd leapfrog.
+
+  Handles 5-tuple `{vag_fn, step_fn, pm, ncp_info, multi_step_fn}` and
+  6-tuple `{..., multi_step_fn, chain_meta}` shapes.
+  """
+  def with_multi_step_fn({vag_fn, step_fn, pm, ncp_info, _orig}, new_multi_step_fn) do
+    {vag_fn, step_fn, pm, ncp_info, new_multi_step_fn}
+  end
+
+  def with_multi_step_fn({vag_fn, step_fn, pm, ncp_info, _orig, chain_meta}, new_multi_step_fn) do
+    {vag_fn, step_fn, pm, ncp_info, new_multi_step_fn, chain_meta}
+  end
+
+  @doc """
   Sample using pre-compiled artifacts and pre-computed tuning parameters.
   Skips warmup entirely — uses the provided step size and mass matrix directly.
 
@@ -118,12 +135,23 @@ defmodule Exmc.NUTS.Sampler do
   end
 
   # Run sampling from pre-compiled artifacts.
-  # Accepts both 4-tuple (legacy) and 5-tuple (with multi_step_fn) for backwards compat.
+  # Accepts:
+  #   4-tuple (legacy)               → wraps to 5-tuple (no multi_step_fn)
+  #   5-tuple (no chain_meta)        → wraps to 6-tuple (no auto-routed chain)
+  #   6-tuple (with chain_meta)      → real implementation
   defp sample_from_compiled({vag_fn, step_fn, pm, ncp_info}, init_values, opts) do
-    sample_from_compiled({vag_fn, step_fn, pm, ncp_info, nil}, init_values, opts)
+    sample_from_compiled({vag_fn, step_fn, pm, ncp_info, nil, nil}, init_values, opts)
   end
 
   defp sample_from_compiled({vag_fn, step_fn, pm, ncp_info, multi_step_fn}, init_values, opts) do
+    sample_from_compiled({vag_fn, step_fn, pm, ncp_info, multi_step_fn, nil}, init_values, opts)
+  end
+
+  defp sample_from_compiled(
+         {vag_fn, step_fn, pm, ncp_info, multi_step_fn, chain_meta},
+         init_values,
+         opts
+       ) do
     opts = Keyword.merge(@default_opts, opts)
     num_warmup = opts[:num_warmup]
     num_samples = opts[:num_samples]
@@ -137,6 +165,12 @@ defmodule Exmc.NUTS.Sampler do
 
     # Reset depth tracker for hybrid dispatch (full-tree NIF vs speculative)
     Process.put(:exmc_max_tree_depth_seen, 0)
+
+    # Phases A+B: stash detected chain meta for Tree.dispatch_multi_step
+    # to read. Same process-dictionary pattern as :exmc_supervised.
+    # Cleared after sampling completes via Process.delete (so a chain_meta
+    # set here doesn't leak to a later sample call without it).
+    if chain_meta, do: Process.put(:exmc_chain_meta, chain_meta)
 
     if pm.size == 0 do
       empty_trace = %{}
@@ -173,6 +207,12 @@ defmodule Exmc.NUTS.Sampler do
       # Use batched leapfrog for diagonal mass (both warmup and sampling)
       active_multi = if use_dense, do: nil, else: multi_step_fn
 
+      # D91 Option C — flag warmup phase for Tree.warmup_downgrade?/0.
+      # Gated on Nx.Vulkan inside the helper, so EXLA/EMLX see no-op.
+      # Deleted right after the warmup block so sampling runs with the
+      # flag absent (full fused K=32 restored on the hot path).
+      Process.put(:exmc_warmup_phase, true)
+
       {state, epsilon, inv_mass, chol_cov} =
         if warm_start do
           # Warm-start: use previous mass matrix and step size.
@@ -196,8 +236,31 @@ defmodule Exmc.NUTS.Sampler do
             {state, prev_epsilon, prev_inv_mass, nil}
           end
         else
-          # Cold start: identity mass matrix, find step size, full warmup
-          inv_mass_diag = Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
+          # Cold start. Initialize the diagonal mass matrix from a
+          # closed-form per-family heuristic when a chain-shader meta
+          # is in scope (W7 follow-up — see
+          # nx_vulkan/research/gpu_node/beta_gamma_adaptation.md).
+          # Phase II Welford refinement still runs and will adjust;
+          # the heuristic just gives Phase II a sensible starting
+          # neighborhood. Without it, Beta posterior precision was
+          # 5× off identity (1/(α+β) ≈ 0.2 vs identity 1.0),
+          # producing depth-3+ trees throughout warmup.
+          #
+          # Meta source hierarchy: function arg (auto-routed via
+          # Compiler) → Process dict (Sampler-set or test fixture)
+          # → Application env (user-set fallback) → identity.
+          effective_meta =
+            chain_meta ||
+              Process.get(:exmc_chain_meta) ||
+              Application.get_env(:exmc, :fused_leapfrog_meta)
+
+          # Plan B (Task #146): per-RV initial inv_mass diagonal from
+          # prior variances. Identity (1.0 broadcast) was catastrophic for
+          # models with parameters at vastly different scales.
+          inv_mass_list = prior_inv_mass_per_rv(effective_meta, d)
+
+          inv_mass_diag =
+            Nx.tensor(inv_mass_list, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
 
           {epsilon, rng} =
             find_reasonable_epsilon_with_rng(active_step_fn, q, logp, grad, inv_mass_diag, rng)
@@ -212,6 +275,9 @@ defmodule Exmc.NUTS.Sampler do
             num_warmup, max_tree_depth, target_accept, use_dense, active_multi
           )
         end
+
+      # D91 Option C — restore full fused K=32 for sampling
+      Process.delete(:exmc_warmup_phase)
 
       # Freeze step size
       epsilon_final = epsilon
@@ -251,6 +317,10 @@ defmodule Exmc.NUTS.Sampler do
 
       # Clean up supervised mode
       Process.delete(:exmc_supervised)
+      # Clean up auto-routed chain meta (Phase A+B)
+      Process.delete(:exmc_chain_meta)
+      # Belt-and-suspenders: exception path may skip the pre-sampling delete
+      Process.delete(:exmc_warmup_phase)
 
       {trace, stats}
     end
@@ -260,6 +330,7 @@ defmodule Exmc.NUTS.Sampler do
   defp sample_from_compiled_tuned(compiled, tuning, init_values, opts) do
     {vag_fn, step_fn, pm, ncp_info, multi_step_fn} =
       case compiled do
+        {v, s, p, n, m, _chain_meta} -> {v, s, p, n, m}
         {v, s, p, n, m} -> {v, s, p, n, m}
         {v, s, p, n} -> {v, s, p, n, nil}
       end
@@ -1018,9 +1089,10 @@ defmodule Exmc.NUTS.Sampler do
   Vectorized multi-chain sampling using pre-compiled artifacts.
   """
   def sample_chains_vectorized_compiled(compiled, num_chains, opts \\ []) when num_chains >= 1 do
-    # Accept both 4-tuple (legacy) and 5-tuple (with multi_step_fn)
+    # Accept 4/5/6-tuple (legacy → with multi_step_fn → with chain_meta).
     {vag_fn, step_fn, pm, ncp_info, multi_step_fn} =
       case compiled do
+        {v, s, p, n, m, _chain_meta} -> {v, s, p, n, m}
         {v, s, p, n, m} -> {v, s, p, n, m}
         {v, s, p, n} -> {v, s, p, n, nil}
       end
@@ -1190,6 +1262,15 @@ defmodule Exmc.NUTS.Sampler do
   end
 
   defp stream_from_compiled(
+         {vag_fn, step_fn, pm, ncp_info, _multi_step_fn, _chain_meta},
+         receiver_pid,
+         init_values,
+         opts
+       ) do
+    stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts)
+  end
+
+  defp stream_from_compiled(
          {vag_fn, step_fn, pm, ncp_info, _multi_step_fn},
          receiver_pid,
          init_values,
@@ -1198,6 +1279,9 @@ defmodule Exmc.NUTS.Sampler do
     stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts)
   end
 
+  defp stream_from_compiled({vag_fn, step_fn, pm, ncp_info}, receiver_pid, init_values, opts) do
+    stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts)
+  end
 
   defp stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts) do
     opts = Keyword.merge(@default_opts, opts)
@@ -1352,4 +1436,146 @@ defmodule Exmc.NUTS.Sampler do
   end
 
   defp ncp_dep_resolved?(_src, _ncp_ids, _done), do: true
+
+  # Per-family closed-form heuristic for the diagonal mass matrix.
+  # Phase II Welford refinement still runs and will adjust; this
+  # just gives the adaptation a sensible starting neighborhood.
+  #
+  # Without this, Beta(2, 3) on logit-uc starts at identity
+  # (inv_mass = 1.0) when the posterior precision is 1/(α+β) = 0.2
+  # — a 5× mass-matrix mismatch that drives Phase II into
+  # trajectory-dynamics-fitting (the chain hasn't equilibrated, so
+  # each window's variance estimate reflects the leapfrog motion,
+  # not the posterior).
+  #
+  # Math: variance of the unconstrained-space target at the prior mode.
+  # Source: nx_vulkan/research/gpu_node/beta_gamma_adaptation.md.
+  defp prior_inv_mass({:beta, alpha, beta_param}) when is_number(alpha) and is_number(beta_param) do
+    # Beta(α, β) on logit-uc: Var ≈ 1/(α+β)
+    1.0 / (alpha + beta_param)
+  end
+
+  defp prior_inv_mass({:gamma, alpha, _beta_param}) when is_number(alpha) and alpha > 1.0 do
+    # Gamma(α, β) on log-uc: Var ≈ 1/α for α > 1
+    1.0 / alpha
+  end
+
+  defp prior_inv_mass({:gamma, _alpha, _beta_param}), do: 1.0
+
+  defp prior_inv_mass({:lognormal, _mu, sigma}) when is_number(sigma) do
+    # Lognormal(μ, σ) on log-uc: Var = σ²
+    sigma * sigma
+  end
+
+  defp prior_inv_mass({:halfnormal, sigma, _log_const}) when is_number(sigma) do
+    # HalfNormal(σ) on log-uc: Var ≈ σ²
+    sigma * sigma
+  end
+
+  defp prior_inv_mass({:weibull, k, _lambda, _logp_const}) when is_number(k) do
+    # Weibull(k, λ) on log-uc: asymptotic Var = (π²/6) / k²
+    (:math.pi() * :math.pi() / 6.0) / (k * k)
+  end
+
+  defp prior_inv_mass({:studentt, _mu, sigma, nu, _logp_const})
+       when is_number(sigma) and is_number(nu) and nu > 2.0 do
+    # StudentT(ν, μ, σ) on real space: Var = σ²·ν/(ν−2) for ν > 2
+    sigma * sigma * nu / (nu - 2.0)
+  end
+
+  defp prior_inv_mass({:studentt, _mu, sigma, _nu, _logp_const}) when is_number(sigma) do
+    sigma * sigma
+  end
+
+  defp prior_inv_mass({:cauchy, _loc, scale, _log_pi_scale}) when is_number(scale) do
+    # Cauchy has no defined variance; scale² is a defensive heuristic.
+    scale * scale
+  end
+
+  defp prior_inv_mass({:exponential, _lambda}), do: 1.0
+
+  defp prior_inv_mass({:normal, _mu, sigma}) when is_number(sigma) do
+    sigma * sigma
+  end
+
+  # Catch-all: identity. Hierarchical / unknown / nil meta.
+  defp prior_inv_mass(_), do: 1.0
+
+  # Plan B (Task #146): per-RV inv_mass diagonal as a list of length d.
+  #
+  # For `{:synthesised, _, layout, push_spec, _, _}` (multi-RV custom synth
+  # path used by RegimeModel + similar): walk push_spec.priors in q-vector
+  # (layout) order and compute Var per RV based on its prior distribution.
+  #
+  # Without this, the catch-all returns 1.0 (identity), which is
+  # catastrophic for models with parameters at vastly different scales
+  # — leapfrog momentum on the wrong-scale axis dominates, blows up,
+  # NUTS reports 100% divergence. See DOs/DON'Ts doc for the full story.
+  #
+  # For other (single-RV) meta tags: fall back to broadcasting the existing
+  # scalar prior_inv_mass to all d components.
+  defp prior_inv_mass_per_rv({:synthesised, _sha, layout, push_spec, _spv, _obs}, d) do
+    priors_by_id =
+      push_spec.priors
+      |> Enum.map(fn {id, mod, params} -> {id, {mod, params}} end)
+      |> Map.new()
+
+    list =
+      Enum.map(layout, fn rv_id ->
+        case Map.fetch(priors_by_id, rv_id) do
+          {:ok, {mod, params}} -> prior_variance(mod, params)
+          :error -> 1.0
+        end
+      end)
+
+    # If layout length didn't match d for any reason, pad/truncate to d.
+    pad_or_truncate(list, d, 1.0)
+  end
+
+  defp prior_inv_mass_per_rv(meta, d) do
+    scalar = prior_inv_mass(meta)
+    List.duplicate(scalar, d)
+  end
+
+  defp pad_or_truncate(list, d, default) do
+    cond do
+      length(list) == d -> list
+      length(list) > d -> Enum.take(list, d)
+      true -> list ++ List.duplicate(default, d - length(list))
+    end
+  end
+
+  # Per-distribution variance for the inv_mass diagonal. Returns Var
+  # (or a scale²-based heuristic for distributions with no defined variance).
+  # All values are unconstrained-space variances — for log-transformed
+  # priors (HalfCauchy, HalfNormal), this is Var of the log-parameter.
+  defp prior_variance(Exmc.Dist.Normal, params),
+    do: scalar_param(params, :sigma) |> :math.pow(2)
+
+  defp prior_variance(Exmc.Dist.HalfNormal, params),
+    do: scalar_param(params, :sigma) |> :math.pow(2)
+
+  defp prior_variance(Exmc.Dist.HalfCauchy, params) do
+    # Cauchy has no defined variance; scale² is a defensive heuristic that
+    # at least gets the order of magnitude right. RegimeModel hits this.
+    scalar_param(params, :scale) |> :math.pow(2)
+  end
+
+  defp prior_variance(Exmc.Dist.Exponential, params) do
+    # Exponential(λ) on log-uc: Var ≈ 1 (asymptotic). Use 1/λ²
+    # as a finer scale heuristic.
+    lambda = scalar_param(params, :lambda)
+    if lambda > 0, do: 1.0 / (lambda * lambda), else: 1.0
+  end
+
+  defp prior_variance(_mod, _params), do: 1.0
+
+  defp scalar_param(params, key) do
+    case Map.fetch!(params, key) do
+      v when is_number(v) -> v * 1.0
+      %Nx.Tensor{shape: {}} = t -> Nx.to_number(t) * 1.0
+      %Nx.Tensor{} = t -> t |> Nx.flatten() |> Nx.slice([0], [1]) |> Nx.squeeze() |> Nx.to_number() |> Kernel.*(1.0)
+      _ -> 1.0
+    end
+  end
 end

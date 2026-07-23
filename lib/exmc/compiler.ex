@@ -9,9 +9,11 @@ defmodule Exmc.Compiler do
 
   alias Exmc.{IR, Rewrite, PointMap, Transform}
 
-  # Sentinel for models without observation data.
-  # A scalar constant — adds one trivial XLA parameter, compiles once.
-  @data_sentinel Nx.tensor(0.0, type: :f32, backend: Nx.BinaryBackend)
+  # Sentinel for models without observation data — a dummy scalar that is
+  # ignored for no-data models (the logp closure discards it). f64 to match the
+  # default precision after EMLX (the f32-only backend) was dropped; the runtime
+  # step/leapfrog paths use a precision-aware sentinel (see BatchedLeapfrog).
+  @data_sentinel Nx.tensor(0.0, type: :f64, backend: Nx.BinaryBackend)
 
   @doc """
   Compile an IR into a logp function and its PointMap.
@@ -54,7 +56,66 @@ defmodule Exmc.Compiler do
     multi_step_fn =
       if pm.size > 0, do: Exmc.NUTS.BatchedLeapfrog.build(logp_fn, obs_data, pm.size, jit_opts), else: nil
 
-    {vag_fn, step_fn, pm, ncp_info, multi_step_fn}
+    # Phases A+B: detect a fused-leapfrog chain meta from the IR.
+    # Single-RV models in 6 supported families (Normal/StudentT/
+    # Cauchy/Exponential/HalfNormal/Weibull) get auto-routed to
+    # the corresponding chain shader at dispatch time. Hierarchical
+    # models, observed-data models, and unsupported distributions
+    # return :unsupported and fall through to multi_step_fn.
+    detect = Exmc.NUTS.ChainShaderCodegen.detect_meta(ir)
+
+    chain_meta =
+      case detect do
+        {:ok, meta} -> meta
+        _ -> nil
+      end
+
+    # Plan B' guard: vulkan compiler must have a synthesisable IR.
+    # Without chain_meta the sampler would silently fall through to
+    # per-op CPU via Evaluator + VulkanoBackend host-fallbacks. Fail
+    # loud at compile time instead.
+    #
+    # Exception: `{:unsupported, :push_too_large}` means the model *is*
+    # shape-synthesisable but its prior params exceed the 128-byte f64
+    # push-constants block. The model is valid, just too wide for the fused
+    # chain path, so degrade to per-op sampling (slower but correct) instead
+    # of raising — this is what "fall back on push_too_large" means.
+    #
+    # Escape hatch for the generic case:
+    # `config :exmc, :allow_vulkan_perop_sampling, true` logs a warning
+    # instead of raising. Default OFF.
+    if Exmc.JIT.detect_compiler() == Nx.Vulkan and is_nil(chain_meta) do
+      case detect do
+        {:unsupported, :push_too_large} ->
+          require Logger
+
+          Logger.warning(
+            "[Compiler] push-constants overflow (>128 B at f64) — falling back to " <>
+              "per-op vulkan sampling for this IR (slower but correct). Reduce the " <>
+              "free-RV count or reshape to fit the fused f64 chain shader."
+          )
+
+        _ ->
+          msg = """
+          Vulkan compiler requires a synthesisable model (f64 chain shader path).
+          ChainShaderCodegen.detect_meta/1 returned :unsupported for this IR.
+          Either:
+            - use `compiler: :exla` (if EXLA is available on this platform)
+            - use `compiler: :none` (pure CPU, slower but correct)
+            - reshape the model so CustomSynth can emit a fused f64 chain shader
+              (standard-family priors with optional Custom likelihood, d <= 256)
+          """
+
+          if Application.get_env(:exmc, :allow_vulkan_perop_sampling, false) do
+            require Logger
+            Logger.warning("[Compiler] Plan B' guard bypassed: #{msg}")
+          else
+            raise Exmc.SynthUnsupportedError, ir: ir, message: msg
+          end
+      end
+    end
+
+    {vag_fn, step_fn, pm, ncp_info, multi_step_fn, chain_meta}
   end
 
   @doc """
@@ -165,7 +226,28 @@ defmodule Exmc.Compiler do
     data = obs_data || @data_sentinel
     fn q, p, grad, epsilon, inv_mass_diag ->
       eps_t = Nx.tensor(epsilon, type: fp, backend: Nx.BinaryBackend)
-      raw.(q, p, grad, eps_t, inv_mass_diag, data)
+
+      try do
+        raw.(q, p, grad, eps_t, inv_mass_diag, data)
+      rescue
+        ArithmeticError ->
+          # Divide-by-zero / overflow inside value_and_grad. On EXLA this
+          # produces IEEE inf/nan that flow through and the divergence
+          # check at the tree level handles them. On BinaryBackend the
+          # Complex.divide path raises instead, which would crash the
+          # whole sampler if not caught here. Return a divergent 5-tuple
+          # — q/p/grad unchanged, joint_logp very negative so the delta
+          # against joint_logp_0 trips the divergence threshold cleanly.
+          neg_huge = Nx.tensor(-1.0e300, type: fp, backend: Nx.BinaryBackend)
+
+          zero_grad =
+            Nx.broadcast(
+              Nx.tensor(0.0, type: fp, backend: Nx.BinaryBackend),
+              Nx.shape(grad)
+            )
+
+          {q, p, neg_huge, zero_grad, neg_huge}
+      end
     end
   end
 
@@ -205,7 +287,11 @@ defmodule Exmc.Compiler do
       [
         fn vm ->
           resolved = resolve_params_constrained(params, vm, pm, ncp_info)
-          dist.logpdf(Map.fetch!(vm, id), resolved)
+          # Sum across data dims so multivariate priors collapse to a
+          # scalar joint logp. No-op for scalar v. Without this,
+          # Nx.Defn.Grad fails on the vector-shaped output ("cannot
+          # reshape {n} to {}") for any RV with shape > {}.
+          Nx.sum(dist.logpdf(Map.fetch!(vm, id), resolved))
         end
       ]
     else
@@ -226,7 +312,7 @@ defmodule Exmc.Compiler do
           x = Transform.apply(transform, z)
           logp = dist.logpdf(x, resolved)
           jac = Transform.log_abs_det_jacobian(transform, z)
-          Nx.add(logp, jac)
+          Nx.sum(Nx.add(logp, jac))
         end
       ]
     else
@@ -419,7 +505,11 @@ defmodule Exmc.Compiler do
 
   defp inverse_transform(nil, x), do: x
   defp inverse_transform(:log, x), do: Nx.log(x)
-  defp inverse_transform(:softplus, x), do: Nx.log(Nx.expm1(x))
+  defp inverse_transform(:softplus, x) do
+    # Numerically stable: log(expm1(x)) = x + log(1 - exp(-x)).
+    # Avoids exp(x) overflow at large x (PATH_TO_FULL_PASS step 2a).
+    Nx.add(x, Nx.log1p(Nx.negate(Nx.exp(Nx.negate(x)))))
+  end
   defp inverse_transform(:logit, x), do: Nx.subtract(Nx.log(x), Nx.log1p(Nx.negate(x)))
   defp inverse_transform(:stick_breaking, x), do: Transform.inverse_stick_breaking(x)
 

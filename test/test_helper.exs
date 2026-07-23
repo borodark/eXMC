@@ -23,8 +23,8 @@ ExUnit.start(exclude: [:diag, :slow])
 
 # Backend-conditional test exclusions.
 #
-# When running under an f32-only backend (Vulkan, EMLX), tests
-# tagged :requires_f64 are skipped. Their precision-tolerance
+# When forcing precision to f32 (`config :exmc, :force_precision, :f32`),
+# tests tagged :requires_f64 are skipped. Their precision-tolerance
 # assertions (typically `assert_close` against finite-difference
 # gradients with tol ≤ 1e-2) are tuned for f64 reverse-mode
 # autodiff and reliably fail under f32.
@@ -34,16 +34,20 @@ ExUnit.start(exclude: [:diag, :slow])
 # bugs (not precision noise) documented in
 # docs/VULKAN_KNOWN_ISSUES.md. Remove the tag once the
 # corresponding issue is fixed.
+#
+# (EMLX/Apple Metal is postponed until real hardware is available —
+# see the `Exmc.JIT` moduledoc. Restore its `:emlx` branch here then.)
+#
 # Note: each ExUnit.configure(exclude: ...) call replaces the exclude
 # list. Carry forward the [:diag, :slow] base from ExUnit.start above.
 base_excludes = [:diag, :slow]
 
+f32? = Application.get_env(:exmc, :force_precision) == :f32
+
 case Application.get_env(:exmc, :compiler) do
   :vulkan ->
-    ExUnit.configure(exclude: base_excludes ++ [:requires_f64, :vulkan_known_failure])
-
-  :emlx ->
-    ExUnit.configure(exclude: base_excludes ++ [:requires_f64, :requires_vulkan])
+    f64_excludes = if f32?, do: [:requires_f64], else: []
+    ExUnit.configure(exclude: base_excludes ++ f64_excludes ++ [:vulkan_known_failure])
 
   _ ->
     ExUnit.configure(exclude: base_excludes ++ [:requires_vulkan])

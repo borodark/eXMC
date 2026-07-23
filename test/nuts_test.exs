@@ -27,7 +27,9 @@ defmodule Exmc.NUTSTest do
       |> Builder.rv("x", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
       |> Rewrite.apply()
 
-    {vag_fn, step_fn, pm, _ncp_info, _multi_step_fn} = Exmc.Compiler.compile_for_sampling(ir)
+    {vag_fn, step_fn, pm, _ncp_info, _multi_step_fn, _chain_meta} =
+      Exmc.Compiler.compile_for_sampling(ir)
+
     {vag_fn, step_fn, pm}
   end
 
@@ -421,7 +423,7 @@ defmodule Exmc.NUTSTest do
         |> Builder.rv("y", Normal, %{mu: Nx.tensor(2.0), sigma: Nx.tensor(0.5)})
         |> Rewrite.apply()
 
-      {_vag_fn, _step_fn, pm, _ncp_info, multi_step_fn} =
+      {_vag_fn, _step_fn, pm, _ncp_info, multi_step_fn, _chain_meta} =
         Exmc.Compiler.compile_for_sampling(ir)
 
       assert multi_step_fn != nil, "multi_step_fn should be compiled"
@@ -480,7 +482,7 @@ defmodule Exmc.NUTSTest do
         |> Builder.rv("x", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
         |> Rewrite.apply()
 
-      {vag_fn, step_fn, _pm, _ncp_info, multi_step_fn} =
+      {vag_fn, step_fn, _pm, _ncp_info, multi_step_fn, _chain_meta} =
         Exmc.Compiler.compile_for_sampling(ir)
 
       q = Nx.tensor([0.0], type: :f64)

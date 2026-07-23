@@ -197,14 +197,29 @@ defmodule Exmc.LogProb do
   defp to_tensor(%Nx.Tensor{} = t), do: t
   defp to_tensor(v) when is_number(v) or is_boolean(v), do: Nx.tensor(v)
 
-  # JIT-wrap LinAlg ops to avoid Nx 0.10 BinaryBackend LU bug on small matrices
+  # JIT-wrap LinAlg ops to avoid Nx 0.10 BinaryBackend LU bug on small matrices.
+  #
+  # nx 0.13: under EXMC_COMPILER=vulkan the Evaluator runs each op through the
+  # default (VulkanoBackend) backend, so the LU host-fallback's pivot/index
+  # tensors are allocated on VulkanoBackend and then leak into
+  # Nx.BinaryBackend.slice/5, crashing to_binary/1 (which only accepts
+  # BinaryBackend tensors). Pin the whole solve to BinaryBackend so the derived
+  # index tensors stay host-side too — the matrices here are tiny, so there is
+  # no GPU benefit to lose.
   defp jit_determinant(a) do
-    Exmc.JIT.jit(fn x -> Nx.LinAlg.determinant(x) end).(a)
+    Nx.with_default_backend(Nx.BinaryBackend, fn ->
+      a = Nx.backend_copy(a, Nx.BinaryBackend)
+      Exmc.JIT.jit(fn x -> Nx.LinAlg.determinant(x) end).(a)
+    end)
     |> Nx.backend_copy(Nx.BinaryBackend)
   end
 
   defp jit_solve(a, b) do
-    Exmc.JIT.jit(fn {x, y} -> Nx.LinAlg.solve(x, y) end).({a, b})
+    Nx.with_default_backend(Nx.BinaryBackend, fn ->
+      a = Nx.backend_copy(a, Nx.BinaryBackend)
+      b = Nx.backend_copy(b, Nx.BinaryBackend)
+      Exmc.JIT.jit(fn {x, y} -> Nx.LinAlg.solve(x, y) end).({a, b})
+    end)
     |> Nx.backend_copy(Nx.BinaryBackend)
   end
 end
