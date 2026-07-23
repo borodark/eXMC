@@ -9,9 +9,11 @@ defmodule Exmc.Compiler do
 
   alias Exmc.{IR, Rewrite, PointMap, Transform}
 
-  # Sentinel for models without observation data.
-  # A scalar constant — adds one trivial XLA parameter, compiles once.
-  @data_sentinel Nx.tensor(0.0, type: :f32, backend: Nx.BinaryBackend)
+  # Sentinel for models without observation data — a dummy scalar that is
+  # ignored for no-data models (the logp closure discards it). f64 to match the
+  # default precision after EMLX (the f32-only backend) was dropped; the runtime
+  # step/leapfrog paths use a precision-aware sentinel (see BatchedLeapfrog).
+  @data_sentinel Nx.tensor(0.0, type: :f64, backend: Nx.BinaryBackend)
 
   @doc """
   Compile an IR into a logp function and its PointMap.
