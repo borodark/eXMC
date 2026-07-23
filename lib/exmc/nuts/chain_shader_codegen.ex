@@ -47,7 +47,7 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
 
   Phase A + B implementations dispatch on the IR's nodes here.
   """
-  @spec detect_meta(IR.t()) :: {:ok, meta()} | :unsupported
+  @spec detect_meta(IR.t()) :: {:ok, meta()} | :unsupported | {:unsupported, :push_too_large}
   def detect_meta(%IR{nodes: nodes} = ir) when map_size(nodes) == 1 do
     # Surface A of PLAN_F64_CHAIN_SHADER (Option B): under D88's f64
     # Vulkano default, route single-family models to the vulkano synth

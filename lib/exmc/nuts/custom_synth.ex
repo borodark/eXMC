@@ -103,7 +103,7 @@ defmodule Exmc.NUTS.CustomSynth do
   exercised by `synthesise_with_template_glsl/2` (used by tests
   passing a hand-written shader).
   """
-  @spec synthesise(IR.t()) :: {:ok, synth_meta()} | :unsupported
+  @spec synthesise(IR.t()) :: {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
   def synthesise(%IR{} = ir) do
     with {:ok, components} <- extract_components(ir),
          {:ok, glsl} <- render_template(components, ir) do
@@ -123,7 +123,7 @@ defmodule Exmc.NUTS.CustomSynth do
 
   Returns `{:ok, {:synthesised, sha, layout, push_spec, spv_path, <<>>}}`.
   """
-  @spec synthesise_batched(IR.t()) :: {:ok, synth_meta()} | :unsupported
+  @spec synthesise_batched(IR.t()) :: {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
   def synthesise_batched(%IR{} = ir) do
     with {:ok, components} <- extract_components(ir),
          {:ok, glsl} <- Exmc.NUTS.CustomSynth.MultiRvCustomSpec.render_batched(components) do
@@ -136,11 +136,19 @@ defmodule Exmc.NUTS.CustomSynth do
       push_spec =
         Exmc.NUTS.CustomSynth.Push.build(components, K: 32, eps: 0.05, n_obs: n_obs)
 
-      with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
-        sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
-        {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, <<>>}}
-      else
-        _ -> :unsupported
+      # Same 128-byte push-constants cap as synthesise_with_template_glsl —
+      # reject (signalling :push_too_large) rather than crash at dispatch.
+      case Exmc.NUTS.CustomSynth.Push.pack(push_spec) do
+        {:error, :push_too_large} ->
+          {:unsupported, :push_too_large}
+
+        {:ok, _bin, _n} ->
+          with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
+            sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
+            {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, <<>>}}
+          else
+            _ -> :unsupported
+          end
       end
     else
       _ -> :unsupported
@@ -159,7 +167,7 @@ defmodule Exmc.NUTS.CustomSynth do
   the IR's `:data` field when present).
   """
   @spec synthesise_with_template_glsl(map(), binary(), IR.t(), keyword()) ::
-          {:ok, synth_meta()} | {:error, term()}
+          {:ok, synth_meta()} | {:unsupported, :push_too_large} | {:error, term()}
   def synthesise_with_template_glsl(components, glsl, %IR{} = ir, opts \\ []) do
     # Obs data has two sources: `ir.data` (Custom / regime models via
     # Builder.data) and the `observed` list (synth P1 — RVs carrying an
@@ -181,18 +189,30 @@ defmodule Exmc.NUTS.CustomSynth do
     push_spec =
       Exmc.NUTS.CustomSynth.Push.build(components, K: k, eps: eps, n_obs: n_obs)
 
-    obs_bin =
-      case ir.data do
-        %Nx.Tensor{} = t ->
-          t |> Nx.as_type(:f64) |> Nx.to_binary()
+    # Push-constants block is capped at 128 bytes; under f64 (8 B/float)
+    # only ~14 prior floats fit after the 16 B header, so higher-dimensional
+    # models overflow. Reject synthesis here — the model is valid, just too
+    # wide for the fused chain path — and signal the reason so the Plan B'
+    # guard degrades to per-op sampling instead of crashing later at
+    # Dispatch's `{:ok, _} = Push.pack(...)`.
+    case Exmc.NUTS.CustomSynth.Push.pack(push_spec) do
+      {:error, :push_too_large} ->
+        {:unsupported, :push_too_large}
 
-        _ ->
-          observed_obs_bin(observed)
-      end
+      {:ok, _bin, _n} ->
+        obs_bin =
+          case ir.data do
+            %Nx.Tensor{} = t ->
+              t |> Nx.as_type(:f64) |> Nx.to_binary()
 
-    with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
-      sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
-      {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin}}
+            _ ->
+              observed_obs_bin(observed)
+          end
+
+        with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
+          sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
+          {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin}}
+        end
     end
   end
 

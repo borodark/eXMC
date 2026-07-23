@@ -60,10 +60,12 @@ defmodule Exmc.Compiler do
     # the corresponding chain shader at dispatch time. Hierarchical
     # models, observed-data models, and unsupported distributions
     # return :unsupported and fall through to multi_step_fn.
+    detect = Exmc.NUTS.ChainShaderCodegen.detect_meta(ir)
+
     chain_meta =
-      case Exmc.NUTS.ChainShaderCodegen.detect_meta(ir) do
+      case detect do
         {:ok, meta} -> meta
-        :unsupported -> nil
+        _ -> nil
       end
 
     # Plan B' guard: vulkan compiler must have a synthesisable IR.
@@ -71,24 +73,43 @@ defmodule Exmc.Compiler do
     # per-op CPU via Evaluator + VulkanoBackend host-fallbacks. Fail
     # loud at compile time instead.
     #
-    # Escape hatch: `config :exmc, :allow_vulkan_perop_sampling, true`
-    # logs a warning instead of raising. Default OFF.
+    # Exception: `{:unsupported, :push_too_large}` means the model *is*
+    # shape-synthesisable but its prior params exceed the 128-byte f64
+    # push-constants block. The model is valid, just too wide for the fused
+    # chain path, so degrade to per-op sampling (slower but correct) instead
+    # of raising — this is what "fall back on push_too_large" means.
+    #
+    # Escape hatch for the generic case:
+    # `config :exmc, :allow_vulkan_perop_sampling, true` logs a warning
+    # instead of raising. Default OFF.
     if Exmc.JIT.detect_compiler() == Nx.Vulkan and is_nil(chain_meta) do
-      msg = """
-      Vulkan compiler requires a synthesisable model (f64 chain shader path).
-      ChainShaderCodegen.detect_meta/1 returned :unsupported for this IR.
-      Either:
-        - use `compiler: :exla` (if EXLA is available on this platform)
-        - use `compiler: :none` (pure CPU, slower but correct)
-        - reshape the model so CustomSynth can emit a fused f64 chain shader
-          (standard-family priors with optional Custom likelihood, d <= 256)
-      """
+      case detect do
+        {:unsupported, :push_too_large} ->
+          require Logger
 
-      if Application.get_env(:exmc, :allow_vulkan_perop_sampling, false) do
-        require Logger
-        Logger.warning("[Compiler] Plan B' guard bypassed: #{msg}")
-      else
-        raise Exmc.SynthUnsupportedError, ir: ir, message: msg
+          Logger.warning(
+            "[Compiler] push-constants overflow (>128 B at f64) — falling back to " <>
+              "per-op vulkan sampling for this IR (slower but correct). Reduce the " <>
+              "free-RV count or reshape to fit the fused f64 chain shader."
+          )
+
+        _ ->
+          msg = """
+          Vulkan compiler requires a synthesisable model (f64 chain shader path).
+          ChainShaderCodegen.detect_meta/1 returned :unsupported for this IR.
+          Either:
+            - use `compiler: :exla` (if EXLA is available on this platform)
+            - use `compiler: :none` (pure CPU, slower but correct)
+            - reshape the model so CustomSynth can emit a fused f64 chain shader
+              (standard-family priors with optional Custom likelihood, d <= 256)
+          """
+
+          if Application.get_env(:exmc, :allow_vulkan_perop_sampling, false) do
+            require Logger
+            Logger.warning("[Compiler] Plan B' guard bypassed: #{msg}")
+          else
+            raise Exmc.SynthUnsupportedError, ir: ir, message: msg
+          end
       end
     end
 
