@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 (2026-07-23) — A Posterior on Any GPU
+
+Vulkan f64 GPU backend + Nx 0.13. NUTS now runs on the GPU via nx_vulkan's
+`VulkanoBackend` (fused f64 leapfrog chain shaders) in addition to EXLA — select
+with `EXMC_COMPILER=vulkan`. Runs anywhere Vulkan does, including FreeBSD and MoltenVK.
+
+- Vulkan f64 chain-shader sampling: multi-RV models synthesize a fused f64 leapfrog
+  chain shader and dispatch on the GPU; non-synthesizable models fall back to per-op.
+- Nx/EXLA 0.13; EMLX dropped; default precision is **f64** end to end.
+- Gamma/Beta priors route through the synth chain path (added `Push.prior_param_floats/1`
+  encoders).
+- Measurable-matmul under Vulkan: `jit_solve`/`jit_determinant` pinned to `BinaryBackend`
+  so the LU host-fallback's index tensors don't leak into `Nx.BinaryBackend.slice` and
+  crash under nx 0.13.
+- `push_too_large`: models whose priors exceed the 128-byte f64 push-constants block now
+  degrade to per-op sampling (with a warning) instead of crashing at dispatch.
+- f64 `@data_sentinel` (matches the post-EMLX default precision).
+- Validation: posteriordb **33/33** on EXLA-GPU; Vulkan fallback verified on the FreeBSD
+  GT 650M (mac-247); clean-room `mix deps.get` resolves nx 0.13 + nx_vulkan.
+- Requires nx_vulkan `main` (Nx-0.13-compatible).
+
+Story / release notes: [*A Posterior on Any GPU*](https://www.dataalienist.com/blog-a-posterior-on-any-gpu.html).
+
 ## 0.2.0 (2026-03-30)
 
 - Warm-start NUTS: reuse previous mass matrix + step size (5.8x speedup)
