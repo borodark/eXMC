@@ -116,6 +116,113 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
     |> Enum.sort_by(& &1.name)
   end
 
+  # --- Common-subexpression elimination (CSE) -----------------------
+  #
+  # The Defn graph is a DAG, but this emitter walks it as a tree, so a
+  # subexpression shared by K parents is re-emitted K times. In a
+  # softmax-mixture gradient a single denominator can recur thousands of
+  # times, producing a multi-hundred-KB shader that recomputes exp/log on
+  # the GPU per obs per leapfrog step. start_cse/1 marks the shared node
+  # ids; emit/2 hoists each to a `double _cseN = <expr>;` binding the first
+  # time it's seen and returns `_cseN` after. collect_cse/0 drains the
+  # bindings in dependency order (children bound before parents).
+
+  @cse_key :exmc_glsl_cse
+
+  @doc "Begin a CSE scope. `shared` = MapSet of Expr ids referenced >1×."
+  @spec start_cse(MapSet.t()) :: :ok
+  def start_cse(shared) do
+    Process.put(@cse_key, %{shared: shared, vars: %{}, binds: [], n: 0})
+    :ok
+  end
+
+  @doc "Drain CSE bindings (dependency order) and end the scope."
+  @spec collect_cse() :: [binary()]
+  def collect_cse do
+    st = Process.get(@cse_key)
+    Process.delete(@cse_key)
+
+    case st do
+      %{binds: b} -> Enum.reverse(b)
+      _ -> []
+    end
+  end
+
+  @doc "Set of Expr node ids referenced more than once in `expr`."
+  @spec shared_ids(T.t()) :: MapSet.t()
+  def shared_ids(expr) do
+    for {id, c} <- count_refs(expr, %{}), c > 1, into: MapSet.new(), do: id
+  end
+
+  defp count_refs(%T{data: %Expr{id: id, args: args}}, acc) do
+    case acc do
+      %{^id => c} -> Map.put(acc, id, c + 1)
+      _ -> Enum.reduce(args, Map.put(acc, id, 1), &count_refs/2)
+    end
+  end
+
+  defp count_refs(list, acc) when is_list(list), do: Enum.reduce(list, acc, &count_refs/2)
+  defp count_refs(_leaf, acc), do: acc
+
+  @doc """
+  Ids of nodes whose subtree references Defn parameter position `pos`.
+
+  Used to keep obs-dependent subexpressions (`obs_j`, an obs-loop variable)
+  out of the loop-invariant CSE bucket — only obs-independent shared nodes
+  may be hoisted above the `for (j < n_obs)` loop.
+  """
+  @spec dependent_ids(T.t(), non_neg_integer()) :: MapSet.t()
+  def dependent_ids(expr, pos) do
+    memo = dep_memo(expr, pos, %{})
+    for {id, true} <- memo, into: MapSet.new(), do: id
+  end
+
+  defp dep_memo(%T{data: %Expr{id: id, op: op, args: args}}, pos, memo) do
+    if Map.has_key?(memo, id) do
+      memo
+    else
+      memo = Enum.reduce(args, memo, &dep_memo(&1, pos, &2))
+      dep = (op == :parameter and args == [pos]) or Enum.any?(args, &arg_dep?(&1, memo))
+      Map.put(memo, id, dep)
+    end
+  end
+
+  defp dep_memo(list, pos, memo) when is_list(list),
+    do: Enum.reduce(list, memo, &dep_memo(&1, pos, &2))
+
+  defp dep_memo(_leaf, _pos, memo), do: memo
+
+  defp arg_dep?(%T{data: %Expr{id: id}}, memo), do: Map.get(memo, id, false)
+  defp arg_dep?(_, _), do: false
+
+  defp cse_action(id) do
+    case Process.get(@cse_key) do
+      %{shared: shared, vars: vars} ->
+        cond do
+          Map.has_key?(vars, id) -> {:bound, Map.fetch!(vars, id)}
+          MapSet.member?(shared, id) -> :hoist
+          true -> :inline
+        end
+
+      _ ->
+        :inline
+    end
+  end
+
+  defp cse_hoist(id, glsl) do
+    st = Process.get(@cse_key)
+    var = "_cse#{st.n}"
+
+    Process.put(@cse_key, %{
+      st
+      | vars: Map.put(st.vars, id, var),
+        binds: ["double #{var} = #{glsl};" | st.binds],
+        n: st.n + 1
+    })
+
+    var
+  end
+
   @typedoc "Vector-output emission result: list of (index, scalar GLSL expr)."
   @type vector_emit_result :: {:ok, [{non_neg_integer(), binary()}]} | {:error, term()}
 
@@ -216,8 +323,12 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
   Returns `{:ok, glsl_expr_string}` on success.
   """
   @spec emit(T.t(), layout) :: emit_result()
-  def emit(%T{data: %Expr{op: op, args: args}} = _expr, layout) do
-    do_emit(op, args, layout)
+  def emit(%T{data: %Expr{id: id, op: op, args: args}} = _expr, layout) do
+    case cse_action(id) do
+      {:bound, var} -> {:ok, var}
+      :hoist -> with {:ok, s} <- do_emit(op, args, layout), do: {:ok, cse_hoist(id, s)}
+      :inline -> do_emit(op, args, layout)
+    end
   end
 
   def emit(other, _layout), do: {:error, {:not_an_expr, other}}

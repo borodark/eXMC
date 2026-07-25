@@ -706,11 +706,19 @@ void main() {
             inner = binary_part(glsl, open_paren + 1, close_paren - open_paren - 1)
             accum = "#{prefix}#{n}"
 
+            # In-loop common-subexpression elimination: the per-obs body is
+            # emitted with heavy redundancy (a softmax denominator can recur
+            # thousands of times). Hoist repeated subexpressions into locals
+            # computed once per obs iteration — correct because obs_j and all
+            # bindings share this one loop scope.
+            {cse_binds, inner_cse} = cse_loop_body(inner)
+
             loop_block = """
             double #{accum} = 0.0lf;
             for (uint j = 0u; j < pc.n_obs; j++) {
                 double obs_j = obs_inv_mass[j];
-                #{accum} += (#{inner});
+            #{cse_binds}
+                #{accum} += (#{inner_cse});
             }
             """
 
@@ -722,6 +730,97 @@ void main() {
         end
     end
   end
+
+  # --- In-loop common-subexpression elimination -------------------
+  #
+  # Greedy shortest-first hoisting of repeated balanced subexpressions in
+  # the per-obs body. Shortest-first means innermost bindings are created
+  # first, so a later (larger) binding references the vars introduced by
+  # earlier ones and creation order already is dependency order. Every
+  # binding and use shares the single obs-loop scope, so this is a safe
+  # local transform (validated numerically against the non-CSE shader).
+
+  @cse_min_len 18
+  @cse_max_binds 600
+
+  defp cse_loop_body(inner) do
+    # Toggle for benchmarking/debugging: `config :exmc, glsl_cse: false` emits
+    # the raw redundant body (no hoisting). On by default.
+    if Application.get_env(:exmc, :glsl_cse, true) do
+      do_cse_loop_body(inner)
+    else
+      {"", inner}
+    end
+  end
+
+  defp do_cse_loop_body(inner) do
+    {binds, expr} = cse_hoist(inner, [], 0)
+
+    lines =
+      binds
+      |> Enum.reverse()
+      |> Enum.map_join("\n", fn {v, s} -> "        double #{v} = #{s};" end)
+
+    {lines, expr}
+  end
+
+  defp cse_hoist(expr, binds, n) when n >= @cse_max_binds, do: {binds, expr}
+
+  defp cse_hoist(expr, binds, n) do
+    case shortest_repeat(expr) do
+      nil ->
+        {binds, expr}
+
+      sub ->
+        var = "_c#{n}"
+        cse_hoist(String.replace(expr, sub, var), [{var, sub} | binds], n + 1)
+    end
+  end
+
+  defp shortest_repeat(expr) do
+    expr
+    |> group_freqs()
+    |> Enum.filter(fn {s, c} -> c > 1 and byte_size(s) >= @cse_min_len end)
+    |> case do
+      [] -> nil
+      list -> list |> Enum.min_by(fn {s, _} -> byte_size(s) end) |> elem(0)
+    end
+  end
+
+  # Frequency map of all balanced `(...)` groups, each with its call-name
+  # prefix (so `exp_d(...)` is captured whole, not just `(...)`).
+  defp group_freqs(expr) do
+    scan_groups(:binary.bin_to_list(expr), 0, expr, [], %{})
+  end
+
+  defp scan_groups([], _i, _expr, _stack, freq), do: freq
+
+  defp scan_groups([?( | rest], i, expr, stack, freq),
+    do: scan_groups(rest, i + 1, expr, [{i, ident_start(expr, i)} | stack], freq)
+
+  defp scan_groups([?) | rest], i, expr, [{_open, istart} | stack], freq) do
+    group = binary_part(expr, istart, i - istart + 1)
+    scan_groups(rest, i + 1, expr, stack, Map.update(freq, group, 1, &(&1 + 1)))
+  end
+
+  defp scan_groups([?) | rest], i, expr, [], freq),
+    do: scan_groups(rest, i + 1, expr, [], freq)
+
+  defp scan_groups([_c | rest], i, expr, stack, freq),
+    do: scan_groups(rest, i + 1, expr, stack, freq)
+
+  # Start index of the identifier immediately before the `(` at `i`
+  # (so the call name is included), or `i` for a bare group.
+  defp ident_start(expr, i), do: scan_ident(expr, i - 1)
+
+  defp scan_ident(expr, j) when j >= 0 do
+    if ident_char?(:binary.at(expr, j)), do: scan_ident(expr, j - 1), else: j + 1
+  end
+
+  defp scan_ident(_expr, _j), do: 0
+
+  defp ident_char?(c),
+    do: (c >= ?a and c <= ?z) or (c >= ?A and c <= ?Z) or (c >= ?0 and c <= ?9) or c == ?_
 
   # Given the open-paren index, find the matching close-paren index.
   defp find_matching_paren(glsl, open_idx) do
