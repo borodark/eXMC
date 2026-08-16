@@ -55,7 +55,15 @@ defmodule Exmc.MixProject do
       groups_for_modules: [
         "Model Building": [Exmc.Builder, Exmc.DSL, Exmc.IR, Exmc.Node],
         Distributions: ~r/Exmc\.Dist\./,
-        Inference: [Exmc.NUTS.Sampler, Exmc.ADVI, Exmc.SMC, Exmc.Pathfinder],
+        Inference: [
+          Exmc.NUTS.Sampler,
+          Exmc.MCLMC,
+          Exmc.MAMS,
+          Exmc.ADVI,
+          Exmc.SMC,
+          Exmc.Pathfinder
+        ],
+        "Inference internals": [Exmc.MCLMC.Integrator, Exmc.MCLMC.Tuning],
         Compiler: [Exmc.Compiler, Exmc.PointMap, Exmc.Transform],
         Diagnostics: [Exmc.Diagnostics, Exmc.ModelComparison, Exmc.Predictive]
       ],
@@ -63,10 +71,41 @@ defmodule Exmc.MixProject do
     ]
   end
 
+  # FreeBSD is a Vulkan-only platform for this project, and that is a fact about
+  # the toolchain rather than a preference. The `xla` archive ships
+  # x86_64/aarch64 darwin and linux-gnu targets and nothing else, so on FreeBSD
+  # `XLA.download_precompiled!/1` raises
+  #
+  #     no precompiled XLA archive available for this target: amd64-freebsd15.0-cpu
+  #
+  # and `mix compile` dies in the dependency before reaching a single module of
+  # this library. Measured on mac-247, 2026-08-16, against a fresh clone of
+  # 0.3.1. The only escape hatch upstream offers is XLA_BUILD=true — a Bazel
+  # build of XLA from source, on a platform XLA has never been validated on.
+  #
+  # So exla is not merely optional here, it is *absent*: declaring it at all is
+  # what breaks the build. 0.3.1 already made exla `runtime: false` so a broken
+  # exla could not abort the VM at boot, and said in the CHANGELOG that
+  # "optional has to mean optional at runtime too, not merely at resolution
+  # time". This is the other half of that sentence — the resolution-time half,
+  # which that fix assumed was already fine.
+  #
+  # Nothing else changes: `nx` is pure Elixir, `nx_vulkan` builds from source,
+  # and `Exmc.JIT.auto_detect/0` already prefers EXLA where it exists and falls
+  # through to Vulkan where it does not. With exla off the dependency list on
+  # FreeBSD, auto-detect lands on Vulkan by itself — no config, no override.
+  @freebsd? match?({:unix, :freebsd}, :os.type())
+
   defp deps do
     [
-      nx_dep(),
-      exla_dep(),
+      nx_dep()
+    ] ++ exla_deps() ++ rest_of_deps()
+  end
+
+  defp exla_deps, do: if(@freebsd?, do: [], else: [exla_dep()])
+
+  defp rest_of_deps do
+    [
       # EMLX (Apple Metal / MLX) is postponed until real Apple hardware is
       # available to develop and test against — see `Exmc.JIT` moduledoc.
       # Cross-platform GPU compute via Vulkan (FreeBSD + Linux non-CUDA + macOS via MoltenVK).
