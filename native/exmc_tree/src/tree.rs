@@ -37,6 +37,20 @@ pub fn build_subtree(
 
         let second = build_subtree(states, inv_mass, joint_logp_0, half_depth, going_right, counter, rng);
 
+        // An invalid right half contributes neither weight nor a candidate
+        // proposal — Stan's build_tree returns false on `!valid_right` BEFORE
+        // the multinomial sample between the halves. Mirrors the same guard in
+        // tree.ex build_subtree/10; see the comment on do_build/11 there for
+        // what merging it anyway does to the posterior.
+        if second.divergent || second.turning {
+            let mut invalid = first;
+            invalid.n_steps += second.n_steps;
+            invalid.accept_sum += second.accept_sum;
+            invalid.divergent = invalid.divergent || second.divergent;
+            invalid.turning = true;
+            return invalid;
+        }
+
         merge_subtrees(first, second, going_right, inv_mass, rng)
     }
 }
@@ -318,6 +332,18 @@ pub fn build_full_tree(
             bwd_cursor += n_steps;
             s
         };
+
+        // Stan: `if (!valid_subtree) break;` — discard the whole doubling.
+        // Same rule as tree.ex do_build/11. depth is bumped here because
+        // merge_into_trajectory, which normally does it, is being skipped.
+        if subtree.divergent || subtree.turning {
+            traj.n_steps += subtree.n_steps;
+            traj.accept_sum += subtree.accept_sum;
+            traj.divergent = traj.divergent || subtree.divergent;
+            traj.turning = true;
+            traj.depth += 1;
+            break;
+        }
 
         merge_into_trajectory(&mut traj, subtree, go_right, inv_mass, rng);
     }

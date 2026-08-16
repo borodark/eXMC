@@ -45,8 +45,12 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       the template rebinds `qi = qn` before the second
       half-step so the same fragment evaluates at the new
       position.
-    * `{{prior_logp_body_q}}` — `if (tid == N) { lp_i = <emitted>; }`
-      chain; emitter-derived log-density per prior.
+    * `{{prior_logp_body_qn}}` — `if (tid == N) { lp_i = <emitted>; }`
+      chain; emitter-derived log-density per prior. Rendered into
+      the POST-update block, beside `{{prior_grad_body_qn}}`, so
+      that `logp_chain[k]` describes the same state as
+      `q_chain[k]`. It used to sit in the pre-update block, which
+      made every returned density lag its position by one step.
 
   Numerical equivalence vs `mod.logpdf` is validated in
   `multi_rv_custom_spec_test.exs` under the R2.2.4 describe.
@@ -97,10 +101,8 @@ void main() {
         barrier();
 
         double grad_q = 0.0lf;
-        double lp_i   = 0.0lf;
         if (in_bounds) {
 {{prior_grad_body_q}}
-{{prior_logp_body_q}}
         }
         double p_half = pi + 0.5lf * pc.eps * grad_q;
 
@@ -111,9 +113,17 @@ void main() {
         if (in_bounds) q_shared[tid] = qi;
         barrier();
 
+        // The log-density MUST be evaluated here, on the POST-update position,
+        // because logp_chain[k] is read back alongside q_chain[k]/p_chain[k]
+        // and is expected to describe the same state they do. Evaluating it in
+        // the pre-update block above made logp_chain[k] describe the state
+        // BEFORE step k — a one-step lag that the host then fed straight into
+        // the Metropolis ratio and the U-turn test.
         double grad_qn = 0.0lf;
+        double lp_i    = 0.0lf;
         if (in_bounds) {
 {{prior_grad_body_qn}}
+{{prior_logp_body_qn}}
         }
         pi = p_half + 0.5lf * pc.eps * grad_qn;
 
@@ -404,7 +414,7 @@ void main() {
         @template
         |> String.replace("{{prior_grad_body_q}}", indent(grad_q_body, 12))
         |> String.replace("{{prior_grad_body_qn}}", indent(grad_qn_body, 12))
-        |> String.replace("{{prior_logp_body_q}}", indent(logp_body, 12))
+        |> String.replace("{{prior_logp_body_qn}}", indent(logp_body, 12))
         |> String.replace("{{captured_decls}}", helpers)
         |> rewrite_transcendentals_f64()
 
@@ -479,7 +489,7 @@ void main() {
         @template
         |> String.replace("{{prior_grad_body_q}}", indent(grad_q_body, 12))
         |> String.replace("{{prior_grad_body_qn}}", indent(grad_qn_body, 12))
-        |> String.replace("{{prior_logp_body_q}}", indent(logp_body, 12))
+        |> String.replace("{{prior_logp_body_qn}}", indent(logp_body, 12))
         |> String.replace("{{captured_decls}}", full_captured)
         |> rewrite_transcendentals_f64()
 
@@ -1072,10 +1082,8 @@ void main() {
           barrier();
 
           float grad_q = 0.0;
-          float lp_i   = 0.0;
           if (in_bounds) {
   {{prior_grad_body_q}}
-  {{prior_logp_body_q}}
           }
           float p_half = pi + 0.5 * pc.eps * grad_q;
           float qn = qi + pc.eps * mi * p_half;
@@ -1085,9 +1093,13 @@ void main() {
           if (in_bounds) q_shared[tid] = qi;
           barrier();
 
+          // POST-update, for the same reason as the single-instance template:
+          // logp_chain[k] must describe the state q_chain[k] describes.
           float grad_qn = 0.0;
+          float lp_i    = 0.0;
           if (in_bounds) {
   {{prior_grad_body_qn}}
+  {{prior_logp_body_qn}}
           }
           pi = p_half + 0.5 * pc.eps * grad_qn;
 
@@ -1188,7 +1200,7 @@ void main() {
         @batched_template
         |> String.replace("{{prior_grad_body_q}}", indent(grad_q_body, 16))
         |> String.replace("{{prior_grad_body_qn}}", indent(grad_qn_body, 16))
-        |> String.replace("{{prior_logp_body_q}}", indent(logp_body, 16))
+        |> String.replace("{{prior_logp_body_qn}}", indent(logp_body, 16))
         |> String.replace("{{captured_decls}}", captured_decls)
 
       {:ok, glsl}

@@ -22,11 +22,33 @@ defmodule Exmc.IntegrationTest do
 
     {trace, stats} = Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 500, seed: 42)
 
-    summary = Diagnostics.summary(trace)
-    mu_stats = summary["mu"]
+    samples = trace |> Map.fetch!("mu") |> Nx.to_flat_list()
 
-    assert_in_delta mu_stats.mean, 4.95, 0.5
-    assert_in_delta mu_stats.std, :math.sqrt(0.99), 0.5
+    # The conjugate posterior in closed form, rather than the rounded 4.95 and
+    # sqrt(0.99) this test used to compare against:
+    #   precision = 1/100 + 1/1        = 1.01
+    #   var       = 1/1.01             = 0.990099...
+    #   mean      = (0/100 + 5/1)/1.01 = 4.950495...
+    post_var = 1.0 / (1.0 / 100.0 + 1.0)
+    post_mean = 5.0 / (1.0 / 100.0 + 1.0)
+
+    # This used to be `assert_in_delta mu_stats.std, sqrt(0.99), 0.5`, which
+    # accepts any std from 0.495 to 1.495 — a factor of 2.3 either way on the
+    # standard deviation, so a factor of 5 on the variance. It passed
+    # comfortably for months while the sampler returned a variance inflated by
+    # 38% (see CHANGELOG 0.3.1). A tolerance that wide is not a correctness
+    # test, it is a smoke test wearing one's clothes.
+    #
+    # check_analytic/3 derives its tolerance from this chain's own effective
+    # sample size rather than from a round number, so it tightens automatically
+    # as the sampler improves and cannot be satisfied by a defect this size.
+    assert :ok ==
+             Exmc.NUTS.Vulkan.Validator.check_analytic(
+               samples,
+               :host,
+               {:normal, post_mean, :math.sqrt(post_var)}
+             )
+
     assert stats.divergences < 20
   end
 
@@ -608,6 +630,12 @@ defmodule Exmc.IntegrationTest do
 
   # ── 21. Vector obs narrows posterior same as scalar obs ──────────
 
+  # KNOWN FAILING under the default `compiler: :vulkan`, and deliberately left
+  # red rather than skipped: the scalar arm returns a completely frozen chain
+  # (1 distinct value in 500 draws) while the vector arm lands on the analytic
+  # answer. See docs/OPEN_VULKAN_OBSERVED_MODEL.md. Under `compiler: :none`
+  # both arms are correct. Hiding this behind a skip is the exact habit that
+  # let two posterior defects ship — see CHANGELOG 0.3.1.
   test "vector obs produces same posterior as equivalent scalar obs" do
     # Scalar version: 3 separate obs nodes
     ir_scalar =
