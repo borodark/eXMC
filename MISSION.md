@@ -16,6 +16,33 @@ smoothed over. Two of those disagreements are correctness bugs shipping in
 
 ---
 
+## Read these first, in this order
+
+1. **This document**, and then its P0 section twice. P0 is a correctness
+   backport, it blocks everything else, and one of its two commits must be
+   merged **by hand** (this repo has a `glsl_cse` toggle the private repo
+   lacks, so the patch does not apply cleanly).
+2. The two upstream commits P0 names, in `/home/io/projects/learn_erl/pymc`:
+   `ce5775430` (four missing `!valid_subtree` guards) and `2a1b6b4eb` (the
+   chain shader's `logp_chain` off-by-one). Read the commit messages — they
+   explain the defect better than any doc here does.
+3. `/home/io/projects/learn_erl/pymc/exmc/docs/VERIFICATION_METHODS.md` —
+   cross-repo. Ranks what to build so defects like those get caught. An OSS
+   project has a stronger claim on correctness infrastructure than a private
+   one does; this is the roadmap for it.
+4. `/home/io/projects/learn_erl/nx_vulkan/bench_results/MODEL_SCALING.md` —
+   cross-repo, and the source of every GPU claim in this document, including
+   the one that constrains the whole story: EXLA on the host CPU beats the
+   Vulkan path 20–215× at every size tested.
+
+**The fact to hold while reading:** release 0.3.0 is named *"A Posterior on Any
+GPU"*, and the feature it is named after produced `Normal(0,1)` posterior
+variance of **8.55 against a true 1.0**. It was blamed on Ampere hardware for
+three weeks. Neither the 33/33 posteriordb gate nor any unit test in this repo
+is tight enough to have caught it. That is the shape of the problem this
+mission is mostly about.
+
+
 ## 0. Orientation — three repositories, and which one this is
 
 You will find three trees on this machine with `exmc` in the path. They are not
