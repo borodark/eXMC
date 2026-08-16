@@ -98,6 +98,19 @@ defmodule Exmc.MixProject do
   #
   # 192.168.0.249 rather than localhost so the same mix.exs resolves from the
   # FreeBSD Keplers, which reach the server over the network.
+  # The ref MUST be a sha that exists on the server above — not merely one that
+  # exists in someone's local nx_vulkan checkout. Pinning an unpushed commit
+  # breaks `mix deps.get` for every other host, and the Keplers are the ones
+  # that would find out.
+  #
+  # This attribute was previously declared with no value, so `ref:` below
+  # resolved to `nil` and the pinning this comment describes was not actually
+  # happening — mix fell back to the lockfile, and a fresh resolve would have
+  # taken whatever the default branch pointed at. The compiler had been saying
+  # so ("undefined module attribute @nx_vulkan_ref") in every build.
+  #
+  # To bump: push nx_vulkan to origin first, then set this to the new sha and
+  # run `mix deps.update nx_vulkan` so mix.lock moves with it.
   @nx_vulkan_git "git@192.168.0.249:/home/git/repos/nx_vulkan.git"
   @nx_vulkan_ref "7067499ecdc2f4b6a2981e5be4860139bfb8c712"
 
