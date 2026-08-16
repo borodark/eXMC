@@ -41,6 +41,19 @@
   tripwire: it asserts the import is live and that a configured compiler is the
   compiler `detect_compiler/0` actually returns.
 
+- **A test leaked `compiler: :none` into every test that ran after it.**
+  `p0_correctness_test.exs`'s `draw/3` helper pinned the compiler to `:none`
+  for its host-path checks and never restored it. `Application.put_env/3` is
+  global and lives for the rest of the VM, and ExUnit orders files by a random
+  seed, so an arbitrary and run-varying fraction of the suite silently sampled
+  on the pure-Elixir path regardless of `EXMC_COMPILER`. It now saves and
+  restores.
+
+  This is the same vacuity as the config defect above and survived the fix for
+  it. The same pattern remains for `use_nif`, `full_tree_nif` and
+  `speculative_precompute` across four other test files — the keys that select
+  which of the three tree implementations runs — and is tracked in NEXT.md.
+
   With the sweep working, `integration_test.exs:639` is red again under
   `EXMC_COMPILER=vulkan`, which is the correct state — the open defect in
   `docs/OPEN_VULKAN_OBSERVED_MODEL.md` reproduces to the digit (scalar arm: 1

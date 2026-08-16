@@ -177,8 +177,29 @@ defmodule Exmc.NUTS.P0CorrectnessTest do
   # Helpers
   # ------------------------------------------------------------------
 
+  # These checks are deliberately run on the host path, so they pin the
+  # compiler to :none — but `Application.put_env/3` is global and lives for the
+  # rest of the VM. Setting it without restoring it leaked `:none` into every
+  # test that happened to run after this file, which silently converted the
+  # whole backend sweep into another run of the pure-Elixir path. Because
+  # ExUnit orders files by a random seed, *how much* of the suite it swallowed
+  # varied run to run: `EXMC_COMPILER=vulkan mix test` reported 3 failures for
+  # the full suite while `EXMC_COMPILER=vulkan mix test test/integration_test.exs`
+  # reported 2, the extra one being the known Vulkan defect at
+  # integration_test.exs:639.
+  #
+  # Restore it. A test that mutates application env owes the next test the
+  # value it found.
   defp draw(dist, params, seeds \\ [1, 2]) do
+    previous = Application.fetch_env(:exmc, :compiler)
     Application.put_env(:exmc, :compiler, :none)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:exmc, :compiler, value)
+        :error -> Application.delete_env(:exmc, :compiler)
+      end
+    end)
 
     ir =
       Builder.new_ir()

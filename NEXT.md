@@ -109,7 +109,8 @@ Ranked. Item 1 is the only one that blocks calling the default backend correct.
 | 1 | **The vulkan observed-model defect.** `compiler: :vulkan` returns a frozen chain (1 distinct value in 500 draws, `accept_prob` ≈ 0.002) for models with observations. Full write-up, evidence, and the next experiment in [`docs/OPEN_VULKAN_OBSERVED_MODEL.md`](docs/OPEN_VULKAN_OBSERVED_MODEL.md). | 1–3 days | it is the **default** compiler. Until this is fixed, the default can silently return a degenerate posterior. |
 | 2 | **The `assert_in_delta` sweep.** 0.3.1 tightened exactly one assertion (`integration_test.exs:29`, now checking the closed-form conjugate posterior via `Validator.check_analytic/3`). The rest of the suite is unswept. Find every tolerance that would accept a 20% variance error. | half a day | this is VERIFICATION_METHODS' rank-1 item and the reason two defects shipped |
 | 3 | ~~**The EXLA build.**~~ **Done — both halves.** The library bug is fixed (`exla` is `runtime: false`, `Exmc.JIT` starts it lazily and treats a failed start as "backend unavailable", covered by `test/optional_deps_test.exs`), *and* this host now has a working CPU EXLA. Recipe and its two traps in [`docs/EXLA_CPU_BUILD.md`](docs/EXLA_CPU_BUILD.md); the short version is `EXLA_CPU_ONLY=1 XLA_TARGET=cpu`, not `XLA_TARGET=cpu`. | — | — |
-| 4 | **`test/integration_test.exs`.** With EXLA working, `mix test` is now **372 tests, 1 failure** for the whole repo. The remaining one is the wall-clock assertion (`integration_test.exs:762`, now `vectorized=1078ms should be < parallel=575ms`) and belongs in `bench/`. The other three from the old count were artefacts of Vulkan-by-default and are green under EXLA — **not fixed, not exercised**; see item 5. | 1 hour | a permanently-red suite trains people to ignore red |
+| 4 | **The wall-clock test.** `mix test` is now **375 tests, 0 failures** on the default (EXLA) path. The only default-path failure left is `integration_test.exs:738` — `assert t_vec < t_par` — and it is **timing-flaky**, not consistently red: it failed at `1034ms < 659ms` on one run and passed on the next with no code change. Move it to `bench/`. The other three failures NEXT.md originally listed were artefacts of Vulkan-by-default and are green under EXLA — **not fixed, not exercised**. | 1 hour | a flaky red trains people to ignore red faster than a stable one |
+| 6 | **Tests leak `:exmc` application env into each other.** `Application.put_env/3` is global and VM-lifetime; ExUnit orders files by a random seed. `p0_correctness_test.exs` leaked `compiler: :none` into everything after it (fixed — see below), but the same pattern is all over `nuts_test.exs`, `native_tree_test.exs`, `statham_tree_test.exs` and `fused_chain_diag_test.exs` for **`use_nif`, `full_tree_nif`, `speculative_precompute`** — the keys that select which of the three tree implementations runs (§5). Only `fault_tolerant_test.exs:201` saves and restores. So which tree a given test exercises depends on file ordering, and varies run to run. | half a day | same vacuity class as item 5, and it reaches the tree implementations directly. Do it **with** item 2 — a tolerance sweep is worth much less if you cannot say which implementation was under test. |
 | 5 | ~~**`config/test.exs` had never been loaded.**~~ **Fixed.** `config/config.exs` was one line, `import Config`, with no `import_config` — and Mix auto-loads only `config/config.exs`, so every setting in `config/test.exs` was dead: the `EXMC_COMPILER` switch, `config :exla, default_client: :host`, `allow_vulkan_perop_sampling`. **Every `EXMC_COMPILER=vulkan mix test` ever run sampled with whatever auto-detect picked and reported a pass for it.** Now imported, with `test/config_test.exs` as the tripwire. | — | — |
 
 ### Do not skip the red test — and mind which backend it is running
@@ -139,6 +140,25 @@ picks EXLA on this host and the Vulkan path is never entered (see the
 correction in §1). A bare `mix test` passing says nothing about item 1. Use
 `EXMC_COMPILER=vulkan`, and note that it only means anything now that item 5 is
 fixed.
+
+### What the Vulkan sweep actually says
+
+The first honest `EXMC_COMPILER=vulkan mix test` this repo has run:
+**375 tests, 4 failures**, against 375/0 on the default path.
+
+| test | failure |
+|---|---|
+| `new_dist_test.exs:271` | `{:error, :dispatch_failed, "read spv: No such file or directory"}` — a missing SPIR-V file, not a numerical defect |
+| `level_set_integration_test.exs:11` | timed out at 300s |
+| `fault_tolerant_test.exs:234` | `Variance collapsed: 1.45e-15` — **the frozen-chain signature of item 1**, in a second test |
+| `integration_test.exs:738` | the wall-clock assertion (item 4), fails on both paths |
+
+Two cautions on that table. It is **not yet reproducible run to run** — an
+earlier sweep produced a `poker_test.exs:228` timeout that this one did not, and
+`integration_test.exs:639` fails reliably when its file is run alone but did not
+fail in either full sweep. Item 6 is the likely reason and should be fixed
+before anyone treats these four as the list. And every Vulkan number recorded in
+this repo *before* items 5 and 6 may have been measuring `:none`.
 
 Two traps worth carrying forward, both of which produce a confident green:
 
