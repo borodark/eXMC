@@ -136,7 +136,27 @@ defmodule Exmc.MixProject do
   defp nx_dep(nil), do: {:nx, "~> 0.13"}
   defp nx_dep(path), do: {:nx, path: Path.join(path, "nx"), override: true}
 
+  # `runtime: false` keeps exla off the boot path — it stays on the code path
+  # and every module loads, but nothing starts it automatically. `Exmc.JIT`
+  # starts it on first use and treats a failed start as "backend unavailable".
+  #
+  # Without this, an exla that is *present but broken* aborts the VM before a
+  # single test runs. That is not hypothetical: the CUDA build of exla links
+  # `libnvshmem_host.so.3`, and on a host without it `EXLA.Application.start/2`
+  # fails, `mix test` never reaches ExUnit, and the whole suite is unrunnable
+  # over a dependency this project advertises as optional. Optional has to mean
+  # optional at runtime too, not merely at resolution time.
+  #
+  # This costs consumers nothing: `optional: true` means they declare exla in
+  # their own deps to get it, which puts it in *their* application list and
+  # starts it at boot as usual. The lazy start below is then a no-op.
+  #
+  # On a machine whose GPU stack cannot satisfy the CUDA build, compile the CPU
+  # one. It has two traps that both report as something other than what they
+  # are; the recipe and the reasoning are in docs/EXLA_CPU_BUILD.md.
   defp exla_dep, do: exla_dep(System.get_env("NX_PATH"))
-  defp exla_dep(nil), do: {:exla, "~> 0.13", optional: true}
-  defp exla_dep(path), do: {:exla, path: Path.join(path, "exla"), optional: true, override: true}
+  defp exla_dep(nil), do: {:exla, "~> 0.13", optional: true, runtime: false}
+
+  defp exla_dep(path),
+    do: {:exla, path: Path.join(path, "exla"), optional: true, runtime: false, override: true}
 end

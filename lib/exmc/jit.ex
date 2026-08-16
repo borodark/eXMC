@@ -142,8 +142,48 @@ defmodule Exmc.JIT do
     end
   end
 
+  # "Available" means usable, not merely on the code path. The two come apart
+  # more often than you would expect: a CUDA `exla` whose NIF cannot find
+  # `libnvshmem_host.so.3` compiles cleanly and ships every module, so
+  # `Code.ensure_loaded?/1` says yes — and then `EXLA.Application.start/2`
+  # fails and the first `jit/2` raises. Checking that the application actually
+  # starts is what makes an optional backend genuinely optional.
+  #
+  # `exla` is declared `runtime: false` in mix.exs precisely so that this is
+  # the code that starts it. A broken optional dep must not take the whole VM
+  # down at boot; it must make this function return false and let
+  # `auto_detect/0` fall through to the next backend.
+  #
+  # Memoised: a failed start logs a NIF stack trace, and once is enough.
   defp loaded?(mod) do
-    Code.ensure_loaded?(mod) and function_exported?(mod, :__info__, 1)
+    key = {__MODULE__, :usable?, mod}
+
+    case :persistent_term.get(key, :unknown) do
+      :unknown ->
+        usable? = probe(mod)
+        :persistent_term.put(key, usable?)
+        usable?
+
+      usable? ->
+        usable?
+    end
+  end
+
+  defp probe(mod) do
+    Code.ensure_loaded?(mod) and function_exported?(mod, :__info__, 1) and
+      started?(app_for(mod))
+  end
+
+  defp app_for(EXLA), do: :exla
+  defp app_for(Nx.Vulkan), do: :nx_vulkan
+  defp app_for(_mod), do: nil
+
+  defp started?(nil), do: true
+
+  defp started?(app) do
+    # Already-running apps return {:ok, []}, so this is a no-op for a backend
+    # the boot sequence started normally.
+    match?({:ok, _}, Application.ensure_all_started(app))
   end
 
   # When CUDA_VISIBLE_DEVICES="" (GPU hidden), force EXLA to use host client.
