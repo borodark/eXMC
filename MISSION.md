@@ -568,14 +568,27 @@ ranking rather than the conclusion.
 | 1 | **Backport `ce5775430`** — all four `!valid_subtree` guards (`tree.ex` `do_build/11` + `build_subtree/10`; `tree.rs` `build_subtree` + `build_full_tree`). The OSS regions are byte-identical to the private pre-fix state, so this is a clean cherry-pick. | half a day | removes a detailed-balance violation from a released library | **DONE** `cd516ef` |
 | 2 | **Backport `2a1b6b4eb` by hand** — `multi_rv_custom_spec.ex` `logp_chain` ordering, both `@template` and `@batched_template`. Preserve the OSS-only `glsl_cse` toggle. | half a day | removes an 8.55× variance error from the feature 0.3.0 is named after | **DONE** `cd516ef` |
 | 3 | **Regression tests that fail without 1 and 2.** Analytic-moment checks on `Normal(0,1)`, `HalfNormal(1)`, `Exponential(2)` with tolerances derived from the sampler's own ESS, not from a round number. Port `bench/nuts_truth.exs` (35 lines) and `bench/validator_three.exs` (19 lines) from private. | half a day | the defects came back once already; they will come back again | **DONE** `4b2743f` |
-| 4 | **Fix `test/integration_test.exs:29`** and audit every `assert_in_delta` in the suite for tolerances that would accept a 20% variance error. This is VERIFICATION_METHODS' rank-1 item ("repair the gates that already exist"). | half a day | the difference between having tests and having a habit | **BLOCKED** — see §7.0 |
+| 4 | **Fix `test/integration_test.exs:29`** and audit every `assert_in_delta` in the suite for tolerances that would accept a 20% variance error. This is VERIFICATION_METHODS' rank-1 item ("repair the gates that already exist"). | half a day | the difference between having tests and having a habit | **PARTIAL** — `:29` tightened and passing; suite-wide `assert_in_delta` sweep NOT done. See §7.0 |
 | 5 | **Correct `d ≤ 256` → the real cap** at all twelve sites, next to the `push_too_large` handling that explains it. | one hour | stops the next plan being written from a false number | **DONE** |
-| 6 | **Release 0.3.1** with 1–5 and a CHANGELOG entry that says plainly what was wrong. | — | an OSS project that quietly fixes a posterior bug has spent its credibility for nothing; one that announces it has bought some | pending 4 |
+| 6 | **Release 0.3.1** with 1–5 and a CHANGELOG entry that says plainly what was wrong. | — | an OSS project that quietly fixes a posterior bug has spent its credibility for nothing; one that announces it has bought some | **DONE** — CHANGELOG + version bump; **not published** |
 
 #### 7.0 `mix test` does not currently run in this checkout
 
-Item 4 is blocked on an environment failure that predates any of this work and
-affects **every** test in the repo, not just `integration_test.exs`:
+Item 4 turned out **not** to be blocked, and `integration_test.exs:29` was not
+broken in the way the finding assumed. Two separate environment problems were in
+the way; both predate this work and both affect **every** test in the repo.
+
+**(a) A stale `nx_vulkan` in the test env — this was the real blocker.**
+`_build/test/lib/nx_vulkan` was version **0.1.0**, with a NIF missing
+`device_supports_f64/0` and `leapfrog_chain_synth_f64/6`, while `mix.lock` pins
+the git dep at `7067499`. Every integration test died on
+`UndefinedFunctionError`. `MIX_ENV=test mix deps.compile nx_vulkan --force`
+fixes it and takes the suite from **20 failures to 4**. `integration_test.exs:29`
+then passes on its own. Worth checking whether anything in CI would have caught
+this, because a `_build` two minor versions behind the lockfile is not a
+condition anyone should have to diagnose by hand.
+
+**(b) A CUDA EXLA whose NIF cannot load** — separate, and still open:
 
 ```
 Could not start application exla: EXLA.Application.start(:normal, []) returned an error:
@@ -604,6 +617,23 @@ change silently:
 The P0 tests above were verified by moving `_build/test/lib/exla` aside; with it
 gone, `mix test --no-deps-check test/nuts/p0_correctness_test.exs` runs green in
 ~58s. The directory was put back afterwards.
+
+**Where `test/integration_test.exs` stands after all of this: 26 tests, 4
+failures.** `:29` — the conjugate Normal-Normal — now asserts via
+`Validator.check_analytic/3` against the closed-form posterior instead of
+`assert_in_delta ..., 0.5`, and passes. The remaining four, none of which are
+tolerance problems:
+
+| test | why |
+|---|---|
+| `vector obs produces same posterior as equivalent scalar obs` | real defect — [`docs/OPEN_VULKAN_OBSERVED_MODEL.md`](docs/OPEN_VULKAN_OBSERVED_MODEL.md). Left **red on purpose**, not skipped. |
+| `large model: 5-parameter hierarchical` | raises `SynthUnsupportedError`: the default `compiler: :vulkan` refuses non-synthesisable models rather than degrading. Arguably the guard is right and the *test* should pick a compiler. |
+| `NCP: hierarchical Normal-Normal` | same |
+| `vectorized chains: faster than old parallel` | a wall-clock assertion used as a correctness test (`6198ms should be < 1757ms`). Inherently flaky; belongs in `bench/`. |
+
+The `assert_in_delta` audit that item 4 also asks for is **not done** — only the
+one assertion named in §6.3 was tightened. The rest of the suite has not been
+swept, and that sweep is the natural first task for whoever picks up P1.
 
 ### P1 — verification as a deliverable. (~1 week)
 
