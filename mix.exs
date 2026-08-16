@@ -80,9 +80,10 @@ defmodule Exmc.MixProject do
     ]
   end
 
-  # Default to the GitHub source so a fresh clone of this repo gets a
-  # working nx_vulkan without needing a sibling checkout. Power users
-  # iterating on nx_vulkan locally can override:
+  # Default to the pinned git source (the LOCAL server — see below, not
+  # GitHub) so a fresh clone of this repo gets a working nx_vulkan without
+  # needing a sibling checkout. Power users iterating on nx_vulkan locally
+  # can override:
   #
   #     NX_VULKAN_PATH=/path/to/nx_vulkan mix deps.get
   #
@@ -112,7 +113,7 @@ defmodule Exmc.MixProject do
   # To bump: push nx_vulkan to origin first, then set this to the new sha and
   # run `mix deps.update nx_vulkan` so mix.lock moves with it.
   @nx_vulkan_git "git@192.168.0.249:/home/git/repos/nx_vulkan.git"
-  @nx_vulkan_ref "7067499ecdc2f4b6a2981e5be4860139bfb8c712"
+  @nx_vulkan_ref "a25432f07efe66f9df2f17c1ed2cf2fd5b8bbebc"
 
   defp nx_vulkan_dep(nil) do
     {:nx_vulkan,
