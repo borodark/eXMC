@@ -18,6 +18,13 @@ smoothed over. Two of those disagreements are correctness bugs shipping in
 
 ## Read these first, in this order
 
+0. **[`NEXT.md`](NEXT.md)** — current state and what to do next. Shorter than
+   this file and written later, so where the two disagree about *state*, NEXT
+   wins. **P0 is done and merged as of 0.3.1** (`6d6ae4f`); this document's P0
+   section is now history, and NEXT records what it did not close. NEXT also
+   carries the two things that waste the most time if you do not know them:
+   `origin` is the private server and `upstream` publishes, and `rm -rf _build/`
+   is fine to run without ceremony.
 1. **This document**, and then its P0 section twice. P0 is a correctness
    backport, it blocks everything else, and one of its two commits must be
    merged **by hand** (this repo has a `glsl_cse` toggle the private repo
@@ -50,7 +57,7 @@ the same thing and confusing them wastes a day.
 
 | path | what it is | your relationship to it |
 |---|---|---|
-| `/home/io/projects/learn_erl/_exmc-things/exmc/` | **this repo.** The open-source release. Remote `git@github.com:borodark/exmc.git`, `main` in sync with `origin/main`. | yours |
+| `/home/io/projects/learn_erl/_exmc-things/exmc/` | **this repo.** The open-source release. **Two** remotes — see the warning below. | yours |
 | `/home/io/projects/learn_erl/pymc/exmc/` | the private trader. Upstream of this one; 261 commits ahead of its own private remote. Contains `lib/exmc/trading/` (48 files), `lib/exmc/license/`, and `research/` (patent drafts, business material). | **read-only.** Backport *from*; never modify, never copy wholesale. |
 | `/home/io/projects/learn_erl/nx_vulkan/` | the Vulkan GPU backend for Nx, a separate library with its own plan. | read-only; file bugs against it, do not edit it from here |
 
@@ -58,6 +65,28 @@ The OSS repo is a **backport target**, not a fork. Code flows private → public
 filtered. One module has gone the other way
 (`lib/exmc/nuts/vulkan/scheduler.ex`, 383 lines, OSS-only) and that is a
 forward-port candidate, not a divergence to reconcile.
+
+### The two remotes, and which one publishes
+
+An earlier version of this table said the remote was
+`git@github.com:borodark/exmc.git`. That is only half true and the half it
+leaves out is the dangerous one. There are **two**, and the naming inverts the
+usual fork convention:
+
+| remote | url | what it is |
+|---|---|---|
+| `origin` | `git@localhost:/home/git/repos/exmc.git` | the **private** git server. The working remote. Same machine as `git@192.168.0.249:/home/git/repos/exmc.git`, which is how the FreeBSD Keplers address it. |
+| `upstream` | `git@github.com:borodark/exmc.git` | **public.** Pushing here is a release. |
+
+`main` tracks `origin/main`. A correctness fix can land on `origin` for the
+fleet to pick up long before anyone decides to make it public; those are
+separate decisions and should stay separate. **Treat any push to `upstream` as
+an outward-facing act that needs explicit say-so, never as the last step of a
+task.**
+
+State at 2026-08-16: `origin/main` = `6d6ae4f` (0.3.1). `upstream/main` =
+`2de6c60` (0.3.0), nine commits behind — the entire 0.3.1 correctness release
+is unpublished. See `NEXT.md`.
 
 ---
 
@@ -806,7 +835,9 @@ Primary references:
 - **New decisions go in `DECISIONS.md`**, numbered, with rationale and
   implications. It is at 87 entries and it is the reason this repository can be
   picked up cold. Items 1, 2, 12, 17 and 22 above all warrant entries.
-- **`main` tracks `origin/main`.** Work on a branch; the operator pushes.
+- **`main` tracks `origin/main`, and `origin` is the PRIVATE server.** Work on
+  a branch; the operator pushes. `upstream` is GitHub and pushing there
+  publishes — see §0.
 - **`bench_results/` should exist here.** It does not yet; `bench/` has one
   file. Every performance claim in the README should point at a file in it that
   contains the raw output and the host it ran on.
