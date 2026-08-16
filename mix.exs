@@ -70,7 +70,7 @@ defmodule Exmc.MixProject do
       # EMLX (Apple Metal / MLX) is postponed until real Apple hardware is
       # available to develop and test against — see `Exmc.JIT` moduledoc.
       # Cross-platform GPU compute via Vulkan (FreeBSD + Linux non-CUDA + macOS via MoltenVK).
-      # GitHub source until nx_vulkan reaches hex.pm. Override with
+      # Local git server, pinned. Override with
       # `NX_VULKAN_PATH=/path/to/nx_vulkan mix deps.get` for local iteration.
       nx_vulkan_dep(),
       {:rustler, "~> 0.36", runtime: false},
@@ -91,8 +91,22 @@ defmodule Exmc.MixProject do
     nx_vulkan_dep(System.get_env("NX_VULKAN_PATH"))
   end
 
-  defp nx_vulkan_dep(nil),
-    do: {:nx_vulkan, github: "borodark/nx_vulkan", branch: "main", optional: true}
+  # LOCAL git server, pinned to a commit — not `branch: "main"`, and not the
+  # public GitHub mirror, which lags it. A branch ref means every `deps.get`
+  # can pull a different backend; a pinned ref makes the dependency a fact and
+  # puts any bump in the diff. Override with NX_VULKAN_GIT/NX_VULKAN_REF.
+  #
+  # 192.168.0.249 rather than localhost so the same mix.exs resolves from the
+  # FreeBSD Keplers, which reach the server over the network.
+  @nx_vulkan_git "git@192.168.0.249:/home/git/repos/nx_vulkan.git"
+  @nx_vulkan_ref "7067499ecdc2f4b6a2981e5be4860139bfb8c712"
+
+  defp nx_vulkan_dep(nil) do
+    {:nx_vulkan,
+     git: System.get_env("NX_VULKAN_GIT", @nx_vulkan_git),
+     ref: System.get_env("NX_VULKAN_REF", @nx_vulkan_ref),
+     optional: true}
+  end
 
   defp nx_vulkan_dep(path),
     do: {:nx_vulkan, path: path, optional: true}
