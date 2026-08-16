@@ -719,8 +719,17 @@ defmodule Exmc.NUTS.Tree do
   end
 
   # Per-distribution dispatch — one defp clause per chain shader.
-  # All require Nx.Vulkan as the active compiler and d ≤ 256 (the
-  # single-workgroup shader assumption).
+  # All require Nx.Vulkan as the active compiler and d ≤ 256.
+  #
+  # The 256 is the single-workgroup thread-tile size (`local_size_x = 256`
+  # with a `q_shared[256]` tile). It is a real constraint but it is NOT the
+  # cap on model width, and reading it as one has already misled planning
+  # here. The binding limit is the 128-byte f64 push-constants block, which
+  # holds 13 prior floats: d ≤ 13 for one-parameter priors, d ≤ 6 for Normal,
+  # d ≤ 3 for TruncatedNormal. Anything wider is refused by Push.pack/1 with
+  # {:error, :push_too_large} and degrades to per-op sampling, so these
+  # guards will essentially never be the thing that rejects a model.
+  # See Exmc.NUTS.CustomSynth.Push for the arithmetic and the measured table.
 
   defp do_dispatch(
          {:normal, _mu, _sigma} = meta,

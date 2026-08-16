@@ -117,6 +117,63 @@ defmodule Exmc.NUTS.P0CorrectnessTest do
   end
 
   # ------------------------------------------------------------------
+  # The documented push-constants cap must be the real one
+  # ------------------------------------------------------------------
+
+  describe "chain shader: the push block caps model width at 13 prior floats" do
+    # The moduledoc used to claim 28 prior floats, and eleven dispatch guards
+    # read `d <= 256`, so the cap was reasoned about as 256 free RVs. The real
+    # number is 20x smaller and it changes what the synthesis path is FOR.
+    # Pinned here so nobody has to re-derive it from a byte count again.
+
+    test "the fixed header is 24 bytes, not 16" do
+      {:ok, bin, n} = pack(Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}, 0)
+      assert byte_size(bin) == 24
+      assert n == 24
+    end
+
+    test "one-parameter priors cap at d = 13" do
+      assert max_d(Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(1.0)}) == 13
+      assert max_d(Exmc.Dist.Exponential, %{lambda: Nx.tensor(1.0)}) == 13
+    end
+
+    test "Normal caps at d = 6" do
+      assert max_d(Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}) == 6
+    end
+
+    test "TruncatedNormal caps at d = 3" do
+      params = %{
+        mu: Nx.tensor(0.0),
+        sigma: Nx.tensor(1.0),
+        lower: Nx.tensor(0.0),
+        upper: Nx.tensor(1.0)
+      }
+
+      assert max_d(Exmc.Dist.TruncatedNormal, params) == 3
+    end
+
+    test "one RV past the cap is refused, not truncated" do
+      params = %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}
+      assert {:ok, _, _} = pack(Exmc.Dist.Normal, params, 6)
+      assert {:error, :push_too_large} = pack(Exmc.Dist.Normal, params, 7)
+    end
+  end
+
+  defp pack(mod, params, d) do
+    priors = for i <- 1..d//1, do: {"x#{i}", mod, params}
+    Exmc.NUTS.CustomSynth.Push.pack(%{K: 32, n_obs: 0, d: d, eps: 0.1, priors: priors})
+  end
+
+  defp max_d(mod, params) do
+    Enum.reduce_while(1..40, 0, fn d, _acc ->
+      case pack(mod, params, d) do
+        {:ok, _, _} -> {:cont, d}
+        {:error, :push_too_large} -> {:halt, d - 1}
+      end
+    end)
+  end
+
+  # ------------------------------------------------------------------
   # Helpers
   # ------------------------------------------------------------------
 

@@ -22,9 +22,34 @@ defmodule Exmc.NUTS.CustomSynth.Push do
                               // distribution and is encoded by
                               // `prior_param_floats/2`
 
-  Maximum is 128 bytes per Vulkan spec.  16 bytes of fixed header
-  leaves room for 28 prior-param floats (112 bytes).  Regime model
-  uses ~10, so headroom is fine.
+  ## The real cap: 13 prior floats, not 256 free RVs
+
+  Maximum is 128 bytes per Vulkan spec.  The header above is **24**
+  bytes (`4*4` for K/n_obs/d/_pad plus 8 for the f64 `eps`), which
+  leaves 104 bytes = **13 f64 prior floats**.
+
+  This moduledoc previously said "16 bytes of fixed header leaves
+  room for 28 prior-param floats", which was wrong twice: the header
+  is 24 bytes, not 16, and 104 bytes holds 13 f64 values, not 28
+  (that count was for f32).  Measured with `pack/1`:
+
+      1 float per RV  (HalfNormal, Exponential, HalfCauchy)  d <= 13
+      2 floats per RV (Normal, Cauchy, Weibull, Lognormal,
+                       Gamma, Beta)                          d <=  6
+      3 floats per RV (StudentT)                             d <=  4
+      4 floats per RV (TruncatedNormal)                      d <=  3
+
+  Treat this as a design statement rather than a number to look up.
+  The guards elsewhere in the codebase that read `d <= 256` are the
+  *thread-tile* limit (`local_size_x = 256` with a `q_shared[256]`
+  tile) — a real constraint, but never the binding one. The binding
+  one is this block, and it caps model complexity an order of
+  magnitude below the width at which GPU compute begins to beat an
+  interpreter at all. Anything wider is refused here with
+  `{:error, :push_too_large}` and degrades to per-op sampling.
+
+  A model that needs to grow past these counts needs its prior params
+  moved into an SSBO; there is no headroom to tune.
 
   Obs data does NOT go in push constants (1600 B f64 / 800 B f32
   exceeds 128 B).  Obs is repacked into one of the existing SSBO

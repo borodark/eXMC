@@ -237,9 +237,32 @@ repository in twelve places: `lib/exmc/nuts/vulkan/dispatch.ex:86`,
 `lib/exmc/compiler.ex:106`, and `lib/exmc/nuts/tree.ex:630,681,690,700,710,720,
 730,740,751,761,771,784` all say or guard on `d <= 256`.
 
+> **RESOLVED 2026-08-16.** The arithmetic is now stated and measured in
+> `Exmc.NUTS.CustomSynth.Push`'s moduledoc, and pinned by tests in
+> `test/nuts/p0_correctness_test.exs`. The header is **24** bytes (not the 16
+> the moduledoc claimed), leaving 104 bytes = **13 f64 prior floats**: d ≤ 13
+> for one-parameter priors, d ≤ 6 for `Normal`, d ≤ 4 for `StudentT`, d ≤ 3 for
+> `TruncatedNormal`. The `d <= 256` guards were left in place and annotated —
+> 256 is the real `local_size_x` / `q_shared[256]` thread-tile size. It is just
+> never the binding constraint, and calling it "the cap" is what misled.
+
 **5 — Two correctness defects, both fixed upstream today, both shipping here.**
-See §6.1. Measured effect: `Normal(0,1)` posterior variance **1.45** against a
-true 1.0 for the tree defect; **8.55** for the chain-shader defect.
+See §6.1.
+
+> **RESOLVED 2026-08-16** — backported in `cd516ef`, regression tests in
+> `4b2743f`. The figures previously quoted here (1.45 for the tree defect,
+> 8.55 for the chain-shader defect) were the *private* repo's. Measured in THIS
+> repo against analytic truth, host path, 6 seeds × 2000 draws:
+>
+> | | truth | before | after |
+> |---|---|---|---|
+> | `Normal(0,1)` var | 1.0 | **1.378** | 1.018 |
+> | `HalfNormal(1)` mean | 0.7979 | **0.8631** | 0.8009 |
+> | `Exponential(2)` mean | 0.5 | **0.5749** | 0.4955 |
+>
+> Under `compiler: :vulkan`, where both defects compounded, `Normal(0,1)`'s
+> variance was **23.68** and `HalfNormal(1)`'s mean **3.27** against 0.798.
+> Every arm now passes at 4σ.
 
 **6 — Verification methodology exists and is ranked.**
 `/home/io/projects/learn_erl/pymc/exmc/docs/VERIFICATION_METHODS.md` (1,641
@@ -521,6 +544,15 @@ It is a one-line-per-site fix and should be done in the same commit as
 the P0 backport, because until it is, every capacity discussion about the chain
 shader starts from a false premise.
 
+> **DONE 2026-08-16.** One correction to the finding itself: the guards are not
+> "unreachable". `d <= 256` is the genuine `local_size_x` / `q_shared[256]`
+> thread-tile size, so it is a real constraint — it is simply never the binding
+> one, because `Push.pack/1` refuses at 13 prior floats first. The guards were
+> therefore kept and annotated rather than changed, since changing them would
+> alter behaviour to fix a documentation defect. The measured table now lives
+> in `Exmc.NUTS.CustomSynth.Push`'s moduledoc and is pinned by five tests in
+> `test/nuts/p0_correctness_test.exs`, so it cannot silently drift back.
+
 ---
 
 ## 7. The plan, ranked by value over effort
@@ -531,14 +563,47 @@ ranking rather than the conclusion.
 
 ### P0 — correctness. Nothing else ships until these do. (~2 days)
 
-| # | item | effort | value |
-|---:|---|---|---|
-| 1 | **Backport `ce5775430`** — all four `!valid_subtree` guards (`tree.ex` `do_build/11` + `build_subtree/10`; `tree.rs` `build_subtree` + `build_full_tree`). The OSS regions are byte-identical to the private pre-fix state, so this is a clean cherry-pick. | half a day | removes a detailed-balance violation from a released library |
-| 2 | **Backport `2a1b6b4eb` by hand** — `multi_rv_custom_spec.ex` `logp_chain` ordering, both `@template` and `@batched_template`. Preserve the OSS-only `glsl_cse` toggle. | half a day | removes an 8.55× variance error from the feature 0.3.0 is named after |
-| 3 | **Regression tests that fail without 1 and 2.** Analytic-moment checks on `Normal(0,1)`, `HalfNormal(1)`, `Exponential(2)` with tolerances derived from the sampler's own ESS, not from a round number. Port `bench/nuts_truth.exs` (35 lines) and `bench/validator_three.exs` (19 lines) from private. | half a day | the defects came back once already; they will come back again |
-| 4 | **Fix `test/integration_test.exs:29`** and audit every `assert_in_delta` in the suite for tolerances that would accept a 20% variance error. This is VERIFICATION_METHODS' rank-1 item ("repair the gates that already exist"). | half a day | the difference between having tests and having a habit |
-| 5 | **Correct `d ≤ 256` → the real cap** at all twelve sites, next to the `push_too_large` handling that explains it. | one hour | stops the next plan being written from a false number |
-| 6 | **Release 0.3.1** with 1–5 and a CHANGELOG entry that says plainly what was wrong. | — | an OSS project that quietly fixes a posterior bug has spent its credibility for nothing; one that announces it has bought some |
+| # | item | effort | value | status |
+|---:|---|---|---|---|
+| 1 | **Backport `ce5775430`** — all four `!valid_subtree` guards (`tree.ex` `do_build/11` + `build_subtree/10`; `tree.rs` `build_subtree` + `build_full_tree`). The OSS regions are byte-identical to the private pre-fix state, so this is a clean cherry-pick. | half a day | removes a detailed-balance violation from a released library | **DONE** `cd516ef` |
+| 2 | **Backport `2a1b6b4eb` by hand** — `multi_rv_custom_spec.ex` `logp_chain` ordering, both `@template` and `@batched_template`. Preserve the OSS-only `glsl_cse` toggle. | half a day | removes an 8.55× variance error from the feature 0.3.0 is named after | **DONE** `cd516ef` |
+| 3 | **Regression tests that fail without 1 and 2.** Analytic-moment checks on `Normal(0,1)`, `HalfNormal(1)`, `Exponential(2)` with tolerances derived from the sampler's own ESS, not from a round number. Port `bench/nuts_truth.exs` (35 lines) and `bench/validator_three.exs` (19 lines) from private. | half a day | the defects came back once already; they will come back again | **DONE** `4b2743f` |
+| 4 | **Fix `test/integration_test.exs:29`** and audit every `assert_in_delta` in the suite for tolerances that would accept a 20% variance error. This is VERIFICATION_METHODS' rank-1 item ("repair the gates that already exist"). | half a day | the difference between having tests and having a habit | **BLOCKED** — see §7.0 |
+| 5 | **Correct `d ≤ 256` → the real cap** at all twelve sites, next to the `push_too_large` handling that explains it. | one hour | stops the next plan being written from a false number | **DONE** |
+| 6 | **Release 0.3.1** with 1–5 and a CHANGELOG entry that says plainly what was wrong. | — | an OSS project that quietly fixes a posterior bug has spent its credibility for nothing; one that announces it has bought some | pending 4 |
+
+#### 7.0 `mix test` does not currently run in this checkout
+
+Item 4 is blocked on an environment failure that predates any of this work and
+affects **every** test in the repo, not just `integration_test.exs`:
+
+```
+Could not start application exla: EXLA.Application.start(:normal, []) returned an error:
+  ** (UndefinedFunctionError) function EXLA.NIF.start_log_sink/1 is undefined
+Failed to load NIF library .../_build/test/lib/exla/priv/libexla:
+  'libnvshmem_host.so.3: cannot open shared object file: No such file or directory'
+```
+
+`_build/test/lib/exla` is a **CUDA** build of EXLA 0.13.0 whose NIF needs
+`libnvshmem_host.so.3`; that library is not present anywhere on this machine.
+Rebuilding from source does not help either — `mix deps.compile exla` fails in
+`runtime_callback_cuda.o` against the installed g++.
+
+`:exla` is declared `optional: true`, so nothing in eXMC needs it; Mix starts it
+anyway because it is a dependency application. Two ways out, and the choice is
+a judgement call for whoever owns this environment rather than something to
+change silently:
+
+1. **Install a CPU EXLA** (`XLA_TARGET=cpu mix deps.compile exla --force`),
+   which is the right answer if the EXLA reference arm is wanted.
+2. **Stop the test env depending on EXLA being startable**, which is the right
+   answer if it genuinely is optional. This is arguably a real bug: a library
+   that advertises an optional dependency should not have its whole suite
+   fail when that dependency is present-but-broken.
+
+The P0 tests above were verified by moving `_build/test/lib/exla` aside; with it
+gone, `mix test --no-deps-check test/nuts/p0_correctness_test.exs` runs green in
+~58s. The directory was put back afterwards.
 
 ### P1 — verification as a deliverable. (~1 week)
 

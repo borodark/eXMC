@@ -103,7 +103,13 @@ defmodule Exmc.Compiler do
             - use `compiler: :exla` (if EXLA is available on this platform)
             - use `compiler: :none` (pure CPU, slower but correct)
             - reshape the model so CustomSynth can emit a fused f64 chain shader
-              (standard-family priors with optional Custom likelihood, d <= 256)
+              (standard-family priors with optional Custom likelihood)
+
+          Note on width: the binding limit is the 128-byte f64 push-constants
+          block, which holds 13 prior floats — so d <= 13 for one-parameter
+          priors, d <= 6 for Normal, d <= 3 for TruncatedNormal. The `d <= 256`
+          in the dispatch guards is the thread-tile size, not the cap.
+          See Exmc.NUTS.CustomSynth.Push.
           """
 
           if Application.get_env(:exmc, :allow_vulkan_perop_sampling, false) do
