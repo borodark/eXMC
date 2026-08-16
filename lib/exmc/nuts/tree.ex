@@ -482,23 +482,64 @@ defmodule Exmc.NUTS.Tree do
         {sub, rng, nil}
       end
 
-    # Merge subtree into trajectory
-    {new_traj, rng} =
-      merge_trajectories(traj, subtree, go_right, inv_mass_diag, rng, inv_mass_list)
+    # An invalid doubling contributes NOTHING to the trajectory.
+    #
+    # Stan's base_nuts::transition does `if (!valid_subtree) break;` BEFORE the
+    # progressive-sampling step, and build_tree returns false the moment the
+    # subtree diverges or sub-U-turns. This merged it anyway: `subtree.turning`
+    # and `subtree.divergent` only ever reached the loop condition, so the
+    # states beyond the U-turn still entered `combined_log_weight` and could
+    # still be drawn as the proposal.
+    #
+    # Those states are not in the reversible set this transition samples from.
+    # Including them breaks detailed balance in one direction only — outward,
+    # toward the far end of the trajectory — so the posterior inflates its
+    # variance and, on any distribution whose support has a boundary, drifts
+    # away from that boundary. Measured on the host path at 6 seeds x 2000
+    # draws: Normal(0,1) variance 1.378 against a true 1.0, HalfNormal(1) mean
+    # 0.863 against 0.798, Exponential(2) mean 0.575 against 0.5.
+    #
+    # Every arm of Validator.compare/3 runs this same tree, so comparing arms
+    # against each other could never surface it. See bench/nuts_truth.exs,
+    # which measures against the analytic moments instead.
+    #
+    # Leaf counts and accept probabilities still accumulate: dual averaging is
+    # defined over every leaf the integrator actually visited, valid or not
+    # (Stan updates n_leapfrog_ and sum_metro_prob per leaf, before the
+    # validity check).
+    if subtree.divergent or subtree.turning do
+      stopped =
+        %{
+          traj
+          | n_steps: traj.n_steps + subtree.n_steps,
+            accept_sum: traj.accept_sum + subtree.accept_sum,
+            divergent: traj.divergent or subtree.divergent,
+            turning: true
+        }
+        |> Map.put(
+          :recovered,
+          Map.get(traj, :recovered, false) or Map.get(subtree, :recovered, false)
+        )
 
-    do_build(
-      step_fn,
-      new_traj,
-      epsilon,
-      inv_mass_diag,
-      max_depth,
-      rng,
-      joint_logp_0,
-      depth + 1,
-      multi_step_fn,
-      inv_mass_list,
-      spec_buf
-    )
+      result(stopped, depth + 1)
+    else
+      {new_traj, rng} =
+        merge_trajectories(traj, subtree, go_right, inv_mass_diag, rng, inv_mass_list)
+
+      do_build(
+        step_fn,
+        new_traj,
+        epsilon,
+        inv_mass_diag,
+        max_depth,
+        rng,
+        joint_logp_0,
+        depth + 1,
+        multi_step_fn,
+        inv_mass_list,
+        spec_buf
+      )
+    end
   end
 
   # --- Speculative pre-computation helpers ---
@@ -1491,8 +1532,30 @@ defmodule Exmc.NUTS.Tree do
           inv_mass_list
         )
 
-      {merged, rng} = merge_subtrees(first, second, epsilon, inv_mass_diag, rng, inv_mass_list)
-      {merged, rng}
+      # Same rule as the outer doubling (see do_build/11): Stan's build_tree
+      # returns false on `!valid_right` BEFORE the multinomial sample between
+      # the halves, so an invalid right half contributes neither weight nor a
+      # candidate proposal. This guarded the LEFT half above and merged the
+      # right half whatever it was. Keep the left half's weight and proposal,
+      # mark the whole subtree invalid, and let the caller discard it.
+      if second.divergent or second.turning do
+        invalid =
+          %{
+            first
+            | n_steps: first.n_steps + second.n_steps,
+              accept_sum: first.accept_sum + second.accept_sum,
+              divergent: first.divergent or second.divergent,
+              turning: true
+          }
+          |> Map.put(
+            :recovered,
+            Map.get(first, :recovered, false) or Map.get(second, :recovered, false)
+          )
+
+        {invalid, rng}
+      else
+        merge_subtrees(first, second, epsilon, inv_mass_diag, rng, inv_mass_list)
+      end
     end
   end
 
