@@ -40,11 +40,12 @@ rm -rf _build/                                     # the blunt instrument, and i
 MIX_ENV=test mix deps.compile nx_vulkan --force    # the surgical one
 ```
 
-**The one exception:** `exla` here is a CUDA build whose NIF cannot load
-(`libnvshmem_host.so.3` is absent machine-wide) and it does not rebuild from
-source either (`runtime_callback_cuda.o` fails against the installed g++).
-Deleting `_build/` does not fix that; it just re-fetches the same broken thing.
-See §2, item 1.
+**The one exception was `exla`, and it is now resolved** — see §2 item 3. One
+thing about it is still worth knowing here: neither the built `libexla.so`
+(cached in `~/.cache/xla/exla/`, keyed by elixir/erts/xla/exla versions and
+**not** by target) nor exla's C++ objects are reached by `rm -rf _build/`, so a
+stale CUDA build survives every `_build` deletion you can think of.
+[`docs/EXLA_CPU_BUILD.md`](docs/EXLA_CPU_BUILD.md) has the clearing recipe.
 
 ---
 
@@ -61,10 +62,30 @@ over-dispersed — `Normal(0,1)` variance 1.378 against a true 1.0, worse under
 `compiler: :vulkan`. Every day it stays up, someone can draw samples from it.
 The CHANGELOG says so plainly and that is the right instinct.
 
-The case for waiting: `compiler: :vulkan` is the **default**, and it is still
-not correct for models with observations (§2). Publishing a release whose
-headline is "correctness" while the default backend returns a frozen chain for
-a whole model class is a second credibility problem, not a fix for the first.
+The case for waiting: Vulkan is the default *for the users who most need this
+library*, and it is still not correct for models with observations (§2).
+Publishing a release whose headline is "correctness" while that backend returns
+a frozen chain for a whole model class is a second credibility problem, not a
+fix for the first.
+
+> **Correction, 2026-08-16.** This file, `MISSION.md`, and the annotation on
+> the red test all say `compiler: :vulkan` is "the default". That is not what
+> the code does. `config/config.exs` sets no compiler at all, so the default is
+> `Exmc.JIT.auto_detect/0`, which prefers **EXLA when it is available** and only
+> falls through to Vulkan when it is not. The belief came from this host, where
+> EXLA could not load and auto-detect therefore always landed on Vulkan (§2
+> item 3, now fixed). Verified directly on one checkout, no config changed:
+> while `libexla.so` was unloadable `Exmc.JIT.detect_compiler/0` returned
+> `Nx.Vulkan`; once the CPU EXLA loaded, the same call returned `EXLA`.
+>
+> This narrows the §2 item 1 exposure rather than removing it: the users who get
+> Vulkan by default are exactly the ones with no working EXLA — the FreeBSD and
+> non-CUDA GPU hosts the backend exists for. They are still the ones who cannot
+> use the alternative. But "the default compiler is silently wrong" is not an
+> accurate description of what a hex user gets, and the §1 decision should not
+> be argued on it. The middle path below still stands on its own terms; it is
+> just a smaller change than "flip the default" makes it sound, since for most
+> users the default is already EXLA.
 
 **A middle path worth considering, and probably the right one:** publish 0.3.1
 with the default compiler changed to `:none`, and `:vulkan` opt-in until §2 is
@@ -87,14 +108,46 @@ Ranked. Item 1 is the only one that blocks calling the default backend correct.
 |---:|---|---|---|
 | 1 | **The vulkan observed-model defect.** `compiler: :vulkan` returns a frozen chain (1 distinct value in 500 draws, `accept_prob` ≈ 0.002) for models with observations. Full write-up, evidence, and the next experiment in [`docs/OPEN_VULKAN_OBSERVED_MODEL.md`](docs/OPEN_VULKAN_OBSERVED_MODEL.md). | 1–3 days | it is the **default** compiler. Until this is fixed, the default can silently return a degenerate posterior. |
 | 2 | **The `assert_in_delta` sweep.** 0.3.1 tightened exactly one assertion (`integration_test.exs:29`, now checking the closed-form conjugate posterior via `Validator.check_analytic/3`). The rest of the suite is unswept. Find every tolerance that would accept a 20% variance error. | half a day | this is VERIFICATION_METHODS' rank-1 item and the reason two defects shipped |
-| 3 | **The EXLA build.** Either install a CPU EXLA (`XLA_TARGET=cpu mix deps.compile exla --force`) or stop the test env requiring an optional dep to be startable. The latter is arguably a real bug in this library: advertising `optional: true` and then failing the whole suite when the optional dep is present-but-broken. | 1–2 hours | you cannot run `mix test` at all without working around it |
-| 4 | **`test/integration_test.exs`: 26 tests, 4 failures.** One is item 1 and is **red on purpose**. Two raise `SynthUnsupportedError` because the default compiler refuses non-synthesisable models — likely the *tests* should pick a compiler, but check whether the guard is too aggressive first. One asserts wall-clock (`6198ms should be < 1757ms`) and belongs in `bench/`. | half a day | a permanently-red suite trains people to ignore red |
+| 3 | ~~**The EXLA build.**~~ **Done — both halves.** The library bug is fixed (`exla` is `runtime: false`, `Exmc.JIT` starts it lazily and treats a failed start as "backend unavailable", covered by `test/optional_deps_test.exs`), *and* this host now has a working CPU EXLA. Recipe and its two traps in [`docs/EXLA_CPU_BUILD.md`](docs/EXLA_CPU_BUILD.md); the short version is `EXLA_CPU_ONLY=1 XLA_TARGET=cpu`, not `XLA_TARGET=cpu`. | — | — |
+| 4 | **`test/integration_test.exs`.** With EXLA working, `mix test` is now **372 tests, 1 failure** for the whole repo. The remaining one is the wall-clock assertion (`integration_test.exs:762`, now `vectorized=1078ms should be < parallel=575ms`) and belongs in `bench/`. The other three from the old count were artefacts of Vulkan-by-default and are green under EXLA — **not fixed, not exercised**; see item 5. | 1 hour | a permanently-red suite trains people to ignore red |
+| 5 | ~~**`config/test.exs` had never been loaded.**~~ **Fixed.** `config/config.exs` was one line, `import Config`, with no `import_config` — and Mix auto-loads only `config/config.exs`, so every setting in `config/test.exs` was dead: the `EXMC_COMPILER` switch, `config :exla, default_client: :host`, `allow_vulkan_perop_sampling`. **Every `EXMC_COMPILER=vulkan mix test` ever run sampled with whatever auto-detect picked and reported a pass for it.** Now imported, with `test/config_test.exs` as the tripwire. | — | — |
 
-### Do not skip the red test
+### Do not skip the red test — and mind which backend it is running
 
-`integration_test.exs:611` fails for a real reason and is annotated to say so.
-Skipping a test that fails for a real reason is precisely the habit that let
-both 0.3.1 defects ship. If you fix item 1, it goes green on its own.
+The annotated test is `integration_test.exs:639`, "vector obs produces same
+posterior as equivalent scalar obs" (this file previously said 611). It fails
+for a real reason and is annotated to say so. Skipping a test that fails for a
+real reason is precisely the habit that let both 0.3.1 defects ship.
+
+**It is red again under Vulkan, and that is the correct state.** Since item 5
+was fixed, `EXMC_COMPILER=vulkan mix test test/integration_test.exs:639` fails
+on exactly the documented assertion:
+
+```
+code: assert_in_delta scalar_summary["mu"].std, vector_summary["mu"].std, 0.3
+```
+
+Item 1 is confirmed alive, and reproduces the numbers in
+`docs/OPEN_VULKAN_OBSERVED_MODEL.md` to the digit — scalar arm mean **3.6503**,
+sd **3.29e-14**, **1 distinct draw in 500**; vector arm mean 3.9716, sd 0.5516,
+472/500. Under `EXMC_COMPILER=none` both arms are correct.
+`allow_vulkan_perop_sampling` makes no difference to it either way, which rules
+that out as the route around the chain shader.
+
+It is **green under a bare `mix test`**, and that is not a fix — auto-detect
+picks EXLA on this host and the Vulkan path is never entered (see the
+correction in §1). A bare `mix test` passing says nothing about item 1. Use
+`EXMC_COMPILER=vulkan`, and note that it only means anything now that item 5 is
+fixed.
+
+Two traps worth carrying forward, both of which produce a confident green:
+
+- **ExUnit's line filter snaps backwards.** `mix test path:638` on a comment
+  line runs the *previous* test, reports `1 test, 0 failures`, and looks like
+  the test you meant. Give it the `test do` line — 639, not 638.
+- The test is **differential** (scalar arm vs vector arm), so it can only see
+  item 1 while the two arms disagree. It is the same structural blindness §3
+  describes; it happens to work here only because the defect hits one arm.
 
 ---
 

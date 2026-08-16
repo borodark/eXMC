@@ -1,6 +1,52 @@
 # Changelog
 
-## 0.3.1 (2026-08-16) — Correctness
+## Unreleased
+
+### Fixed
+
+- **A broken optional dependency could make the whole test suite unrunnable.**
+  `exla` was declared `optional: true` but still landed in `exmc`'s
+  `applications` list, so the BEAM started it at boot. On a host where the
+  installed exla is present but cannot load — a CUDA build missing
+  `libnvshmem_host.so.3`, a stale `_build`, a mismatched `XLA_TARGET` —
+  `EXLA.Application.start/2` failed, took the VM with it, and `mix test` never
+  reached ExUnit. A dependency this project advertises as optional could stop
+  every test in the repo from running.
+
+  `exla` is now `runtime: false`: still on the code path, no longer on the boot
+  path. `Exmc.JIT` starts it on first use and treats a failed start as "backend
+  unavailable", falling through to the next one. Consumers are unaffected —
+  `optional: true` already means they declare exla themselves, which puts it in
+  their own application list and starts it at boot as before.
+
+- **`Exmc.JIT.detect_compiler/0` selected backends it could not run.** The
+  availability check was `Code.ensure_loaded?/1`, which a present-but-broken
+  exla passes: every module is there, only the NIF and the application are not.
+  Detection returned `EXLA` and the first `jit/2` call raised. It now requires
+  the backend's application to actually start, memoised in `:persistent_term`.
+
+  `test/optional_deps_test.exs` covers both: `:exla` must stay out of `exmc`'s
+  `applications`, and a selected compiler's application must be running.
+
+- **`config/test.exs` was never loaded, so the backend sweep was vacuous.**
+  `config/config.exs` was a single `import Config` with no `import_config`, and
+  Mix auto-loads only `config/config.exs`. Every setting in `config/test.exs`
+  was dead: the `EXMC_COMPILER` switch, `config :exla, default_client: :host`,
+  and `allow_vulkan_perop_sampling`. **Every `EXMC_COMPILER=vulkan mix test`
+  ever run sampled with whatever `Exmc.JIT.auto_detect/0` happened to pick, and
+  reported a pass for it.** A dead config file fails silently in both
+  directions — nothing warns that it was skipped, and every test still passes.
+
+  `config/config.exs` now imports it, and `test/config_test.exs` is the
+  tripwire: it asserts the import is live and that a configured compiler is the
+  compiler `detect_compiler/0` actually returns.
+
+  With the sweep working, `integration_test.exs:639` is red again under
+  `EXMC_COMPILER=vulkan`, which is the correct state — the open defect in
+  `docs/OPEN_VULKAN_OBSERVED_MODEL.md` reproduces to the digit (scalar arm: 1
+  distinct draw in 500, sd 3.29e-14). It is not a new defect and not a
+  regression; it is the first time the check that was supposed to see it
+  actually ran.
 
 **If you drew posterior samples with 0.1.0–0.3.0, they were over-dispersed.**
 Upgrade and re-run anything you are relying on. This release fixes two defects
