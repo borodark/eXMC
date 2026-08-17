@@ -47,6 +47,8 @@ defmodule Exmc.NUTS.FusedChainDiagTest do
 
   use ExUnit.Case, async: false
 
+  import Exmc.TestHelper, only: [put_env_scoped: 2, delete_env_scoped: 1]
+
   alias Exmc.{Builder, Dist.Normal, NUTS.Sampler}
 
   # Generous bounds: MCMC noise + small sample (1000 draws after
@@ -85,6 +87,7 @@ defmodule Exmc.NUTS.FusedChainDiagTest do
   test "reference: EXLA produces var ≈ 1.0 on Normal-Normal" do
     {mean, var} = run_one()
     report("EXLA reference", mean, var)
+
     assert var >= @var_low and var <= @var_high,
            "EXLA var=#{var} outside [#{@var_low}, #{@var_high}] — sampler smoke is broken"
   end
@@ -93,7 +96,7 @@ defmodule Exmc.NUTS.FusedChainDiagTest do
   @tag :slow
   @tag :requires_vulkan
   test "unfused Vulkan: per-step dispatch path produces var ≈ 1.0" do
-    Application.delete_env(:exmc, :fused_leapfrog_normal_meta)
+    delete_env_scoped(:fused_leapfrog_normal_meta)
     {mean, var} = run_one()
     report("Unfused Vulkan (f32)", mean, var)
 
@@ -105,18 +108,14 @@ defmodule Exmc.NUTS.FusedChainDiagTest do
   @tag :diag
   @tag :requires_vulkan
   test "fused chain: leapfrog_chain_normal produces var ≈ 1.0" do
-    Application.put_env(:exmc, :fused_leapfrog_normal_meta, {0.0, 1.0})
+    put_env_scoped(:fused_leapfrog_normal_meta, {0.0, 1.0})
 
-    try do
-      {mean, var} = run_one()
-      report("Fused Vulkan chain", mean, var)
+    {mean, var} = run_one()
+    report("Fused Vulkan chain", mean, var)
 
-      assert var >= @var_low and var <= @var_high,
-             "Fused chain var=#{var} outside [#{@var_low}, #{@var_high}] — " <>
-               "the Stage 1.5.4 variance-bias issue. Compare against the unfused-Vulkan " <>
-               "test to isolate (chain bug vs f32 precision)."
-    after
-      Application.delete_env(:exmc, :fused_leapfrog_normal_meta)
-    end
+    assert var >= @var_low and var <= @var_high,
+           "Fused chain var=#{var} outside [#{@var_low}, #{@var_high}] — " <>
+             "the Stage 1.5.4 variance-bias issue. Compare against the unfused-Vulkan " <>
+             "test to isolate (chain bug vs f32 precision)."
   end
 end

@@ -191,15 +191,7 @@ defmodule Exmc.NUTS.P0CorrectnessTest do
   # Restore it. A test that mutates application env owes the next test the
   # value it found.
   defp draw(dist, params, seeds \\ [1, 2]) do
-    previous = Application.fetch_env(:exmc, :compiler)
-    Application.put_env(:exmc, :compiler, :none)
-
-    on_exit(fn ->
-      case previous do
-        {:ok, value} -> Application.put_env(:exmc, :compiler, value)
-        :error -> Application.delete_env(:exmc, :compiler)
-      end
-    end)
+    Exmc.TestHelper.put_env_scoped(:compiler, :none)
 
     ir =
       Builder.new_ir()

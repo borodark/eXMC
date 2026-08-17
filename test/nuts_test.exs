@@ -497,9 +497,9 @@ defmodule Exmc.NUTSTest do
 
       # Run with speculative enabled (default), but disable full-tree NIF
       # so both paths use the same Erlang PRNG (Rust Xoshiro diverges)
-      Application.put_env(:exmc, :speculative_precompute, true)
-      Application.put_env(:exmc, :use_nif, false)
-      Application.put_env(:exmc, :full_tree_nif, false)
+      put_env_scoped(:speculative_precompute, true)
+      put_env_scoped(:use_nif, false)
+      put_env_scoped(:full_tree_nif, false)
 
       result_spec =
         Tree.build(
@@ -518,7 +518,7 @@ defmodule Exmc.NUTSTest do
         )
 
       # Run with speculative disabled
-      Application.put_env(:exmc, :speculative_precompute, false)
+      put_env_scoped(:speculative_precompute, false)
 
       result_no_spec =
         Tree.build(
@@ -537,8 +537,8 @@ defmodule Exmc.NUTSTest do
         )
 
       # Reset
-      Application.put_env(:exmc, :speculative_precompute, true)
-      Application.put_env(:exmc, :full_tree_nif, true)
+      put_env_scoped(:speculative_precompute, true)
+      put_env_scoped(:full_tree_nif, true)
 
       # Same number of steps and divergence status
       assert result_spec.n_steps == result_no_spec.n_steps,
@@ -558,7 +558,7 @@ defmodule Exmc.NUTSTest do
         Builder.new_ir()
         |> Builder.rv("mu", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
 
-      Application.put_env(:exmc, :speculative_precompute, true)
+      put_env_scoped(:speculative_precompute, true)
       {trace, stats} = Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 300, seed: 42)
 
       samples = trace["mu"]
@@ -578,7 +578,7 @@ defmodule Exmc.NUTSTest do
         Builder.new_ir()
         |> Builder.rv("mu", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
 
-      Application.put_env(:exmc, :full_tree_nif, true)
+      put_env_scoped(:full_tree_nif, true)
       {trace, stats} = Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 300, seed: 42)
 
       samples = trace["mu"]
@@ -599,7 +599,7 @@ defmodule Exmc.NUTSTest do
         |> Builder.obs("x_obs", "x", Nx.tensor([2.5, 3.0, 3.5]))
 
       # Full-tree NIF path
-      Application.put_env(:exmc, :full_tree_nif, true)
+      put_env_scoped(:full_tree_nif, true)
 
       {trace_full, _} =
         Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 500, seed: 42, ncp: false)
@@ -607,15 +607,12 @@ defmodule Exmc.NUTSTest do
       mu_full = Nx.mean(trace_full["mu"]) |> Nx.to_number()
 
       # Speculative path (disable full-tree NIF)
-      Application.put_env(:exmc, :full_tree_nif, false)
+      put_env_scoped(:full_tree_nif, false)
 
       {trace_spec, _} =
         Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 500, seed: 42, ncp: false)
 
       mu_spec = Nx.mean(trace_spec["mu"]) |> Nx.to_number()
-
-      # Reset
-      Application.put_env(:exmc, :full_tree_nif, true)
 
       # Both should be near the true posterior mean (~3.0)
       assert abs(mu_full - 3.0) < 0.5, "Full-tree mean #{mu_full} too far from 3.0"

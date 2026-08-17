@@ -34,30 +34,41 @@ defmodule Exmc.NUTS.Statham.Tree do
 
   # First build
   def command(%{phase: :pending}) do
-    {:call, __MODULE__, :init_and_build, [
-      integer(2, 6),
-      float(0.05, 0.5),
-      integer(3, 7),
-      integer(1, 100_000)
-    ]}
+    {:call, __MODULE__, :init_and_build,
+     [
+       integer(2, 6),
+       float(0.05, 0.5),
+       integer(3, 7),
+       integer(1, 100_000)
+     ]}
   end
 
   # After building, either check, build again, or check statistics
   def command(%{phase: :built, builds: n}) when n >= 10 do
     frequency([
       {3, {:call, __MODULE__, :check_statistics, []}},
-      {2, {:call, __MODULE__, :init_and_build, [
-        integer(2, 6), float(0.05, 0.5), integer(3, 7), integer(1, 100_000)
-      ]}},
+      {2,
+       {:call, __MODULE__, :init_and_build,
+        [
+          integer(2, 6),
+          float(0.05, 0.5),
+          integer(3, 7),
+          integer(1, 100_000)
+        ]}},
       {1, {:call, __MODULE__, :check_result, []}}
     ])
   end
 
   def command(%{phase: :built}) do
     frequency([
-      {5, {:call, __MODULE__, :init_and_build, [
-        integer(2, 6), float(0.05, 0.5), integer(3, 7), integer(1, 100_000)
-      ]}},
+      {5,
+       {:call, __MODULE__, :init_and_build,
+        [
+          integer(2, 6),
+          float(0.05, 0.5),
+          integer(3, 7),
+          integer(1, 100_000)
+        ]}},
       {2, {:call, __MODULE__, :check_result, []}},
       {1, {:call, __MODULE__, :check_statistics, []}}
     ])
@@ -65,9 +76,14 @@ defmodule Exmc.NUTS.Statham.Tree do
 
   def command(%{phase: :checked}) do
     frequency([
-      {4, {:call, __MODULE__, :init_and_build, [
-        integer(2, 6), float(0.05, 0.5), integer(3, 7), integer(1, 100_000)
-      ]}},
+      {4,
+       {:call, __MODULE__, :init_and_build,
+        [
+          integer(2, 6),
+          float(0.05, 0.5),
+          integer(3, 7),
+          integer(1, 100_000)
+        ]}},
       {1, {:call, __MODULE__, :check_statistics, []}}
     ])
   end
@@ -98,13 +114,24 @@ defmodule Exmc.NUTS.Statham.Tree do
     p = Nx.tensor(for(_ <- 1..d, do: :rand.normal()))
     joint_logp_0 = Leapfrog.joint_logp(logp, p, inv_mass)
 
+    # Restored by Exmc.NUTS.StathamTreeTest's setup, which scopes both keys for
+    # the properties that drive this model. This module is a PropCheck state
+    # machine, not a test case, so it cannot register an on_exit of its own.
     Application.put_env(:exmc, :speculative_precompute, false)
     Application.put_env(:exmc, :full_tree_nif, false)
 
     result =
       Tree.build(
-        step_fn, q, p, Nx.to_number(logp), grad,
-        epsilon, inv_mass, max_depth, rng, joint_logp_0
+        step_fn,
+        q,
+        p,
+        Nx.to_number(logp),
+        grad,
+        epsilon,
+        inv_mass,
+        max_depth,
+        rng,
+        joint_logp_0
       )
 
     # Track proposal for diversity check
@@ -223,7 +250,9 @@ defmodule Exmc.NUTS.Statham.Tree do
     failed = Enum.filter(checks, fn {_k, v} -> not v end)
 
     if failed != [] do
-      IO.puts("BUILD FAIL: #{inspect(failed)}, result=#{inspect(Map.take(result, [:n_steps, :depth, :accept_rate, :logp]))}")
+      IO.puts(
+        "BUILD FAIL: #{inspect(failed)}, result=#{inspect(Map.take(result, [:n_steps, :depth, :accept_rate, :logp]))}"
+      )
     end
 
     Enum.all?(checks, fn {_k, v} -> v end)
@@ -277,11 +306,13 @@ defmodule Exmc.NUTS.Statham.Tree do
 
         Process.put(:statham_tree_stats, stats)
 
-        %{state |
-          phase: :built,
-          builds: state.builds + 1,
-          accept_rates: [ar | state.accept_rates],
-          divergent_count: state.divergent_count + if(Map.get(result, :divergent, false), do: 1, else: 0)
+        %{
+          state
+          | phase: :built,
+            builds: state.builds + 1,
+            accept_rates: [ar | state.accept_rates],
+            divergent_count:
+              state.divergent_count + if(Map.get(result, :divergent, false), do: 1, else: 0)
         }
 
       _ ->
@@ -322,12 +353,21 @@ defmodule Exmc.NUTS.StathamTreeTest do
 
   @moduletag timeout: 300_000
 
+  # These properties exercise the pure-Elixir doubling, so they pin both keys.
+  # Scoped here rather than inside each `forall` body: the body runs once per
+  # generated case, and the keys are global — leaving them set handed every
+  # test that ran after this file a different tree implementation than it
+  # thought it was testing. See Exmc.TestHelper.put_env_scoped/3.
+  setup do
+    Exmc.TestHelper.put_env_scoped(:speculative_precompute, false)
+    Exmc.TestHelper.put_env_scoped(:full_tree_nif, false)
+    :ok
+  end
+
   property "tree builder: structural invariants under random models", [:verbose, numtests: 100] do
     forall cmds <- commands(Exmc.NUTS.Statham.Tree) do
       Process.delete(:statham_tree)
       Process.delete(:statham_tree_stats)
-      Application.put_env(:exmc, :speculative_precompute, false)
-      Application.put_env(:exmc, :full_tree_nif, false)
 
       {history, state, result} = run_commands(Exmc.NUTS.Statham.Tree, cmds)
 
@@ -347,7 +387,7 @@ defmodule Exmc.NUTS.StathamTreeTest do
 
   # Focused statistical test: build many trees on standard normal,
   # check that mean acceptance rate and duplicate rate are healthy
-  property "tree builder: acceptance rate and proposal diversity", [numtests: 30] do
+  property "tree builder: acceptance rate and proposal diversity", numtests: 30 do
     forall {d, epsilon, seed} <- {integer(2, 5), float(0.1, 0.3), integer(1, 50_000)} do
       vag_fn = fn q ->
         logp = Nx.multiply(Nx.tensor(-0.5), Nx.sum(Nx.multiply(q, q)))
@@ -365,9 +405,6 @@ defmodule Exmc.NUTS.StathamTreeTest do
         {q_new, p_new, logp_new, grad_new, joint}
       end
 
-      Application.put_env(:exmc, :speculative_precompute, false)
-      Application.put_env(:exmc, :full_tree_nif, false)
-
       # Build 20 trees with different momenta, same position
       rng = :rand.seed(:exsss, {seed, seed * 7, seed * 13})
       q = Nx.tensor(for(_ <- 1..d, do: :rand.normal()))
@@ -381,8 +418,16 @@ defmodule Exmc.NUTS.StathamTreeTest do
 
           result =
             Exmc.NUTS.Tree.build(
-              step_fn, q, p, Nx.to_number(logp), grad,
-              epsilon, inv_mass, 7, rng_acc, joint_logp_0
+              step_fn,
+              q,
+              p,
+              Nx.to_number(logp),
+              grad,
+              epsilon,
+              inv_mass,
+              7,
+              rng_acc,
+              joint_logp_0
             )
 
           ar = if result.n_steps > 0, do: result.accept_sum / result.n_steps, else: 0.0

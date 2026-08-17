@@ -1,5 +1,10 @@
 defmodule Exmc.NativeTreeTest do
-  use ExUnit.Case, async: true
+  # async: false because these tests set :use_nif globally to compare the NIF
+  # and Elixir tree paths. Application env is VM-wide, so an async module doing
+  # that changes what concurrently-running tests are exercising.
+  use ExUnit.Case, async: false
+
+  import Exmc.TestHelper, only: [put_env_scoped: 2]
 
   alias Exmc.NUTS.NativeTree
   alias Exmc.NUTS.Tree
@@ -328,13 +333,12 @@ defmodule Exmc.NativeTreeTest do
       mu_nif = Nx.mean(trace_nif["mu"]) |> Nx.to_number()
 
       # Elixir path (disable NIF)
-      Application.put_env(:exmc, :use_nif, false)
+      put_env_scoped(:use_nif, false)
 
       {trace_ex, _} =
         Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 500, seed: 42, ncp: false)
 
       mu_ex = Nx.mean(trace_ex["mu"]) |> Nx.to_number()
-      Application.put_env(:exmc, :use_nif, true)
 
       # Both should be near the true posterior mean (~2.5)
       # They won't be identical (different RNG) but should be statistically equivalent

@@ -1,6 +1,8 @@
 defmodule Exmc.FaultTolerantTest do
   use ExUnit.Case
 
+  import Exmc.TestHelper, only: [put_env_scoped: 2]
+
   @moduledoc false
 
   alias Exmc.{Builder, Rewrite}
@@ -19,6 +21,7 @@ defmodule Exmc.FaultTolerantTest do
 
     {vag_fn, step_fn, pm, _ncp_info, _multi_step_fn, _chain_meta} =
       Exmc.Compiler.compile_for_sampling(ir)
+
     {vag_fn, step_fn, pm}
   end
 
@@ -197,16 +200,18 @@ defmodule Exmc.FaultTolerantTest do
 
       # Disable full-tree NIF so both paths use same Erlang PRNG
       # (full-tree NIF uses Rust Xoshiro256** which produces different sequences)
-      prev = Application.get_env(:exmc, :full_tree_nif, true)
-      Application.put_env(:exmc, :full_tree_nif, false)
+      # Was `prev = Application.get_env(:exmc, :full_tree_nif, true)` followed by
+      # a restore to `prev` — but the real default is `false` (tree.ex:85), so an
+      # unset key came back set to `true` and flipped the Rust full-tree path on
+      # for everything after. The restore was also skipped whenever an assertion
+      # below raised first.
+      put_env_scoped(:full_tree_nif, false)
 
       {trace_unsup, stats_unsup} =
         Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 100, seed: 42, supervised: false)
 
       {trace_sup, stats_sup} =
         Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 100, seed: 42, supervised: true)
-
-      Application.put_env(:exmc, :full_tree_nif, prev)
 
       # Same number of samples
       assert Nx.shape(trace_unsup["x"]) == Nx.shape(trace_sup["x"])
