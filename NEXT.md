@@ -8,6 +8,22 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-08-16, end of the exla/verification pass
+
+Items 3, 5 and 6 are closed and committed. `mix test` runs the whole repo on
+both paths, and **the Vulkan sweep is reproducible for the first time**: two
+consecutive `EXMC_COMPILER=vulkan mix test` runs returned identical failure
+sets, differing only in ordering.
+
+| run | result |
+|---|---|
+| `mix test` (default → EXLA) | 472 tests, **0 failures** |
+| `EXMC_COMPILER=vulkan mix test` ×2 | 472 tests, **5 failures**, identical both times |
+
+Item 1 remains open and is now the top of the queue.
+
+---
+
 ## 0. Two things to know before you touch anything
 
 ### `origin` is private. `upstream` publishes.
@@ -109,8 +125,8 @@ Ranked. Item 1 is the only one that blocks calling the default backend correct.
 | 1 | **The vulkan observed-model defect.** `compiler: :vulkan` returns a frozen chain (1 distinct value in 500 draws, `accept_prob` ≈ 0.002) for models with observations. Full write-up, evidence, and the next experiment in [`docs/OPEN_VULKAN_OBSERVED_MODEL.md`](docs/OPEN_VULKAN_OBSERVED_MODEL.md). | 1–3 days | it is the **default** compiler. Until this is fixed, the default can silently return a degenerate posterior. |
 | 2 | **The `assert_in_delta` sweep.** 0.3.1 tightened exactly one assertion (`integration_test.exs:29`, now checking the closed-form conjugate posterior via `Validator.check_analytic/3`). The rest of the suite is unswept. Find every tolerance that would accept a 20% variance error. | half a day | this is VERIFICATION_METHODS' rank-1 item and the reason two defects shipped |
 | 3 | ~~**The EXLA build.**~~ **Done — both halves.** The library bug is fixed (`exla` is `runtime: false`, `Exmc.JIT` starts it lazily and treats a failed start as "backend unavailable", covered by `test/optional_deps_test.exs`), *and* this host now has a working CPU EXLA. Recipe and its two traps in [`docs/EXLA_CPU_BUILD.md`](docs/EXLA_CPU_BUILD.md); the short version is `EXLA_CPU_ONLY=1 XLA_TARGET=cpu`, not `XLA_TARGET=cpu`. | — | — |
-| 4 | **The wall-clock test.** `mix test` is now **375 tests, 0 failures** on the default (EXLA) path. The only default-path failure left is `integration_test.exs:738` — `assert t_vec < t_par` — and it is **timing-flaky**, not consistently red: it failed at `1034ms < 659ms` on one run and passed on the next with no code change. Move it to `bench/`. The other three failures NEXT.md originally listed were artefacts of Vulkan-by-default and are green under EXLA — **not fixed, not exercised**. | 1 hour | a flaky red trains people to ignore red faster than a stable one |
-| 6 | **Tests leak `:exmc` application env into each other.** `Application.put_env/3` is global and VM-lifetime; ExUnit orders files by a random seed. `p0_correctness_test.exs` leaked `compiler: :none` into everything after it (fixed — see below), but the same pattern is all over `nuts_test.exs`, `native_tree_test.exs`, `statham_tree_test.exs` and `fused_chain_diag_test.exs` for **`use_nif`, `full_tree_nif`, `speculative_precompute`** — the keys that select which of the three tree implementations runs (§5). Only `fault_tolerant_test.exs:201` saves and restores. So which tree a given test exercises depends on file ordering, and varies run to run. | half a day | same vacuity class as item 5, and it reaches the tree implementations directly. Do it **with** item 2 — a tolerance sweep is worth much less if you cannot say which implementation was under test. |
+| 4 | **The wall-clock test.** `mix test` is now **0 failures** on the default (EXLA) path — 375 tests on `main`, 472 on `gate1/reconcile-core` with the MCLMC/MAMS/SBI suites. The only default-path failure left is `integration_test.exs:738` — `assert t_vec < t_par` — and it is **timing-flaky**, not consistently red: it failed at `1034ms < 659ms` on one run and passed on the next with no code change. Move it to `bench/`. The other three failures NEXT.md originally listed were artefacts of Vulkan-by-default and are green under EXLA — **not fixed, not exercised**. | 1 hour | a flaky red trains people to ignore red faster than a stable one |
+| 6 | ~~**Tests leak `:exmc` application env into each other.**~~ **Done, and verified by the check that matters: two consecutive Vulkan sweeps now return identical failure sets.** Three separate instances, all restoring wrongly or not at all: `p0_correctness_test.exs` leaked `compiler: :none`; `nuts_test.exs:618` "reset" `full_tree_nif` to `true` when its default is `false`; `fault_tolerant_test.exs` did the same via `get_env(..., true)` and skipped its restore entirely on a raised assertion. `native_tree_test.exs` was `async: true` while setting `use_nif` globally, so it raced concurrent tests rather than merely later ones. Fixed with `Exmc.TestHelper.put_env_scoped/3` (reads the previous value instead of assuming a default — the assumption is what went wrong three times) plus an `ExUnit.after_suite` tripwire over **all twelve** `:exmc` keys that gate behaviour, since an ordinary assertion only sees leaks from files that ran *before* it. | — | — |
 | 5 | ~~**`config/test.exs` had never been loaded.**~~ **Fixed.** `config/config.exs` was one line, `import Config`, with no `import_config` — and Mix auto-loads only `config/config.exs`, so every setting in `config/test.exs` was dead: the `EXMC_COMPILER` switch, `config :exla, default_client: :host`, `allow_vulkan_perop_sampling`. **Every `EXMC_COMPILER=vulkan mix test` ever run sampled with whatever auto-detect picked and reported a pass for it.** Now imported, with `test/config_test.exs` as the tripwire. | — | — |
 
 ### Do not skip the red test — and mind which backend it is running
@@ -153,21 +169,64 @@ The first honest `EXMC_COMPILER=vulkan mix test` this repo has run:
 | `fault_tolerant_test.exs:234` | `Variance collapsed: 1.45e-15` — **the frozen-chain signature of item 1**, in a second test |
 | `integration_test.exs:738` | the wall-clock assertion (item 4), fails on both paths |
 
-Two cautions on that table. It is **not yet reproducible run to run** — an
-earlier sweep produced a `poker_test.exs:228` timeout that this one did not, and
-`integration_test.exs:639` fails reliably when its file is run alone but did not
-fail in either full sweep. Item 6 is the likely reason and should be fixed
-before anyone treats these four as the list. And every Vulkan number recorded in
-this repo *before* items 5 and 6 may have been measuring `:none`.
+Both cautions that used to sit here are resolved. The table **is** now
+reproducible: two consecutive sweeps produced exactly these five, differing only
+in ordering. `integration_test.exs:639` now fails in the full run as it always
+did in isolation — that was item 6, and it is what made the difference.
 
-Two traps worth carrying forward, both of which produce a confident green:
+Two entries deserve reading as item-1 evidence rather than as separate bugs:
+`fault_tolerant_test.exs:239`'s `Variance collapsed: 1.45e-15` is the same
+frozen-chain signature as `:639`, so the observed-model defect shows up in more
+than the one test this file has been tracking.
 
-- **ExUnit's line filter snaps backwards.** `mix test path:638` on a comment
-  line runs the *previous* test, reports `1 test, 0 failures`, and looks like
-  the test you meant. Give it the `test do` line — 639, not 638.
-- The test is **differential** (scalar arm vs vector arm), so it can only see
-  item 1 while the two arms disagree. It is the same structural blindness §3
-  describes; it happens to work here only because the defect hits one arm.
+`new_dist_test.exs:271`'s `read spv: No such file or directory` is **gone from
+both sweeps** and is no longer expected: it was a race in the shader cache, now
+fixed — see below.
+
+### The shader cache was racy, and it served empty shaders
+
+`Exmc.NUTS.CustomSynth.Compile.compile_fresh/2` pointed `glslangValidator -o`
+straight at the content-addressed cache path, and derived its temp GLSL path
+the same way. Concurrent callers synthesising the same shader therefore shared
+both paths — and ten-plus test modules are `async: true` and sample.
+
+Measured, 24 concurrent compiles of one shader over 40 rounds:
+**50 of 960 callers received `{:ok, spv_path}` for a zero-byte file.**
+`glslangValidator` creates its output before writing it, so the `File.exists?/1`
+fast path returned a module that had no contents yet. After compiling to
+per-caller temp paths and `File.rename/2`-ing into place: **960/960 clean.**
+
+Note what the repro corrected. The predicted mechanism was the shared `.comp`
+path letting one caller delete another's source mid-compile, surfacing as
+ENOENT. That is real and is also fixed, but it is *not* what dominates — the
+existence check racing the validator's file creation is, and it fails in a
+worse way, because an empty shader is a successful return rather than an error.
+Fixing on the hypothesis alone would have left the common case in place.
+
+The ENOENT interleaving was never directly reproduced (it needs a validator
+failure, and none occurred in 960 runs); it is eliminated by construction
+rather than by observation.
+
+**Related, and still open:** `exmc` and `nx_vulkan` hardcode the *same*
+`~/.exmc/gpu_node/spv` directory in two separate codebases, and `nx_vulkan`
+ships `Nx.Vulkan.Synthesis.clear_cache/0` — an `File.rm_rf` of it. Nothing
+calls it today. Any future caller silently deletes exmc's synthesised shaders
+mid-run.
+
+### Two documented safety features never run
+
+Found while chasing the above, and worth knowing before item 1:
+
+- **`Exmc.NUTS.Vulkan.SuspectTracker` is never started.** No `start_link`
+  anywhere in `lib/` or `test/`, so `alive?/0` is always false and the
+  per-shader eviction policy in its moduledoc — three consecutive timeouts
+  evicts a shader and routes around the GPU — has never executed.
+- **`:gpu_node` is read but never set** (`tree.ex:885`), so the watchdog path
+  through `Nx.Vulkan.Node.with_node` is unreachable and `route_chain_direct`
+  always takes the bare-dispatch branch.
+
+Net: there is currently **no timeout containment on the Vulkan path**. The two
+300s timeouts in the sweep hang until ExUnit kills them.
 
 ---
 
@@ -248,3 +307,118 @@ Code.ensure_loaded!(Exmc.NUTS.NativeTree)
 # ... run ...
 :erlang.trace_info({Exmc.NUTS.NativeTree, :build_subtree_bin, 10}, :call_count)
 ```
+
+---
+
+## 6. B1 (MCLMC / MAMS) — landed, with one measurement unfinished
+
+**Written 2026-08-16.** Roadmap item B1 from
+`/home/io/projects/learn_erl/pymc/exmc/docs/PLAN_SAMPLER_ROADMAP.md` §3.
+Stages B1.1–B1.3 are complete and gated. **B1.4, the bias measurement, is
+partially run and needs finishing — a host reboot interrupted it.** B1.5 (the
+GLSL arm) is deferred to Gate 5 and was deliberately not started.
+
+### What landed
+
+| file | what |
+|---|---|
+| `lib/exmc/mclmc/integrator.ex` | the isokinetic step — minimal-norm `V T V T V` splitting, λ = 0.1931833275037836, plus leapfrog |
+| `lib/exmc/mclmc/tuning.ex` | EEVPD step-size adaptation, the two `L` estimators, the moment accumulator |
+| `lib/exmc/mclmc.ex` | `sample/3`, `sample_compiled/3` — biased, one draw per integrator step |
+| `lib/exmc/mams.ex` | the same dynamics with a Metropolis accept — asymptotically unbiased |
+| `test/mclmc/{integrator,tuning,mclmc,mams}_test.exs` | 42 tests, all green |
+| `bench/mclmc_bias.exs` | the B1.4 sweep |
+| `bench_results/MCLMC_BIAS.md` | **partial** — see below |
+
+Nothing in the model layer changed. Both samplers take
+`Exmc.Compiler.compile_for_sampling/1`'s tuple and use only its `vag_fn` and
+`PointMap` slots.
+
+### To continue after the reboot: finish the bias sweep
+
+**This is the one unfinished thing. Start here.**
+
+`bench_results/MCLMC_BIAS.md` carries a `PARTIAL RUN` banner. What it actually
+contains, and what it does not:
+
+| block | state |
+|---|---|
+| `Normal(0,1)`, `HalfNormal(1)`, `Exponential(2)` at `d = 2` | **complete** — all ten rows each |
+| `Normal(0,1)` at `d = 8` | **partial** — MCLMC at six step sizes, MCLMC (tuned) and MAMS are there; **the NUTS row is missing** |
+| `HalfNormal`/`Exponential` at `d = 8` | missing |
+| everything at `d = 32` | missing |
+
+The missing NUTS row at `d = 8` is not a cosmetic gap: at `d = 8` MAMS reaches
+**1.6964 ESS/gradient** and MCLMC (tuned) **1.5258**, against 0.4169 and 0.2283
+for the same two at `d = 2`. Whether that beats NUTS is the entire B1 case and
+**the number that would answer it is the one that did not finish.** `d = 32` is
+what the roadmap's "abandon if" is really about.
+
+**Do not quote this file as evidence about high dimensions until the sweep is
+re-run.** The command, unchanged:
+
+```sh
+DIMS=2,8,32 SEEDS=1,2,3 WARMUP=1000 SAMPLES=3000 \
+  EPS=0.1,0.25,0.5,1.0,2.0,4.0 OUT=bench_results/MCLMC_BIAS.md \
+  mix run --no-deps-check bench/mclmc_bias.exs 2>&1 | tee /tmp/mclmc_bias.log
+```
+
+Budget roughly **3–4 hours** on `super-io` under load — the three `d = 2`
+blocks alone took about an hour of process time with a second agent on the box.
+Run it on an otherwise idle host if one is available, and `tee` it: three
+things worth knowing before starting.
+
+- **Fix the incremental write first — it is ten lines and it already cost one
+  run.** The script builds the whole document in memory and writes `OUT` once,
+  at the very end, so a kill loses the file. Every row *is* printed to stdout as
+  it is produced, which is how the current partial file was recovered, but that
+  recovery should not have been necessary. Append each block to `OUT` as it
+  completes.
+
+- **NUTS is the slow arm by a wide margin, and not because of tree depth.**
+  Measured directly on this host, `compiler: :none`, two `HalfNormal(1)` RVs:
+  600 NUTS iterations took 18.8 s at a mean tree depth of 2.1 and 1106 total
+  gradient evaluations — about **8 ms per gradient**. MCLMC on the same model
+  and backend runs ~2150 gradients/second, i.e. **~0.5 ms per gradient**. That
+  is a 15× per-gradient overhead in the tree machinery, not an algorithmic
+  difference, and it is not visible in any ESS-per-gradient table. It deserves
+  a profile of its own.
+
+- **`mix test` is green before you start.** The full suite was **461 tests, 1
+  failure** with all of this in place, and the one failure is the known
+  pre-existing wall-clock assertion at `integration_test.exs:762` (§2 item 4).
+  The four new files add 42 tests and take about 5 minutes of the run. If the
+  suite is not in that state after the reboot, fix that before trusting any
+  benchmark number.
+
+### What is not done, and should be
+
+- **B1.4 at `d = 8` and `d = 32`.** Above. This is the item that decides
+  whether B1 was worth doing.
+- **A Geweke joint-distribution run against MAMS.** The roadmap asks for it and
+  it is the right check for a novel accept step. It needs `simulate_from_prior/2`
+  and a public single transition — §3 / `MISSION.md` §7 P1 item 9. MAMS's
+  accept step is currently gated by an exact involution test
+  (`test/mclmc/mams_test.exs`) plus the analytic-moment battery, which is
+  strong but is not a joint-distribution test.
+- **`init_values` under NCP.** Both samplers raise rather than guess;
+  `Exmc.NUTS.Sampler.invert_ncp_init/2` is private and was not duplicated.
+
+### One general finding, and it is not confined to B1
+
+**A bare Elixir float in an `Nx` binary op silently computes at f32, even
+against an f64 tensor.** `Nx.divide(f64_tensor, 0.9695359714832659)` returns an
+f32-accurate result: the scalar becomes a default-typed `{:f, 32}` tensor and
+the promotion widens *after* the arithmetic. Measured on `Nx.BinaryBackend`.
+
+This cost real time here — the `‖u‖ = 1` invariant failed at **3e-8**, which is
+f32 epsilon, and read exactly like an algebra error in a new integrator.
+`Exmc.MCLMC.Integrator` now routes every scalar through a `c/2` helper that
+builds it at the tensor's own type, and the note is in that module's source.
+
+**The rest of the repository has not been audited for this.** `sampler.ex`,
+`leapfrog.ex`, `tree.ex` and `mass_matrix.ex` all mix Elixir floats with
+tensors. Any place that does is computing at f32 while believing it is at f64,
+and `MISSION.md` §4's "the f64 default is not costing anything and it is a
+correctness asset" is only true where the default actually applies. Worth a
+grep before the next precision question is diagnosed as a backend problem.

@@ -4,6 +4,49 @@
 
 ### Fixed
 
+- **The shader cache handed out empty SPIR-V modules under concurrency.**
+  `CustomSynth.Compile.compile_fresh/2` pointed `glslangValidator -o` straight
+  at the content-addressed cache path and derived its temp GLSL path the same
+  way, so concurrent callers synthesising the same shader shared both.
+  `glslangValidator` creates its output file before writing to it, so the
+  `File.exists?/1` fast path returned `{:ok, spv_path}` for a module with no
+  contents yet. Measured at 24 concurrent compiles over 40 rounds: **50 of 960
+  callers got a zero-byte file**. Ten-plus test modules are `async: true` and
+  sample, so this was reachable from an ordinary `mix test`.
+
+  Compilation now goes to per-caller temp paths and `File.rename/2`s into
+  place, which is atomic within a filesystem: a concurrent existence check sees
+  either no file or a complete one. Same repro after the fix: 960/960 clean.
+
+  The shared temp *source* path was the same bug one level down — one caller's
+  cleanup could delete the source out from under another's running validator,
+  and a validator that fails partway can take its `-o` target with it. That is
+  the likely origin of the intermittent
+  `read spv: No such file or directory` seen under `EXMC_COMPILER=vulkan`,
+  though that interleaving was never directly reproduced and is eliminated by
+  construction rather than by observation.
+
+- **Tests leaked `:exmc` application env into each other**, which made the
+  backend sweep report passes for runs it never performed. `put_env/3` is
+  global and VM-lifetime and ExUnit orders files by a random seed, so which
+  backend — and which of the three tree implementations — a test exercised
+  depended on file order and varied run to run. Three instances, each restoring
+  wrongly or not at all: `p0_correctness_test.exs` leaked `compiler: :none`;
+  `nuts_test.exs` "reset" `full_tree_nif` to `true` when its default is
+  `false`; `fault_tolerant_test.exs` did the same through a wrong default and
+  skipped its restore entirely when an assertion raised first.
+  `native_tree_test.exs` was `async: true` while setting `use_nif` globally.
+
+  `Exmc.TestHelper.put_env_scoped/3` reads the previous value rather than
+  assuming a default — assuming is what went wrong all three times — and an
+  `ExUnit.after_suite` tripwire now watches all twelve `:exmc` keys that gate
+  behaviour and fails the run on a leak. An ordinary assertion cannot catch
+  this: it only sees leaks from files that happened to run before it.
+
+  Effect: two consecutive `EXMC_COMPILER=vulkan mix test` runs now return
+  identical failure sets, and `integration_test.exs:639` fails in the full
+  suite as it always did in isolation.
+
 - **A broken optional dependency could make the whole test suite unrunnable.**
   `exla` was declared `optional: true` but still landed in `exmc`'s
   `applications` list, so the BEAM started it at boot. On a host where the
