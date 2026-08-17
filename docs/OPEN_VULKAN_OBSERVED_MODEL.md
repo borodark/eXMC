@@ -1,10 +1,89 @@
-# Open defect: the vulkan chain path is wrong for observed models
+# ~~Open defect~~ FIXED: the vulkan chain path was wrong for observed models
 
 **Found:** 2026-08-16, while verifying the 0.3.1 P0 backport.
-**Status:** open. NOT introduced by the 0.3.1 fixes — but they changed its
-symptom, so it is now visible instead of merely wrong.
-**Blocks:** claiming `compiler: :vulkan` is correct for anything with
-observations. It is not.
+**Status:** **fixed** 2026-08-16 in `MultiRvCustomSpec`. NOT introduced by the
+0.3.1 fixes — but they changed its symptom, which is what made it visible
+instead of merely wrong.
+**Was blocking:** claiming `compiler: :vulkan` is correct for anything with
+observations.
+
+## The answer, up front
+
+The "next experiment" below was run, and it found the fault on **this** side of
+the NIF. `compose_logp_defn/1` gave **every** observed node the **whole**
+observation vector:
+
+```elixir
+lp = mod.logpdf(obs, resolved) |> Nx.sum()   # obs = the ENTIRE buffer
+```
+
+With three separate `Builder.obs` nodes, the likelihood was therefore counted
+three times over — 3× the log-density *and* 3× the gradient. The emitter then
+faithfully turned each node's `Nx.sum` into its own `for (j < pc.n_obs)` loop.
+`observed_obs_bin/1` had always concatenated the nodes' values in iteration
+order and its comment claimed the read side matched ("matches the order
+compose_logp_defn reads them"); nothing enforced it, and it did not.
+
+That also explains the freeze without needing the step-size lead below: a
+likelihood counted 3× is a posterior ~sqrt(3) too narrow with 3× steeper
+gradients, so eps = 1.139 was far past stable and acceptance collapsed to
+~0.002. **The "adapted eps identical to sixteen digits" observation was a
+saturated adaptation reporting a real problem, not a second bug.** It is also
+why the *vector* arm was correct all along: one obs node, one loop, no
+double-count.
+
+### The fix
+
+`transform_reduce_sum/3` now takes per-marker `{offset, count}` spans, so each
+observed node's loop ranges over its **own** slice of the buffer. `:full` (the
+old whole-buffer bound) is kept for the two cases where it is the correct
+reading: a single observed node, which owns the buffer by definition, and a
+Custom likelihood, whose markers cannot be attributed positionally.
+
+**One trap, recorded because it nearly shipped.** Attribution is positional,
+and the gradient's markers arrive **mirrored** relative to the forward
+log-density's — reverse-mode AD walks `compose_logp_defn/1`'s left fold
+backwards, so `_gacc*_0` is the LAST observed node while `_lpacc0` is the
+first. With all three observations `Normal(mu, 1)` a mirrored assignment gives
+a **bit-identical** answer, so the first version of this fix looked correct and
+was not. `bench/leapfrog_leaf_diff.exs` therefore uses **distinct per-node
+sigmas** (1.0 / 2.0 / 3.0), where any permutation changes the numbers. Keep it
+that way. A marker-count guard raises (degrading to `:unsupported`, i.e. the
+slower host path) if the correspondence ever breaks.
+
+### Verification
+
+`bench/leapfrog_leaf_diff.exs` — all four arrays agree with the host leapfrog
+to ~1e-15 across three (eps, q0, p0) settings, and the logp offset is constant
+along the trajectory, so the Metropolis ratio is equivalent.
+
+The posterior, 300 warmup + 500 samples, seed 42, `compiler: :vulkan`:
+
+| | mean | sd | distinct draws |
+|---|---|---|---|
+| analytic | 3.99 | 0.577 | — |
+| **after the fix** | **3.966** | **0.539** | **469 / 500** |
+| before | 3.650 | 3.3e-14 | 1 / 500 |
+
+`test/integration_test.exs:639` ("vector obs produces same posterior as
+equivalent scalar obs"), left deliberately red, now passes.
+
+### Still open, found alongside
+
+* The observation buffer and prior params are **f32-rounded** on a nominally
+  f64 path — `3.8` arrives as `3.799999952316284`. Shared by host and GPU (both
+  read the same f32 IR tensors), so it does not show up as a divergence, but it
+  is not f64.
+* `transform_reduce_sum_batched/2` (the Task #154 batched path) carries the
+  **same** whole-buffer defect and was NOT fixed here. It is currently
+  unreachable — `Nx.Vulkan.NativeV.leapfrog_chain_synth_batch_f64/6` is
+  undefined, which the compiler warns about on every build.
+
+---
+
+## Original write-up
+
+**Status at the time:** open.
 
 ## What happens
 

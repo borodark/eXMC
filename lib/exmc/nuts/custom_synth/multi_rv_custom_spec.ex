@@ -400,6 +400,16 @@ void main() {
         render_with_custom(components)
       end
     end
+  rescue
+    # The obs-span attribution guard in do_transform_rs/5. Degrade to an
+    # {:error, _} so CustomSynth.synthesise/1 reports :unsupported and the
+    # model samples on the host — slower, but not wrong.
+    e in RuntimeError ->
+      if String.starts_with?(Exception.message(e), "transform_reduce_sum:") do
+        {:error, {:obs_span_attribution, Exception.message(e)}}
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 
   defp render_prior_only(priors, layout) do
@@ -445,7 +455,9 @@ void main() {
          {:ok, grad_entries_raw} <- Exmc.NUTS.CustomSynth.Glsl.emit_vector(grad_expr, layout) do
       captured_decls = build_captured_decls(Exmc.NUTS.CustomSynth.Glsl.collect_captures())
 
-      {log_p_loops, log_p_expr} = transform_reduce_sum(log_p_glsl_raw, "_lpacc")
+      spans = obs_spans(components)
+
+      {log_p_loops, log_p_expr} = transform_reduce_sum(log_p_glsl_raw, "_lpacc", spans)
 
       grad_by_idx =
         grad_entries_raw
@@ -464,7 +476,18 @@ void main() {
               many -> "(" <> Enum.join(many, ") + (") <> ")"
             end
 
-          {loops, expr} = transform_reduce_sum(summed, "_gacc#{i}_")
+          # The gradient's markers arrive MIRRORED relative to the forward
+          # log-density's. `compose_logp_defn/1` folds the observed terms left
+          # to right, and reverse-mode AD walks that tape backwards, so
+          # `_gacc*_0` is the LAST observed node while `_lpacc0` is the first.
+          # Confirmed by reading the emitted GLSL: with sigmas 1/2/3 the
+          # gradient's first accumulator carries the /3.0 divisor.
+          #
+          # Positional attribution is therefore per-direction, and
+          # bench/leapfrog_leaf_diff.exs pins it with DISTINCT per-node sigmas
+          # precisely so a permutation cannot pass unnoticed — with identical
+          # observations a mirrored assignment gives bit-identical answers.
+          {loops, expr} = transform_reduce_sum(summed, "_gacc#{i}_", reverse_spans(spans))
           {i, {loops, expr}}
         end
         |> Enum.reduce({%{}, %{}}, fn {i, {loops, expr}}, {loops_acc, expr_acc} ->
@@ -686,22 +709,107 @@ void main() {
   end
 
   # Rewrite `/*REDUCE_SUM*/(<inner>)` markers in `glsl` into serial
-  # GLSL for-loops over `pc.n_obs`, accumulating into uniquely-named
-  # locals (`prefix0`, `prefix1`, ...). Returns `{loops_block,
-  # glsl_with_accums_substituted}`.
+  # GLSL for-loops, accumulating into uniquely-named locals (`prefix0`,
+  # `prefix1`, ...). Returns `{loops_block, glsl_with_accums_substituted}`.
   #
   # The inner expression references `obs_j` (the second-parameter
-  # layout binding); the loop's `float obs_j = obs_inv_mass[j];`
+  # layout binding); the loop's `double obs_j = obs_inv_mass[j];`
   # binding provides it.
-  defp transform_reduce_sum(glsl, prefix) do
-    do_transform_rs(glsl, prefix, [], 0)
+  #
+  # `spans` decides what each loop ranges over:
+  #
+  #   :full          every marker loops `j < pc.n_obs` — the whole observation
+  #                  buffer. Correct when ONE observed node owns the buffer
+  #                  (a single `Builder.obs` carrying a vector) or when a
+  #                  Custom likelihood consumes all of it.
+  #
+  #   [{off, cnt}]   marker i ranges over `[off, off+cnt)` — its OWN slice of
+  #                  the buffer. Required when a model has several observed
+  #                  nodes, because `observed_obs_bin/1` concatenates their
+  #                  values in iteration order and each node's log-density is
+  #                  a function of its own observations only.
+  #
+  # Without the second form every observed node summed the ENTIRE buffer, so a
+  # model with n separate scalar observations counted its whole likelihood n
+  # times over — n× the log-density AND n× the gradient. The posterior came out
+  # ~sqrt(n) too narrow, which made the adapted step size far too large for it,
+  # which collapsed the acceptance rate and froze the chain. Measured at
+  # 3 observations: gradient 31.495 against a host/analytic 10.495, diverging
+  # from leapfrog step 0. See docs/OPEN_VULKAN_OBSERVED_MODEL.md.
+  defp transform_reduce_sum(glsl, prefix, spans \\ :full) do
+    do_transform_rs(glsl, prefix, [], 0, spans)
   end
 
-  defp do_transform_rs(glsl, prefix, loops_acc, n) do
+  defp reverse_spans(:full), do: :full
+  defp reverse_spans(spans) when is_list(spans), do: Enum.reverse(spans)
+
+  # Where each observed node's observations live in the binding-2 buffer.
+  # `CustomSynth.observed_obs_bin/1` concatenates the nodes' values in
+  # iteration order, and this is the matching read side — the correspondence
+  # its own comment claims ("matches the order compose_logp_defn reads them")
+  # but which nothing enforced until the spans below.
+  #
+  # Returns `:full` — every marker sums the whole buffer — in the two cases
+  # where that is the correct reading and per-node attribution is not:
+  #
+  #   * one observed node: it owns the entire buffer by definition, and
+  #     keeping the runtime `pc.n_obs` bound means a vector-obs model still
+  #     compiles to one SPV regardless of how many data points it carries;
+  #   * a Custom likelihood: its term contributes markers of its own that do
+  #     not correspond to observed nodes positionally, so the offsets could
+  #     not be attributed.
+  defp obs_spans(%{custom: custom}) when not is_nil(custom), do: :full
+
+  defp obs_spans(components) do
+    observed = Map.get(components, :observed, [])
+
+    if length(observed) < 2 do
+      :full
+    else
+      observed
+      |> Enum.map_reduce(0, fn {_id, _mod, _params, value, _meta}, off ->
+        cnt = obs_count(value)
+        {{off, cnt}, off + cnt}
+      end)
+      |> elem(0)
+    end
+  end
+
+  # Mirrors CustomSynth.obs_size/1 — a scalar observation still occupies one
+  # slot, so an all-scalar model yields spans {0,1}, {1,1}, {2,1}.
+  defp obs_count(%Nx.Tensor{} = t), do: max(Nx.size(t), 1)
+  defp obs_count(_), do: 1
+
+  # `:full` keeps the runtime bound, so a single-observed-node model compiles to
+  # the same GLSL it always did and stays reusable across dataset sizes. A span
+  # bakes in constants, which is correct: the offsets ARE a property of the
+  # model's observed nodes, not of the data length.
+  defp loop_lo(:full, _n), do: "0u"
+  defp loop_lo(spans, n) when is_list(spans), do: "#{elem(Enum.at(spans, n), 0)}u"
+
+  defp loop_hi(:full, _n), do: "pc.n_obs"
+
+  defp loop_hi(spans, n) when is_list(spans) do
+    {off, cnt} = Enum.at(spans, n)
+    "#{off + cnt}u"
+  end
+
+  defp do_transform_rs(glsl, prefix, loops_acc, n, spans) do
     marker = "/*REDUCE_SUM*/("
 
     case :binary.match(glsl, marker) do
       :nomatch ->
+        # A per-node span list is positional: marker i is observed node i. If
+        # the emitter ever produces a different number of markers than there
+        # are observed nodes that correspondence is broken, and the offsets
+        # would silently land on the wrong observations. Raise instead — the
+        # caller turns it into `:unsupported`, which costs a slower host path
+        # rather than a wrong posterior.
+        if is_list(spans) and n != length(spans) do
+          raise "transform_reduce_sum: #{n} REDUCE_SUM marker(s) for " <>
+                  "#{length(spans)} observed node(s); cannot attribute obs slices"
+        end
+
         {Enum.reverse(loops_acc), glsl}
 
       {start, marker_len} ->
@@ -725,7 +833,7 @@ void main() {
 
             loop_block = """
             double #{accum} = 0.0lf;
-            for (uint j = 0u; j < pc.n_obs; j++) {
+            for (uint j = #{loop_lo(spans, n)}; j < #{loop_hi(spans, n)}; j++) {
                 double obs_j = obs_inv_mass[j];
             #{cse_binds}
                 #{accum} += (#{inner_cse});
@@ -736,7 +844,7 @@ void main() {
             after_ = binary_part(glsl, close_paren + 1, byte_size(glsl) - close_paren - 1)
             new_glsl = before <> accum <> after_
 
-            do_transform_rs(new_glsl, prefix, [loop_block | loops_acc], n + 1)
+            do_transform_rs(new_glsl, prefix, [loop_block | loops_acc], n + 1, spans)
         end
     end
   end
