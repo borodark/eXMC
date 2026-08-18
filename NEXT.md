@@ -10,7 +10,7 @@ stands rather than as the mission planned it.
 
 ## Status — 2026-08-18, after the reboot
 
-Items 1, 3, 5, 6 and 7 are closed. **§2 item 2 is the only P0 left.**
+**All seven §2 items are closed.**
 **Item 1 was confirmed on 2026-08-17** by the sweep it asked for — see below and
 [`bench_results/OBSERVED_MODEL_EVIDENCE.md`](bench_results/OBSERVED_MODEL_EVIDENCE.md).
 `6c1589a fix(synth): every observed node summed the WHOLE obs buffer` closed
@@ -19,8 +19,9 @@ it. **Item 7 was fixed on 2026-08-18** — three defects, not one; see
 
 | run | result |
 |---|---|
-| `mix test` (default → EXLA), 2026-08-18 | 473 tests, **1 failure** (the wall-clock one, item 4) |
-| `EXMC_COMPILER=vulkan mix test`, 2026-08-18 | 473 tests, **2 failures** |
+| `mix test` (default → EXLA), after items 7 + 2 | 476 tests, **1 failure** (the wall-clock one, item 4), 585s |
+| `EXMC_COMPILER=vulkan mix test`, after items 7 + 2 | 476 tests, **3 failures**, 1301s |
+| `EXMC_COMPILER=vulkan mix test`, after item 7 only | 473 tests, **2 failures**, 1047s |
 | `EXMC_COMPILER=vulkan mix test`, after `6c1589a` | 472 tests, **4 failures** |
 | `EXMC_COMPILER=vulkan mix test` ×2, before `6c1589a` | 472 tests, **5 failures**, identical both times |
 
@@ -43,10 +44,12 @@ nowhere. `docs/OPEN_VULKAN_OBSERVED_MODEL.md` carries the table and the three
 things about the sweep worth keeping; the raw output and host are in
 `bench_results/OBSERVED_MODEL_EVIDENCE.md`.
 
-Item 7 followed it and is also closed (§2). **§2 item 2 — the
-`assert_in_delta` sweep — is the only P0 left**, and both defects closed since
-the reboot are arguments for it: each was a real failure sitting behind a test
-that could not see it.
+Items 7 and 2 followed it and are also closed (§2), so **the whole P0 list is
+now done**. Item 2 is the one worth reading the write-up for: the sweep found
+that no statistical assertion in the suite could see a 20% variance error, the
+0.3.1 "fix" included, and that the reason was sample size rather than tolerance
+— which means a pure tolerance rewrite would have changed nothing.
+[`docs/TOLERANCE_AUDIT.md`](docs/TOLERANCE_AUDIT.md).
 
 ### ✅ The crash-recovery defect, in flight when the reboot came — closed
 
@@ -120,11 +123,16 @@ posterior and reports success — and the unswept tolerances of item 2. Item 7 i
 narrower than item 1 was: it needs crashes to trigger, and it is a silent wrong
 answer rather than a whole broken model class.
 
-**Updated 2026-08-18: item 7 is closed too.** Nothing on the P0 list now blocks
-publishing on correctness grounds. What is left is item 2 — the tolerances have
-not been swept, so the honest statement is "no known correctness defect", not
-"verified correct". That is a judgement call about what the release notes claim,
-not a defect to fix first.
+**Updated 2026-08-18: items 7 and 2 are closed too, so P0 is done.** Nothing on
+that list blocks publishing on correctness grounds any more.
+
+One thing the release notes should not claim, though. The tolerance sweep
+(§2 item 2) makes the suite able to see a 20% variance error **in the marginals
+of models with closed forms**. It says nothing about correlations, about the
+joint distribution, or about any model without a closed form — which is most
+real models. "No known correctness defect, and the suite can now see the defect
+class that caused the last two" is the honest sentence. "Verified correct" is
+not, and will not be until §3's Geweke and SBC items land.
 
 > **Correction, 2026-08-16.** This file, `MISSION.md`, and the annotation on
 > the red test all say `compiler: :vulkan` is "the default". That is not what
@@ -160,13 +168,14 @@ the operator's to run.
 
 ## 2. P0 continued — what 0.3.1 did not close
 
-Ranked. Items 1 and 7 are closed. **Item 2 is the only P0 left**, and it is
-the one that would have caught both of the others earlier.
+Ranked. **All seven are closed.** P0 is done; §3 (verification as a
+deliverable) is what follows, and `docs/TOLERANCE_AUDIT.md` names the two
+things there that item 2 could not substitute for — Geweke and SBC.
 
 | # | item | effort | why it ranks here |
 |---:|---|---|---|
 | 1 | ~~**The vulkan observed-model defect.**~~ **Closed 2026-08-17, confirmed by sweep.** Was: `compiler: :vulkan` returned a frozen chain (1 distinct value in 500 draws, `accept_prob` ≈ 0.002) for models with observations. Fixed in `6c1589a`; confirmed by `bench/observed_model_evidence.exs` — 9 variants x 4 seeds x both arms, **72/72 rows** within tolerance of the closed form, worst sd error 8.1%, fewest distinct draws 447/500. The distinct-sigma variants are the load-bearing ones (equal sigmas make a mis-assigned span bit-identical), and a per-row GPU dispatch count rules out rows that silently fell back to the host. [`docs/OPEN_VULKAN_OBSERVED_MODEL.md`](docs/OPEN_VULKAN_OBSERVED_MODEL.md), raw in [`bench_results/OBSERVED_MODEL_EVIDENCE.md`](bench_results/OBSERVED_MODEL_EVIDENCE.md). | — | — |
-| 2 | **The `assert_in_delta` sweep.** 0.3.1 tightened exactly one assertion (`integration_test.exs:29`, now checking the closed-form conjugate posterior via `Validator.check_analytic/3`). The rest of the suite is unswept. Find every tolerance that would accept a 20% variance error. | half a day | this is VERIFICATION_METHODS' rank-1 item and the reason two defects shipped |
+| 2 | ~~**The `assert_in_delta` sweep.**~~ **Done 2026-08-18.** The answer was that **no** statistical assertion in the suite could see a 20% variance error — including the one 0.3.1 added as the fix, which resolved 37.8% against a defect that was 37.8%. Three findings: 89 of 99 sampling tests asserted nothing about dispersion at all; where a gate existed the sample size made it decorative (ESS ~0.35/draw, so the resolution limits ran 36-86%); and two gates were wrong in the *other* direction (Student-t at df<=4 has no valid variance gate, Cauchy's IQR gate was 6x too tight). Fixed with `TestHelper.assert_posterior!/3`, which fails as INCONCLUSIVE when the chain cannot resolve the error it claims to check. [`docs/TOLERANCE_AUDIT.md`](docs/TOLERANCE_AUDIT.md). | — | — |
 | 3 | ~~**The EXLA build.**~~ **Done — both halves.** The library bug is fixed (`exla` is `runtime: false`, `Exmc.JIT` starts it lazily and treats a failed start as "backend unavailable", covered by `test/optional_deps_test.exs`), *and* this host now has a working CPU EXLA. Recipe and its two traps in [`docs/EXLA_CPU_BUILD.md`](docs/EXLA_CPU_BUILD.md); the short version is `EXLA_CPU_ONLY=1 XLA_TARGET=cpu`, not `XLA_TARGET=cpu`. | — | — |
 | 4 | **The wall-clock test.** `mix test` is now **0 failures** on the default (EXLA) path — 375 tests on `main`, 472 on `gate1/reconcile-core` with the MCLMC/MAMS/SBI suites. The only default-path failure left is `integration_test.exs:738` — `assert t_vec < t_par` — and it is **timing-flaky**, not consistently red: it failed at `1034ms < 659ms` on one run and passed on the next with no code change. Move it to `bench/`. The other three failures NEXT.md originally listed were artefacts of Vulkan-by-default and are green under EXLA — **not fixed, not exercised**. | 1 hour | a flaky red trains people to ignore red faster than a stable one |
 | 5 | ~~**`config/test.exs` had never been loaded.**~~ **Fixed.** `config/config.exs` was one line, `import Config`, with no `import_config` — and Mix auto-loads only `config/config.exs`, so every setting in `config/test.exs` was dead: the `EXMC_COMPILER` switch, `config :exla, default_client: :host`, `allow_vulkan_perop_sampling`. **Every `EXMC_COMPILER=vulkan mix test` ever run sampled with whatever auto-detect picked and reported a pass for it.** Now imported, with `test/config_test.exs` as the tripwire. | — | — |
@@ -319,23 +328,32 @@ note that it only means anything now that item 5 is fixed.
 
 ### What the Vulkan sweep actually says
 
-Latest, 2026-08-18, after the item 7 fix — **473 tests, 2 failures** (was 4,
-was 5). The default (EXLA) path is **473 tests, 1 failure** — the wall-clock
-one — on the same tree.
+Latest, 2026-08-18, after items 7 and 2 — **476 tests, 3 failures** (was 4,
+was 5; item 2 added three tests and made several much slower). The default
+(EXLA) path is **476 tests, 1 failure** — the wall-clock one — on the same tree.
 
 | test | failure |
 |---|---|
 | `level_set_integration_test.exs:11` | timed out at 300s |
+| `poker_test.exs:228` | timed out at 300s — **back**, see below |
 | `integration_test.exs:745` | the wall-clock assertion (item 4), fails on both paths |
+
+**The poker timeout came back, and item 2 is the likely reason.** It dropped
+off the list on the sweep immediately after item 7, which was run on an
+otherwise idle box; item 2 raised several tests from a few hundred draws to
+five figures and the Vulkan sweep went from 1047s to **1301s**. A test that
+hangs until ExUnit kills it at 300s is exactly the kind that a busier box tips
+over. It is a timeout with no containment behind it (see below), not a
+correctness failure, and it should be treated as load-sensitive rather than
+fixed or broken.
 
 Dropped off since the last sweep:
 
 * `fault_tolerant_test.exs:239` — **item 7, fixed.** Was `Variance collapsed:
   1.45e-15`.
-* `poker_test.exs:228` — was a 300s timeout, passed this time with **no change
-  that should affect it**. Unexplained. The earlier sweeps ran with a second
-  agent on the box and this one did not, so load is the obvious suspect and it
-  should be treated as still-flaky rather than fixed.
+* `poker_test.exs:228` — dropped off after item 7 and came back after item 2,
+  both times a 300s timeout with no change that should affect it. Load-flaky;
+  see the note above.
 * `integration_test.exs:646` dropped off at `6c1589a` — see item 1.
 * `new_dist_test.exs:271`'s `read spv: No such file or directory` dropped off
   earlier and is not expected back: it was a shader-cache race, fixed in
@@ -409,9 +427,28 @@ those rather than starting over.
 
 The ranked plan is in
 `/home/io/projects/learn_erl/pymc/exmc/docs/VERIFICATION_METHODS.md`
-(cross-repo, 1,641 lines). Its rank-1 item is §2 item 2 above. Its next is
-**Geweke's joint distribution test**, which is the one check that would have
-caught the tree defect at the point of introduction rather than months later.
+(cross-repo, 1,641 lines). Its rank-1 item was §2 item 2 above, now closed —
+though only partly in the form that document expected. Item 2 did its own
+items 1 and 2 (the variance SE, and refusing a variance gate for
+`2 < nu <= 4` Student-t), fixed a third gate it had not spotted (Cauchy's IQR
+band, six times too tight), and added the thing that was missing from all of
+them: a **power** check, so a gate that cannot see the defect it claims to
+check fails rather than passes. See `docs/TOLERANCE_AUDIT.md`.
+
+**Still open from that rank-1 list**, and cheap: thin to independence before
+the KS gate (or drop it), make `:unknown` visible at suite level, and add
+split-R-hat with an `ESS >= 100` precondition. Items 7-9 there — un-tag
+`nuts_test.exs`, parametrise the reversibility test over all five leapfrog
+implementations, ungate `native_tree_test.exs`'s `:vulkan_known_failure` — are
+untouched and are the ones that make existing tests run against shipping code.
+(`nuts_test.exs` no longer carries `@moduletag :gpu_state`, so item 7 there may
+already be moot; check before doing it.)
+
+Its next rank is **Geweke's joint distribution test**, which is the one check
+that would have caught the tree defect at the point of introduction rather than
+months later. Nothing in item 2 substitutes for it: the tolerance sweep can see
+a wrong marginal in a model with a closed form, and says nothing about the
+joint or about models without one.
 
 **One addition to that plan, from what 0.3.1 found:** a **leaf-level
 differential between the chain shader and the host**. Fix `q0`, `p0`, `eps`,
@@ -441,9 +478,9 @@ honesty fix (§1 of the mission: reach, not speed) before any new performance
 claim.
 
 One item that moved up as a result of 0.3.1: **every claim should point at raw
-output.** `bench_results/` now exists and holds three files — `MCLMC_BIAS.md`
-(partial, §6), `OBSERVED_MODEL_EVIDENCE.md` and `CRASH_RECOVERY.md` (both
-complete). `bench/` has six scripts. Every performance claim in the README should point at a file
+output.** `bench_results/` now exists and holds four files — `MCLMC_BIAS.md` (partial,
+§6), `OBSERVED_MODEL_EVIDENCE.md`, `CRASH_RECOVERY.md` and `TOLERANCE_AUDIT.md`
+(complete). `bench/` has seven scripts. Every performance claim in the README should point at a file
 containing raw output and the host it ran on, the way `nx_vulkan/bench_results/`
 does; none of them do yet.
 
@@ -463,6 +500,11 @@ FULL_TREE_NIF=1 mix run --no-deps-check bench/nuts_truth.exs  # Rust build_full_
 # the observed-model evidence sweep — the check that closed §2 item 1
 COMPILER=none   SEEDS=42,1,2,3 mix run --no-deps-check bench/observed_model_evidence.exs
 COMPILER=vulkan SEEDS=42,1,2,3 mix run --no-deps-check bench/observed_model_evidence.exs
+
+# what the suite's statistical tolerances admit — the check that closed §2
+# item 2. Each test appears twice, `was` and `now`; the `4sd floor` column is
+# the resolution limit no tolerance rewrite can beat.
+mix run --no-deps-check bench/tolerance_audit.exs
 
 # crash recovery under supervision — the check that closed §2 item 7.
 # INJECT=0 is the control; `placeholders: 0` with injection on means the run

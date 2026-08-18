@@ -3,6 +3,8 @@ defmodule Exmc.StanTest do
 
   @moduletag :stan
 
+  import Exmc.TestHelper, only: [assert_posterior!: 3]
+
   test "end-to-end: normal conjugate posterior" do
     code = """
     data { real y; }
@@ -14,15 +16,18 @@ defmodule Exmc.StanTest do
     """
 
     ir = Exmc.Stan.compile!(code, %{"y" => Nx.tensor(5.0)})
-    {trace, _stats} = Exmc.Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 500, seed: 42)
+    {trace, _stats} = Exmc.Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 4000, seed: 42)
 
-    mu_samples = trace["mu"]
-    mean = Nx.mean(mu_samples) |> Nx.to_number()
+    samples = trace["mu"] |> Nx.to_flat_list()
 
-    # Posterior mean should be near 5.0 (strong data, weak prior)
-    # With prior N(0,10) and obs y=5 with sigma=1:
-    # posterior mean = (0/100 + 5/1) / (1/100 + 1/1) ≈ 4.95
-    assert_in_delta mean, 4.95, 0.5
+    # The closed-form conjugate posterior, not the rounded 4.95:
+    #   precision = 1/100 + 1/1, var = 1/1.01, mean = 5/1.01
+    #
+    # Was `assert_in_delta mean, 4.95, 0.5` on 500 draws — half a posterior sd
+    # of slack on the mean and no gate at all on the spread. This is a Stan
+    # front-end test, but what it claims is that the sampler recovers the
+    # posterior, so it should be able to see a wrong one.
+    assert_posterior!(samples, {:normal, 5.0 / 1.01, :math.sqrt(1.0 / 1.01)}, resolution: 0.20)
   end
 
   test "end-to-end: constrained parameter stays positive" do

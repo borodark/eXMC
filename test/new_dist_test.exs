@@ -1,6 +1,8 @@
 defmodule Exmc.NewDistTest do
   use ExUnit.Case, async: true
 
+  import Exmc.TestHelper, only: [assert_posterior!: 3]
+
   alias Exmc.Dist.{Lognormal, HalfCauchy, TruncatedNormal, Bernoulli, Poisson}
   alias Exmc.Builder
   alias Exmc.Dist.{Normal, Beta, Exponential}
@@ -226,12 +228,21 @@ defmodule Exmc.NewDistTest do
       Builder.new_ir()
       |> Builder.rv("x", Lognormal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(0.5)})
 
-    {trace, _stats} = Exmc.NUTS.Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 300, seed: 42)
+    # Was 300 draws with `assert_in_delta mean, expected_mean, 0.5`, which is
+    # 0.8 posterior sd of slack on the mean and nothing on the spread — the
+    # log-normal's whole character is its right tail, and the test could not
+    # see it at all.
+    #
+    # 10000 rather than 6000: at 6000 this resolved 19.6% under EXLA and 21.3%
+    # under `EXMC_COMPILER=vulkan`, i.e. it passed on one arm and reported
+    # INCONCLUSIVE on the other. ESS is backend-dependent, so the draw count
+    # has to be sized for the slower arm.
+    {trace, _stats} = Exmc.NUTS.Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 10000, seed: 42)
     values = Nx.to_flat_list(trace["x"])
-    mean = Enum.sum(values) / length(values)
-    expected_mean = :math.exp(0.0 + 0.25 / 2.0)
-    assert_in_delta mean, expected_mean, 0.5
     assert Enum.all?(values, &(&1 > 0.0))
+
+    # Lognormal(0, 0.5): mean exp(sigma^2/2), var (exp(sigma^2) - 1) exp(sigma^2).
+    assert_posterior!(values, {:lognormal, 0.0, 0.5}, resolution: 0.20)
   end
 
   # ── NUTS sampling: HalfCauchy prior ───────────────────────

@@ -1,6 +1,8 @@
 defmodule Exmc.IntegrationTest do
   use ExUnit.Case
 
+  import Exmc.TestHelper, only: [assert_posterior!: 3]
+
   @moduletag :integration
   @moduletag timeout: 120_000
 
@@ -20,7 +22,12 @@ defmodule Exmc.IntegrationTest do
       |> Builder.rv("x", Normal, %{mu: "mu", sigma: Nx.tensor(1.0)})
       |> Builder.obs("x_obs", "x", Nx.tensor(5.0))
 
-    {trace, stats} = Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 500, seed: 42)
+    # 4000 draws, not 500. At 500 this chain reaches ESS ~180, where a 4-sigma
+    # analytic gate can only detect a 38% variance error — which is the size of
+    # the defect that shipped. 4000 draws reach ESS ~1280 and resolve ~15%,
+    # verified by injecting the 0.3.0 defect (variance x1.378) into this exact
+    # chain and confirming the gate reports `analytic_variance failed`.
+    {trace, stats} = Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 4000, seed: 42)
 
     samples = trace |> Map.fetch!("mu") |> Nx.to_flat_list()
 
@@ -39,15 +46,16 @@ defmodule Exmc.IntegrationTest do
     # 38% (see CHANGELOG 0.3.1). A tolerance that wide is not a correctness
     # test, it is a smoke test wearing one's clothes.
     #
-    # check_analytic/3 derives its tolerance from this chain's own effective
-    # sample size rather than from a round number, so it tightens automatically
-    # as the sampler improves and cannot be satisfied by a defect this size.
-    assert :ok ==
-             Exmc.NUTS.Vulkan.Validator.check_analytic(
-               samples,
-               :host,
-               {:normal, post_mean, :math.sqrt(post_var)}
-             )
+    # 0.3.1 replaced it with a bare `check_analytic/3`, which sizes its
+    # tolerance from the chain's own ESS and therefore cannot be too tight.
+    # It can be far too loose, and it was: at 500 draws the gate admitted a
+    # 37.8% variance error against a defect that was 37.8%. It would have been
+    # a coin flip on the very bug it was written for.
+    #
+    # `assert_posterior!` adds the half that was missing — the chain must have
+    # enough effective draws for the gate to see a 20% variance error, or the
+    # test fails as INCONCLUSIVE rather than passing.
+    assert_posterior!(samples, {:normal, post_mean, :math.sqrt(post_var)}, resolution: 0.20)
 
     assert stats.divergences < 20
   end
@@ -83,14 +91,24 @@ defmodule Exmc.IntegrationTest do
       Builder.new_ir()
       |> Builder.rv("alpha", Exmc.Dist.Gamma, %{alpha: Nx.tensor(2.0), beta: Nx.tensor(1.0)})
 
-    {trace, _stats} = Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 200, seed: 99)
+    # 4000 draws, not 200. `assert_in_delta mean, 2.0, 1.0` on 200 draws
+    # asserted the mean to within 0.71 posterior sd and said NOTHING about the
+    # spread, so it passed for a frozen chain, a doubled variance, or anything
+    # in between. At 200 draws the best possible variance gate could only see
+    # an 86% error (bench/tolerance_audit.exs).
+    # 8500, not 200. Gamma(2,1)'s fourth moment is 5x its squared variance, so
+    # a 20% gate needs ESS ~2000 — and the count is sized for ~15% rather than
+    # 20% on purpose. ESS varies with the backend: the first version of this
+    # sweep sized every count to just under 20% on EXLA and the Lognormal test
+    # then failed under `EXMC_COMPILER=vulkan` at 21.3%. Headroom is not
+    # padding here, it is what stops the gate being a coin flip.
+    {trace, _stats} = Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 8500, seed: 99)
 
     values = Nx.to_flat_list(trace["alpha"])
     assert Enum.all?(values, &(&1 > 0.0))
 
-    # Mean of Gamma(2,1) = alpha/beta = 2.0
-    mean = Enum.sum(values) / length(values)
-    assert_in_delta mean, 2.0, 1.0
+    # Gamma(2,1) in shape/rate: mean 2.0, variance 2.0.
+    assert_posterior!(values, {:gamma, 2.0, 1.0}, resolution: 0.20)
   end
 
   # Beta/Gamma lgamma gradient triggers Complex.divide on BinaryBackend.
@@ -103,13 +121,20 @@ defmodule Exmc.IntegrationTest do
       Builder.new_ir()
       |> Builder.rv("rate", Exponential, %{lambda: Nx.tensor(2.0)})
 
-    {trace, _stats} = Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 300, seed: 77)
+    # Was 300 draws with `assert_in_delta mean, 0.5, 0.3` — 0.60 posterior sd on
+    # the mean and no gate on the spread at all.
+    # 12000 draws. Exponential is the most skewed target in this file — its
+    # fourth moment is 9/lambda^4 against a squared variance of 1/lambda^4, so
+    # (mu4 - sigma^4)/sigma^4 = 8 and a 20% variance gate needs ESS ~3200,
+    # four times what the Normal target needs. Skew is expensive to verify; the
+    # alternative on offer was not verifying it.
+    {trace, _stats} = Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 12000, seed: 77)
 
     values = Nx.to_flat_list(trace["rate"])
     assert Enum.all?(values, &(&1 > 0.0))
 
-    mean = Enum.sum(values) / length(values)
-    assert_in_delta mean, 0.5, 0.3
+    # Exponential(2): mean 0.5, variance 0.25.
+    assert_posterior!(values, {:exponential, 2.0}, resolution: 0.20)
   end
 
   # ── 4. Hierarchical model end-to-end with diagnostics ──────
@@ -259,10 +284,13 @@ defmodule Exmc.IntegrationTest do
       |> Builder.rv("p", Beta, %{alpha: Nx.tensor(2.0), beta: Nx.tensor(5.0)})
 
     # init near mode (0.2) in unconstrained space: logit(0.2) ≈ -1.39
+    # Was 400 draws with `assert_in_delta mean, 2/7, 0.15` — 0.94 posterior sd
+    # on the mean, i.e. a mean nearly a full sd wrong still passed, and no gate
+    # on the spread.
     {trace, _stats} =
       Sampler.sample(ir, %{},
-        num_warmup: 300,
-        num_samples: 400,
+        num_warmup: 500,
+        num_samples: 5000,
         seed: 88,
         init_values: %{"p" => Nx.tensor(0.2)}
       )
@@ -272,9 +300,8 @@ defmodule Exmc.IntegrationTest do
     # All samples must be in (0, 1)
     assert Enum.all?(values, &(&1 > 0.0 and &1 < 1.0))
 
-    # Mean of Beta(2,5) = 2/7 ≈ 0.286
-    mean = Enum.sum(values) / length(values)
-    assert_in_delta mean, 2.0 / 7.0, 0.15
+    # Beta(2,5): mean 2/7, variance ab/((a+b)^2 (a+b+1)) = 10/(49*8).
+    assert_posterior!(values, {:beta, 2.0, 5.0}, resolution: 0.20)
   end
 
   # ── 9. StudentT prior: mean near loc ─────────────────────────
@@ -290,12 +317,55 @@ defmodule Exmc.IntegrationTest do
         scale: Nx.tensor(1.0)
       })
 
-    {trace, _stats} = Sampler.sample(ir, %{}, num_warmup: 300, num_samples: 400, seed: 66)
+    {trace, _stats} = Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 4000, seed: 66)
 
     values = Nx.to_flat_list(trace["x"])
+    n = length(values)
+    ess = Exmc.NUTS.Vulkan.Validator.ess(values)
 
-    mean = Enum.sum(values) / length(values)
-    assert_in_delta mean, 3.0, 1.5
+    # This one deliberately does NOT use assert_posterior!, and the reason is
+    # the point of the test.
+    #
+    # Student-t with df = 4 has a finite mean and variance but an INFINITE
+    # fourth moment. Every variance gate in this suite is a multiple of
+    # sqrt((mu4 - sigma^4)/n_eff), so at df <= 4 that standard error does not
+    # exist: the sample variance has infinite variance and any sigma-multiple
+    # band around it is noise dressed as a tolerance. `analytic_moments/1`
+    # therefore returns `:unknown` for 2 < df <= 4, and `assert_posterior!`
+    # flunks rather than computing a number that means nothing.
+    #
+    # What CAN be checked at df = 4:
+    #
+    #   the mean   — Var(x_bar) = sigma^2 / n_eff needs only the second moment,
+    #                and sigma^2 = scale^2 * df/(df-2) = 2.0 exactly
+    #   the IQR    — a quantile, so it needs no moments at all
+    #
+    # The old assertion was `assert_in_delta mean, 3.0, 1.5` on 400 draws: 1.06
+    # posterior sd of slack on the mean, and nothing whatsoever on the spread.
+    # A frozen chain sitting at 3.0 passed it.
+    se_mean = :math.sqrt(2.0 / ess)
+    mean = Enum.sum(values) / n
+    assert_in_delta mean, 3.0, 4.0 * se_mean
+
+    # t(4)'s 75th percentile is 0.7406971, so IQR = 2 * scale * 0.7406971.
+    #
+    # The standard error of a sample IQR is NOT a fixed fraction of the IQR.
+    # For quantiles q_p, Var(q_p) = p(1-p)/(n_eff f(q_p)^2) and
+    # Cov(q_25, q_75) = 0.25*0.25/(n_eff f^2), so with a symmetric density
+    #
+    #     SE(IQR) = sqrt(0.25 / (n_eff f^2)) = 0.5 / (f sqrt(n_eff))
+    #
+    # where f is the density at the quartiles: 0.27190 for t(4) with scale 1.
+    # The `0.25 * IQR / sqrt(n)` proxy that check_analytic/3 uses is about 5x
+    # TOO TIGHT here and 6x too tight for Cauchy, i.e. it fails correct
+    # samplers — see the note on the quantile branch in Validator.
+    sorted = Enum.sort(values)
+    q25 = Exmc.Diagnostics.quantile(sorted, n, 0.25)
+    q75 = Exmc.Diagnostics.quantile(sorted, n, 0.75)
+    analytic_iqr = 2.0 * 1.0 * 0.7406971
+    f_quartile = 0.2719
+
+    assert_in_delta q75 - q25, analytic_iqr, 4.0 * 0.5 / (f_quartile * :math.sqrt(ess))
   end
 
   # ── 10. Hierarchical with constrained parent ─────────────────

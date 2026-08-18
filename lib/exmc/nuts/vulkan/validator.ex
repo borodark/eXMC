@@ -344,7 +344,7 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   """
   @spec analytic_moments(tuple()) ::
           {:moments, %{mean: float(), var: float()}}
-          | {:quantiles, %{median: float(), iqr: float()}}
+          | {:quantiles, %{median: float(), iqr: float(), f_quartile: float()}}
           | :unknown
   def analytic_moments({:normal, mu, sigma}),
     do: {:moments, %{mean: mu * 1.0, var: sigma * sigma * 1.0}}
@@ -363,14 +363,44 @@ defmodule Exmc.NUTS.Vulkan.Validator do
 
   # StudentT's variance is nu/(nu-2) and only exists for nu > 2; below that the
   # moment check would be comparing against an undefined quantity.
-  def analytic_moments({:studentt, mu, sigma, nu, _c}) when nu > 2,
+  # Gamma(alpha, beta) in the shape/RATE parameterisation, which is what
+  # Exmc.Dist.Gamma uses: mean alpha/beta, var alpha/beta^2.
+  def analytic_moments({:gamma, alpha, beta}) when alpha > 0 and beta > 0,
+    do: {:moments, %{mean: alpha / beta, var: alpha / (beta * beta)}}
+
+  def analytic_moments({:beta, a, b}) when a > 0 and b > 0 do
+    s = a + b
+    {:moments, %{mean: a / s, var: a * b / (s * s * (s + 1.0))}}
+  end
+
+  # Student-t needs nu > 4 here, not nu > 2.
+  #
+  # The mean and variance exist for nu > 2, but every gate built on them is a
+  # multiple of the standard error of the SAMPLE variance, and that standard
+  # error is sqrt((mu4 - sigma^4)/n). For 2 < nu <= 4 the fourth moment is
+  # INFINITE, so the sample variance has infinite variance and no sigma-multiple
+  # gate on it means anything at all — it will compute a number, and the number
+  # is noise. Returning :unknown makes callers say so out loud instead.
+  def analytic_moments({:studentt, _mu, _sigma, nu, _c}) when nu > 2 and nu <= 4, do: :unknown
+
+  def analytic_moments({:studentt, mu, sigma, nu, _c}) when nu > 4,
     do: {:moments, %{mean: mu * 1.0, var: sigma * sigma * nu / (nu - 2.0)}}
 
-  def analytic_moments({:cauchy, loc, scale, _log_pi_scale}),
-    do: {:quantiles, %{median: loc * 1.0, iqr: 2.0 * scale}}
+  # `f_quartile` is the density AT the quartiles, and it is what makes a
+  # quantile gate a gate rather than a number. Cauchy's quartiles are
+  # loc +/- scale, where f = 1/(pi * scale * (1 + 1^2)) = 1/(2 pi scale).
+  def analytic_moments({:cauchy, loc, scale, _log_pi_scale}), do: cauchy_quantiles(loc, scale)
 
-  def analytic_moments({:cauchy, loc, scale}),
-    do: {:quantiles, %{median: loc * 1.0, iqr: 2.0 * scale}}
+  def analytic_moments({:cauchy, loc, scale}), do: cauchy_quantiles(loc, scale)
+
+  defp cauchy_quantiles(loc, scale) do
+    {:quantiles,
+     %{
+       median: loc * 1.0,
+       iqr: 2.0 * scale,
+       f_quartile: 1.0 / (2.0 * :math.pi() * scale)
+     }}
+  end
 
   # Weibull needs the gamma function for its moments; not worth pulling one in
   # for a check that reports :unknown gracefully.
@@ -440,18 +470,32 @@ defmodule Exmc.NUTS.Vulkan.Validator do
             :ok
         end
 
-      {:quantiles, %{median: tmed, iqr: tiqr}} ->
+      {:quantiles, %{median: tmed, iqr: tiqr} = q} ->
         med = median(samples)
         got_iqr = iqr(samples)
         n = ess(samples)
 
         se_med = tiqr / 1.349 / :math.sqrt(n)
-        # The IQR's own SE has no clean closed form across distributions; the
-        # 25% band is the same conservative proxy check_iqr/2 uses. Checking it
-        # at all matters: without it the Cauchy branch verified location and
-        # said nothing whatever about scale, so a sampler that got the centre
-        # right and the spread wrong passed.
-        se_iqr = 0.25 * tiqr / :math.sqrt(n)
+
+        # The IQR's standard error is not a fixed fraction of the IQR, and the
+        # `0.25 * iqr / sqrt(n)` proxy that used to stand here was not
+        # conservative — it was about **six times too tight** for Cauchy, so it
+        # would have failed a correct sampler rather than passed a wrong one.
+        #
+        # For quantiles, Var(q_p) = p(1-p)/(n f(q_p)^2) and
+        # Cov(q_25, q_75) = 0.25 * 0.25/(n f^2), so for a symmetric density
+        #
+        #     SE(IQR) = sqrt(0.25 / (n f^2)) = 0.5 / (f sqrt(n))
+        #
+        # with f the density at the quartiles. For Cauchy that is
+        # pi * scale / sqrt(n), against the old proxy's 0.5 * scale / sqrt(n).
+        # Checked against a t(4) chain, where the same proxy was 5x too tight
+        # and the correct form put the measured IQR at 1.9 sigma.
+        se_iqr =
+          case q do
+            %{f_quartile: f} when is_number(f) and f > 0.0 -> 0.5 / (f * :math.sqrt(n))
+            _ -> 0.25 * tiqr / :math.sqrt(n)
+          end
 
         cond do
           abs(med - tmed) > @analytic_tol * se_med ->

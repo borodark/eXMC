@@ -310,14 +310,15 @@ defmodule Exmc.NUTSTest do
         Builder.new_ir()
         |> Builder.rv("mu", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
 
-      {trace, stats} = Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 500, seed: 42)
+      # `assert abs(var - 1.0) < 1.0` accepted any variance in [0, 2] — a 100%
+      # error either way, and it passed for a FROZEN CHAIN, whose variance is
+      # 0. On the suite's own standard-normal test. 4000 draws reach ESS ~1600,
+      # where the analytic gate resolves a ~15% variance error.
+      {trace, stats} = Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 4000, seed: 42)
 
-      samples = trace["mu"]
-      mean = Nx.mean(samples) |> Nx.to_number()
-      var = Nx.variance(samples) |> Nx.to_number()
+      samples = trace["mu"] |> Nx.to_flat_list()
 
-      assert abs(mean) < 0.3, "E[mu] = #{mean}, expected near 0"
-      assert abs(var - 1.0) < 1.0, "Var[mu] = #{var}, expected near 1"
+      assert_posterior!(samples, {:normal, 0.0, 1.0}, resolution: 0.20)
       assert stats.divergences <= 15
     end
 
