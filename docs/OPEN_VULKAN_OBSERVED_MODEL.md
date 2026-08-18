@@ -65,8 +65,69 @@ The posterior, 300 warmup + 500 samples, seed 42, `compiler: :vulkan`:
 | **after the fix** | **3.966** | **0.539** | **469 / 500** |
 | before | 3.650 | 3.3e-14 | 1 / 500 |
 
-`test/integration_test.exs:639` ("vector obs produces same posterior as
+`test/integration_test.exs:646` ("vector obs produces same posterior as
 equivalent scalar obs"), left deliberately red, now passes.
+
+### Confirmed across the variants — 2026-08-17
+
+The row above is **one seed on one model**, which is not enough to close a
+defect this class. `bench/observed_model_evidence.exs` re-runs it as a sweep:
+nine model shapes x four seeds x both arms, 300 warmup + 500 samples each, each
+row scored against the **closed-form** conjugate posterior rather than against
+the other arm. Raw output and host in
+[`bench_results/OBSERVED_MODEL_EVIDENCE.md`](../bench_results/OBSERVED_MODEL_EVIDENCE.md).
+
+**72 of 72 rows within tolerance.** Worst mean error 0.091, worst sd error
+8.1%, fewest distinct draws 447 / 500. The defect's signature — a frozen chain,
+1 distinct draw in 500, sd ~3e-14 — does not appear on any row.
+
+| variant | arm | worst mean err | worst sd err | min distinct | eps range | GPU dispatches |
+|---|---|---:|---:|---:|---|---:|
+| scalar 3 obs | `:none` | 0.0402 | 4.1% | 459/500 | 1.017–1.273 | 0 |
+| | `:vulkan` | 0.0135 | 7.4% | 466/500 | 0.956–1.291 | 651+ |
+| vector 3 obs | `:none` | 0.0552 | 7.8% | 459/500 | 0.978–1.273 | 0 |
+| | `:vulkan` | 0.0151 | 7.4% | 466/500 | 0.956–1.291 | 651+ |
+| scalar 3 obs, sigmas 1/2/3 | `:none` | 0.0499 | 8.0% | 465/500 | 0.939–1.266 | 0 |
+| | `:vulkan` | 0.0451 | 8.1% | 462/500 | 0.909–1.309 | 649+ |
+| scalar 1 obs | `:none` | 0.0816 | 4.2% | 467/500 | 0.929–1.193 | 0 |
+| | `:vulkan` | 0.0768 | 7.2% | 447/500 | 1.095–1.741 | 629+ |
+| scalar 2 obs | `:none` | 0.0380 | 5.8% | 461/500 | 1.016–1.358 | 0 |
+| | `:vulkan` | 0.0622 | 6.3% | 458/500 | 1.084–1.331 | 643+ |
+| scalar 5 obs | `:none` | 0.0236 | 4.7% | 467/500 | 0.903–1.402 | 0 |
+| | `:vulkan` | 0.0295 | 6.9% | 460/500 | 0.930–1.363 | 642+ |
+| vector 5 obs | `:none` | 0.0223 | 4.7% | 467/500 | 0.903–1.402 | 0 |
+| | `:vulkan` | 0.0295 | 6.9% | 460/500 | 0.930–1.363 | 642+ |
+| scalar 5 obs, sigmas 1..5 | `:none` | 0.0399 | 5.8% | 467/500 | 1.036–1.358 | 0 |
+| | `:vulkan` | 0.0913 | 7.1% | 461/500 | 1.082–1.565 | 645+ |
+| scalar 4 obs, sigmas .5/1/2/4 | `:none` | 0.0446 | 5.9% | 472/500 | 0.929–1.113 | 0 |
+| | `:vulkan` | 0.0334 | 6.9% | 460/500 | 0.968–1.339 | 643+ |
+
+Three things about the sweep are deliberate and are worth keeping if it is
+re-run.
+
+**The distinct-sigma variants are the ones that can see a mis-assigned span.**
+With every observation `Normal(mu, 1)`, permuting which node owns which slice
+of the buffer gives a **bit-identical** answer — the same trap that let the
+first version of this fix look correct (see the mirrored-marker note above).
+`sigmas 1/2/3`, `sigmas 1..5` and `sigmas .5/1/2/4` are not permutation
+invariant, and they land on the closed form.
+
+**The `gpu` column is a vacuity guard, not decoration.** It counts
+`Exmc.NUTS.Vulkan.Dispatch.chain/8` calls made while the row sampled. A vulkan
+row that had silently degraded to `:unsupported` and run on the host would read
+exactly like a passing vulkan row — it reads 0 there instead. Every `:none` row
+reads 0 and every `:vulkan` row reads 629–692, so both arms are the arm they
+claim to be.
+
+**Two rows agreeing bit-for-bit is expected here, not a cache collision.**
+`scalar 5 obs` and `vector 5 obs` return the same mean, sd, distinct count and
+adapted eps to every digit printed under `:vulkan`. With equal sigmas the two
+models are the same density, and five single-iteration loops accumulate in the
+same order as one five-iteration loop, so the trajectories are bit-identical
+and the RNG stream never diverges. The host arm's rows for the same pair differ
+in the last ulp at seed 42 and agree at seeds 1/2/3, which is the same
+phenomenon seen from the other side. The distinct-sigma variants are what rule
+out a genuine collision.
 
 ### Still open, found alongside
 
@@ -166,6 +227,14 @@ This is the check that would have caught both 0.3.1 defects at the point of
 introduction, and it is worth building regardless of what it finds here.
 
 ## Scope note
+
+> **Superseded 2026-08-17, on both counts.** The defect is fixed and confirmed
+> across the sweep above. And `compiler: :vulkan` is **not** the default:
+> `config/config.exs` sets no compiler, so `Exmc.JIT.auto_detect/0` decides,
+> and it prefers EXLA where EXLA loads. Vulkan is the default only on hosts
+> with no working EXLA — which is where this backend exists to be used, so the
+> exposure was real, but it was narrower than the paragraph below claims. See
+> NEXT.md §1.
 
 `compiler: :vulkan` is the **default**. Until this is resolved, any observed
 model sampled on the default compiler can silently return a degenerate

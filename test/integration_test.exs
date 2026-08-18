@@ -630,12 +630,19 @@ defmodule Exmc.IntegrationTest do
 
   # ── 21. Vector obs narrows posterior same as scalar obs ──────────
 
-  # KNOWN FAILING under the default `compiler: :vulkan`, and deliberately left
-  # red rather than skipped: the scalar arm returns a completely frozen chain
-  # (1 distinct value in 500 draws) while the vector arm lands on the analytic
-  # answer. See docs/OPEN_VULKAN_OBSERVED_MODEL.md. Under `compiler: :none`
-  # both arms are correct. Hiding this behind a skip is the exact habit that
-  # let two posterior defects ship — see CHANGELOG 0.3.1.
+  # REGRESSION GUARD for the observed-model defect, fixed in 6c1589a. This test
+  # was red under `compiler: :vulkan` for weeks and was deliberately left red
+  # rather than skipped: `compose_logp_defn/1` gave every observed node the
+  # WHOLE observation buffer, so the scalar arm (3 obs nodes) counted the
+  # likelihood 3x and returned a completely frozen chain — 1 distinct value in
+  # 500 draws — while the vector arm (1 obs node) landed on the analytic
+  # answer. Green on both arms since 6c1589a; confirmed across nine model
+  # shapes and four seeds by bench/observed_model_evidence.exs. See
+  # docs/OPEN_VULKAN_OBSERVED_MODEL.md.
+  #
+  # Do not weaken the deltas below and do not skip this under Vulkan. Hiding a
+  # real failure behind a skip is the exact habit that let two posterior
+  # defects ship — see CHANGELOG 0.3.1.
   test "vector obs produces same posterior as equivalent scalar obs" do
     # Scalar version: 3 separate obs nodes
     ir_scalar =
