@@ -61,9 +61,17 @@ defmodule Exmc.MixProject do
           Exmc.MAMS,
           Exmc.ADVI,
           Exmc.SMC,
-          Exmc.Pathfinder
+          Exmc.Pathfinder,
+          Exmc.SBI
         ],
         "Inference internals": [Exmc.MCLMC.Integrator, Exmc.MCLMC.Tuning],
+        "Simulation-based inference": [
+          Exmc.SBI.ABC,
+          Exmc.SBI.ABCSMC,
+          Exmc.SBI.Engine,
+          Exmc.SBI.Prior,
+          Exmc.SBI.Simulator
+        ],
         Compiler: [Exmc.Compiler, Exmc.PointMap, Exmc.Transform],
         Diagnostics: [Exmc.Diagnostics, Exmc.ModelComparison, Exmc.Predictive]
       ],
