@@ -8,19 +8,52 @@ stands rather than as the mission planned it.
 
 ---
 
-## Status — 2026-08-16, end of the exla/verification pass
+## Status — 2026-08-18, after the reboot
 
-Items 3, 5 and 6 are closed and committed. `mix test` runs the whole repo on
-both paths, and **the Vulkan sweep is reproducible for the first time**: two
-consecutive `EXMC_COMPILER=vulkan mix test` runs returned identical failure
-sets, differing only in ordering.
+Items 1, 3, 5, 6 and 7 are closed. **§2 item 2 is the only P0 left.**
+**Item 1 was confirmed on 2026-08-17** by the sweep it asked for — see below and
+[`bench_results/OBSERVED_MODEL_EVIDENCE.md`](bench_results/OBSERVED_MODEL_EVIDENCE.md).
+`6c1589a fix(synth): every observed node summed the WHOLE obs buffer` closed
+it. **Item 7 was fixed on 2026-08-18** — three defects, not one; see
+[`bench_results/CRASH_RECOVERY.md`](bench_results/CRASH_RECOVERY.md).
 
 | run | result |
 |---|---|
-| `mix test` (default → EXLA) | 472 tests, **0 failures** |
-| `EXMC_COMPILER=vulkan mix test` ×2 | 472 tests, **5 failures**, identical both times |
+| `mix test` (default → EXLA), 2026-08-18 | 473 tests, **1 failure** (the wall-clock one, item 4) |
+| `EXMC_COMPILER=vulkan mix test`, 2026-08-18 | 473 tests, **2 failures** |
+| `EXMC_COMPILER=vulkan mix test`, after `6c1589a` | 472 tests, **4 failures** |
+| `EXMC_COMPILER=vulkan mix test` ×2, before `6c1589a` | 472 tests, **5 failures**, identical both times |
 
-Item 1 remains open and is now the top of the queue.
+Start `epmd -daemon` before any sweep — without it `distributed_test.exs`
+contributes two failures that have nothing to do with the code.
+
+`integration_test.exs:646` went green in the last one, and it is a real fix
+rather than a tolerance passing — the scalar arm measures **mean 3.9864, sd
+0.5536, 479/500 distinct** against analytic truth of mean 3.99, sd 0.577. It
+had been frozen at 1 distinct draw in 500 with sd 3.29e-14 for the whole of the
+preceding session.
+
+That was one seed on one model, so it was not enough on its own. The evidence
+table has now been re-run as a sweep — `bench/observed_model_evidence.exs`,
+nine model shapes x four seeds x both arms, each row scored against the
+closed-form conjugate posterior rather than against the other arm.
+**72 of 72 rows within tolerance**; worst mean error 0.091, worst sd error
+8.1%, fewest distinct draws 447/500. The frozen-chain signature appears
+nowhere. `docs/OPEN_VULKAN_OBSERVED_MODEL.md` carries the table and the three
+things about the sweep worth keeping; the raw output and host are in
+`bench_results/OBSERVED_MODEL_EVIDENCE.md`.
+
+Item 7 followed it and is also closed (§2). **§2 item 2 — the
+`assert_in_delta` sweep — is the only P0 left**, and both defects closed since
+the reboot are arguments for it: each was a real failure sitting behind a test
+that could not see it.
+
+### ✅ The crash-recovery defect, in flight when the reboot came — closed
+
+Diagnosed before the reboot, fixed and verified 2026-08-18. It turned out to be
+three defects rather than one, and two of them were vacuities that made the
+first invisible. `fault_tolerant_test.exs:239` is green on both arms. See §2
+item 7 and [`bench_results/CRASH_RECOVERY.md`](bench_results/CRASH_RECOVERY.md).
 
 ---
 
@@ -78,11 +111,20 @@ over-dispersed — `Normal(0,1)` variance 1.378 against a true 1.0, worse under
 `compiler: :vulkan`. Every day it stays up, someone can draw samples from it.
 The CHANGELOG says so plainly and that is the right instinct.
 
-The case for waiting: Vulkan is the default *for the users who most need this
-library*, and it is still not correct for models with observations (§2).
-Publishing a release whose headline is "correctness" while that backend returns
-a frozen chain for a whole model class is a second credibility problem, not a
-fix for the first.
+The case for waiting **was item 1** — that Vulkan is the default for the users
+who most need this library and was not correct for models with observations.
+**That argument is gone as of 2026-08-17:** item 1 is fixed and confirmed across
+nine variants and four seeds (§2). What is left against publishing is item 7 —
+under `supervised: true`, a crash-recovered Vulkan run returns a destroyed
+posterior and reports success — and the unswept tolerances of item 2. Item 7 is
+narrower than item 1 was: it needs crashes to trigger, and it is a silent wrong
+answer rather than a whole broken model class.
+
+**Updated 2026-08-18: item 7 is closed too.** Nothing on the P0 list now blocks
+publishing on correctness grounds. What is left is item 2 — the tolerances have
+not been swept, so the honest statement is "no known correctness defect", not
+"verified correct". That is a judgement call about what the release notes claim,
+not a defect to fix first.
 
 > **Correction, 2026-08-16.** This file, `MISSION.md`, and the annotation on
 > the red test all say `compiler: :vulkan` is "the default". That is not what
@@ -118,70 +160,198 @@ the operator's to run.
 
 ## 2. P0 continued — what 0.3.1 did not close
 
-Ranked. Item 1 is the only one that blocks calling the default backend correct.
+Ranked. Items 1 and 7 are closed. **Item 2 is the only P0 left**, and it is
+the one that would have caught both of the others earlier.
 
 | # | item | effort | why it ranks here |
 |---:|---|---|---|
-| 1 | **The vulkan observed-model defect.** `compiler: :vulkan` returns a frozen chain (1 distinct value in 500 draws, `accept_prob` ≈ 0.002) for models with observations. Full write-up, evidence, and the next experiment in [`docs/OPEN_VULKAN_OBSERVED_MODEL.md`](docs/OPEN_VULKAN_OBSERVED_MODEL.md). | 1–3 days | it is the **default** compiler. Until this is fixed, the default can silently return a degenerate posterior. |
+| 1 | ~~**The vulkan observed-model defect.**~~ **Closed 2026-08-17, confirmed by sweep.** Was: `compiler: :vulkan` returned a frozen chain (1 distinct value in 500 draws, `accept_prob` ≈ 0.002) for models with observations. Fixed in `6c1589a`; confirmed by `bench/observed_model_evidence.exs` — 9 variants x 4 seeds x both arms, **72/72 rows** within tolerance of the closed form, worst sd error 8.1%, fewest distinct draws 447/500. The distinct-sigma variants are the load-bearing ones (equal sigmas make a mis-assigned span bit-identical), and a per-row GPU dispatch count rules out rows that silently fell back to the host. [`docs/OPEN_VULKAN_OBSERVED_MODEL.md`](docs/OPEN_VULKAN_OBSERVED_MODEL.md), raw in [`bench_results/OBSERVED_MODEL_EVIDENCE.md`](bench_results/OBSERVED_MODEL_EVIDENCE.md). | — | — |
 | 2 | **The `assert_in_delta` sweep.** 0.3.1 tightened exactly one assertion (`integration_test.exs:29`, now checking the closed-form conjugate posterior via `Validator.check_analytic/3`). The rest of the suite is unswept. Find every tolerance that would accept a 20% variance error. | half a day | this is VERIFICATION_METHODS' rank-1 item and the reason two defects shipped |
 | 3 | ~~**The EXLA build.**~~ **Done — both halves.** The library bug is fixed (`exla` is `runtime: false`, `Exmc.JIT` starts it lazily and treats a failed start as "backend unavailable", covered by `test/optional_deps_test.exs`), *and* this host now has a working CPU EXLA. Recipe and its two traps in [`docs/EXLA_CPU_BUILD.md`](docs/EXLA_CPU_BUILD.md); the short version is `EXLA_CPU_ONLY=1 XLA_TARGET=cpu`, not `XLA_TARGET=cpu`. | — | — |
 | 4 | **The wall-clock test.** `mix test` is now **0 failures** on the default (EXLA) path — 375 tests on `main`, 472 on `gate1/reconcile-core` with the MCLMC/MAMS/SBI suites. The only default-path failure left is `integration_test.exs:738` — `assert t_vec < t_par` — and it is **timing-flaky**, not consistently red: it failed at `1034ms < 659ms` on one run and passed on the next with no code change. Move it to `bench/`. The other three failures NEXT.md originally listed were artefacts of Vulkan-by-default and are green under EXLA — **not fixed, not exercised**. | 1 hour | a flaky red trains people to ignore red faster than a stable one |
-| 6 | ~~**Tests leak `:exmc` application env into each other.**~~ **Done, and verified by the check that matters: two consecutive Vulkan sweeps now return identical failure sets.** Three separate instances, all restoring wrongly or not at all: `p0_correctness_test.exs` leaked `compiler: :none`; `nuts_test.exs:618` "reset" `full_tree_nif` to `true` when its default is `false`; `fault_tolerant_test.exs` did the same via `get_env(..., true)` and skipped its restore entirely on a raised assertion. `native_tree_test.exs` was `async: true` while setting `use_nif` globally, so it raced concurrent tests rather than merely later ones. Fixed with `Exmc.TestHelper.put_env_scoped/3` (reads the previous value instead of assuming a default — the assumption is what went wrong three times) plus an `ExUnit.after_suite` tripwire over **all twelve** `:exmc` keys that gate behaviour, since an ordinary assertion only sees leaks from files that ran *before* it. | — | — |
 | 5 | ~~**`config/test.exs` had never been loaded.**~~ **Fixed.** `config/config.exs` was one line, `import Config`, with no `import_config` — and Mix auto-loads only `config/config.exs`, so every setting in `config/test.exs` was dead: the `EXMC_COMPILER` switch, `config :exla, default_client: :host`, `allow_vulkan_perop_sampling`. **Every `EXMC_COMPILER=vulkan mix test` ever run sampled with whatever auto-detect picked and reported a pass for it.** Now imported, with `test/config_test.exs` as the tripwire. | — | — |
+| 6 | ~~**Tests leak `:exmc` application env into each other.**~~ **Done, and verified by the check that matters: two consecutive Vulkan sweeps now return identical failure sets.** Three separate instances, all restoring wrongly or not at all: `p0_correctness_test.exs` leaked `compiler: :none`; `nuts_test.exs:618` "reset" `full_tree_nif` to `true` when its default is `false`; `fault_tolerant_test.exs` did the same via `get_env(..., true)` and skipped its restore entirely on a raised assertion. `native_tree_test.exs` was `async: true` while setting `use_nif` globally, so it raced concurrent tests rather than merely later ones. Fixed with `Exmc.TestHelper.put_env_scoped/3` (reads the previous value instead of assuming a default — the assumption is what went wrong three times) plus an `ExUnit.after_suite` tripwire over **all twelve** `:exmc` keys that gate behaviour, since an ordinary assertion only sees leaks from files that ran *before* it. | — | — |
+| 7 | ~~**Vulkan crash recovery destroys the posterior, and reports success.**~~ **Closed 2026-08-18.** Three defects, all fixed and all measured: crash-recovered iterations were fed to dual averaging as acceptance 0.0 (a feedback loop that drove eps to 2.41e-11 and the posterior to variance 1.45e-15); `supervised: true` did **nothing at all** wherever the speculative buffer was live, i.e. the default path; and warmup recoveries were never counted, so 176 placeholders reported `recoveries: 0`. Before/after matrix in [`bench_results/CRASH_RECOVERY.md`](bench_results/CRASH_RECOVERY.md), reproducible via `bench/crash_recovery.exs`. | — | — |
+
+### Item 7 in full — Vulkan crash recovery, and how it closed
+
+Diagnosed 2026-08-17, fixed and verified 2026-08-18. Every link below was
+measured, not inferred; the before/after matrix is in
+[`bench_results/CRASH_RECOVERY.md`](bench_results/CRASH_RECOVERY.md) and
+re-runnable with `bench/crash_recovery.exs`.
+
+`fault_tolerant_test.exs:239` samples a **prior-only** `N(0,1)` — no
+observations at all, so item 1's model class was never involved — with
+`FaultInjector` set to crash at depth 3 and `supervised: true`.
+
+| backend | injector consulted | placeholders | result | adapted eps |
+|---|---:|---:|---|---|
+| `:none` | 1463 | **0** | mean −0.0707, var 1.0212, 290/300 distinct, 6 div | 0.928 |
+| `:exla` | 1463 | — | identical to `:none`, bit for bit | — |
+| `:vulkan`, before | 3405 | **176** | mean −0.5225, **var 1.45e-15**, 300/300 distinct, **178 div** | **2.41e-11** |
+| `:vulkan`, after | 1973 | 29 | mean 0.0373, **var 0.8807**, 298/300 distinct, 3 div, **29 recoveries** | **0.810** |
+
+Uninjected, Vulkan samples this model at var 0.955 / eps 1.053. The collapse
+needed the crashes; the fixed path degrades to 0.881 instead of collapsing.
+
+**It was never item 1.** Item 1's frozen chain is literally 1 distinct draw in
+500. This was 300 distinct draws in 300, inside a neighbourhood of ~4e-8. Both
+read as "variance collapsed"; they were different failures.
+
+#### Defect 1 — a crashed subtree was treated as evidence about the step size
+
+ε fell from 1.053 to 2.41e-11 — eleven orders of magnitude:
+
+1. A subtree crashes; the supervision wrapper catches it and substitutes
+   `divergent_placeholder/4`.
+2. The placeholder carried `accept_sum: 0.0`, so `nuts_step_warmup` computed
+   `accept_stat = 0.0` and fed it to dual averaging.
+3. Acceptance 0.0 reads as "step size catastrophically too large", so ε shrinks.
+4. Smaller ε means longer trajectories to a U-turn, so trees get **deeper**.
+5. Deeper trees hit the depth-3 injection point more often — 3405 consultations
+   against 2018 uninjected.
+6. Back to 1.
+
+A crashed subtree measured nothing. The iteration is now **excluded from the
+dual-averaging update** (`Sampler.maybe_adapt/3`) rather than fed a zero. The
+placeholder also stopped fabricating `n_steps: 2 ** depth` for leaves that were
+never integrated — those phantom leaves went into the denominator of
+`accept_sum / n_steps` and into per-draw `sample_stats`.
+
+**`n_steps` alone was not the lever**, despite how `divergent_placeholder`
+reads: `sampler.ex` already guarded `n_steps > 0` and yielded `0.0` either way,
+so zeroing the leaf count fixes the reported statistic but not the loop.
+Checked before concluding; both changes are in.
+
+#### Defect 2 — `supervised: true` did nothing on the default path
+
+`safe_build_subtree` was reachable only from the *non-speculative* branch of
+`do_build/11`, and `speculative_precompute` defaults to `true`. Measured: on
+`:none` with `supervised: true`, 861 subtree builds, all speculative, the
+supervision wrapper entered **zero** times. Injecting a crash at depth 1 there
+killed the run outright — an unhandled `RuntimeError` straight through
+`run_phase/10` — on a run that had explicitly asked to be supervised.
+
+That is also the only reason the depth-3 row above produced numbers at all:
+Vulkan's warmup downgrade disables speculation, so supervision happened to be
+reachable during Vulkan warmup and nowhere else.
+
+Fixed by hoisting the guard to wrap **whichever** dispatch runs
+(`Tree.with_supervision/7`), speculative included, with `ensure_available`
+inside the guarded region since the bulk pre-compute can fail the same ways.
+
+#### Defect 3 — warmup recoveries were invisible
+
+The before row built 176 placeholders and reported `recoveries: 0`.
+`nuts_step_warmup` never read the `:recovered` flag; only `nuts_step_with_stats`
+did, and that runs in the sampling phase, where the Vulkan hot path never
+consults the injector. Every crash was a warmup crash, so the one counter an
+operator could have noticed was structurally zero. `placeholders` and
+`recoveries` now agree on every row of the matrix.
+
+**The divergence count was fabricated too:** 176 placeholders, 178 reported
+divergences. Nearly every "divergence" was a placeholder marked
+`divergent: true` — which it must be, to stop the doubling — not an integrator
+divergence. Crash-recovered iterations now count as recoveries and not as
+divergences. That attribution is exact rather than approximate: `do_build/11`
+breaks on `subtree.divergent or subtree.turning`, so a genuine divergence in an
+earlier subtree would have stopped the loop before the crashing one was built,
+and the two cannot co-occur in one iteration.
+
+#### The test that proved nothing
+
+`fault_tolerant_test.exs`'s end-to-end recovery test injected at **depth 3**,
+and `:none` hit `divergent_placeholder` **zero** times while consulting the
+injector 1463 times: a well-adapted host sampler never builds trees that deep.
+It passed on `:none` and `:exla` for months without recovery ever running.
+
+It now injects at depth 1, which fires on every backend (357 recoveries on
+`:none`, 29 at depth 3 on `:vulkan`), and asserts `recoveries > 0` so the
+vacuity cannot come back silently. A second test guards the mechanism directly
+— `assert eps > 0.01` catches the feedback loop eleven orders of magnitude
+before the variance assertion would. Both fail against the unfixed tree.
+
+#### What recovery still costs
+
+It is not free. At depth 1, where 357 of 500 iterations crash, ε adapts to 2.04
+against 0.93 uninjected, variance lands at 0.877 against 1.0, and 245 of 300
+draws are distinct. That is a degraded chain — and it is a chain, which is the
+point. Both no-injection controls are **bit-identical** before and after, so
+nothing on the non-crash path moved.
 
 ### Do not skip the red test — and mind which backend it is running
 
-The annotated test is `integration_test.exs:639`, "vector obs produces same
-posterior as equivalent scalar obs" (this file previously said 611). It fails
+The annotated test is `integration_test.exs:646`, "vector obs produces same
+posterior as equivalent scalar obs" (this file previously said 611, then 639 —
+the annotation was rewritten on 2026-08-17 when the defect closed, which moved
+it again; grep for the test name rather than trusting the number). It fails
 for a real reason and is annotated to say so. Skipping a test that fails for a
 real reason is precisely the habit that let both 0.3.1 defects ship.
 
-**It is red again under Vulkan, and that is the correct state.** Since item 5
-was fixed, `EXMC_COMPILER=vulkan mix test test/integration_test.exs:639` fails
-on exactly the documented assertion:
+**It is green under Vulkan as of 2026-08-17**, verified directly:
+`EXMC_COMPILER=vulkan mix test test/integration_test.exs:646` passes, and the
+sweep in item 1 says the same thing across nine variants and four seeds. The
+annotation on the test still describes it as known-failing and should be
+rewritten to describe the closed defect instead — do not simply delete it, the
+test is the regression guard for `6c1589a`.
+
+What follows is the state it was in before the fix, kept because it is what the
+signature looks like. Since item 5 was fixed,
+`EXMC_COMPILER=vulkan mix test test/integration_test.exs:646` used to fail on
+exactly the documented assertion:
 
 ```
 code: assert_in_delta scalar_summary["mu"].std, vector_summary["mu"].std, 0.3
 ```
 
-Item 1 is confirmed alive, and reproduces the numbers in
+Item 1 was confirmed alive at that point, and reproduced the numbers in
 `docs/OPEN_VULKAN_OBSERVED_MODEL.md` to the digit — scalar arm mean **3.6503**,
 sd **3.29e-14**, **1 distinct draw in 500**; vector arm mean 3.9716, sd 0.5516,
 472/500. Under `EXMC_COMPILER=none` both arms are correct.
-`allow_vulkan_perop_sampling` makes no difference to it either way, which rules
+`allow_vulkan_perop_sampling` made no difference to it either way, which ruled
 that out as the route around the chain shader.
 
-It is **green under a bare `mix test`**, and that is not a fix — auto-detect
-picks EXLA on this host and the Vulkan path is never entered (see the
-correction in §1). A bare `mix test` passing says nothing about item 1. Use
-`EXMC_COMPILER=vulkan`, and note that it only means anything now that item 5 is
-fixed.
+The standing lesson: it was **green under a bare `mix test`** the whole time it
+was broken, and that was not a fix — auto-detect picks EXLA on this host and the
+Vulkan path is never entered (see the correction in §1). A bare `mix test`
+passing says nothing about the Vulkan path. Use `EXMC_COMPILER=vulkan`, and
+note that it only means anything now that item 5 is fixed.
 
 ### What the Vulkan sweep actually says
 
-The first honest `EXMC_COMPILER=vulkan mix test` this repo has run:
-**375 tests, 4 failures**, against 375/0 on the default path.
+Latest, 2026-08-18, after the item 7 fix — **473 tests, 2 failures** (was 4,
+was 5). The default (EXLA) path is **473 tests, 1 failure** — the wall-clock
+one — on the same tree.
 
 | test | failure |
 |---|---|
-| `new_dist_test.exs:271` | `{:error, :dispatch_failed, "read spv: No such file or directory"}` — a missing SPIR-V file, not a numerical defect |
 | `level_set_integration_test.exs:11` | timed out at 300s |
-| `fault_tolerant_test.exs:234` | `Variance collapsed: 1.45e-15` — **the frozen-chain signature of item 1**, in a second test |
-| `integration_test.exs:738` | the wall-clock assertion (item 4), fails on both paths |
+| `integration_test.exs:745` | the wall-clock assertion (item 4), fails on both paths |
 
-Both cautions that used to sit here are resolved. The table **is** now
-reproducible: two consecutive sweeps produced exactly these five, differing only
-in ordering. `integration_test.exs:639` now fails in the full run as it always
-did in isolation — that was item 6, and it is what made the difference.
+Dropped off since the last sweep:
 
-Two entries deserve reading as item-1 evidence rather than as separate bugs:
-`fault_tolerant_test.exs:239`'s `Variance collapsed: 1.45e-15` is the same
-frozen-chain signature as `:639`, so the observed-model defect shows up in more
-than the one test this file has been tracking.
+* `fault_tolerant_test.exs:239` — **item 7, fixed.** Was `Variance collapsed:
+  1.45e-15`.
+* `poker_test.exs:228` — was a 300s timeout, passed this time with **no change
+  that should affect it**. Unexplained. The earlier sweeps ran with a second
+  agent on the box and this one did not, so load is the obvious suspect and it
+  should be treated as still-flaky rather than fixed.
+* `integration_test.exs:646` dropped off at `6c1589a` — see item 1.
+* `new_dist_test.exs:271`'s `read spv: No such file or directory` dropped off
+  earlier and is not expected back: it was a shader-cache race, fixed in
+  `e167734`.
 
-`new_dist_test.exs:271`'s `read spv: No such file or directory` is **gone from
-both sweeps** and is no longer expected: it was a race in the shader cache, now
-fixed — see below.
+**Run `epmd -daemon` before a sweep.** Two `distributed_test.exs` failures on
+2026-08-17 were nothing but a missing epmd after the reboot — `Cannot start
+distribution ... econnrefused`. With epmd up the file is 5 tests, 0 failures.
+It costs a minute to chase and looks like a real distributed-sampling defect.
+
+The remaining timeout is unexplained and is **not** contained: per the findings
+below there is no timeout containment on the Vulkan path at all, so it hangs
+until ExUnit kills it at 300s.
+
+The sweep is reproducible as of `1e735bc` — two consecutive runs before
+`6c1589a` produced identical failure sets, differing only in ordering.
 
 ### The shader cache was racy, and it served empty shaders
 
@@ -270,10 +440,12 @@ the ordering intact — graph shape (16–20×) before shaders, and the README
 honesty fix (§1 of the mission: reach, not speed) before any new performance
 claim.
 
-One item that moved up as a result of 0.3.1: **`bench_results/` still does not
-exist here.** `bench/` now has two files (`cse_race.exs`, `nuts_truth.exs`).
-Every performance claim in the README should point at a file containing raw
-output and the host it ran on, the way `nx_vulkan/bench_results/` does.
+One item that moved up as a result of 0.3.1: **every claim should point at raw
+output.** `bench_results/` now exists and holds three files — `MCLMC_BIAS.md`
+(partial, §6), `OBSERVED_MODEL_EVIDENCE.md` and `CRASH_RECOVERY.md` (both
+complete). `bench/` has six scripts. Every performance claim in the README should point at a file
+containing raw output and the host it ran on, the way `nx_vulkan/bench_results/`
+does; none of them do yet.
 
 ---
 
@@ -287,6 +459,17 @@ mix run --no-deps-check bench/nuts_truth.exs
 COMPILER=vulkan SEEDS=1,2,3 mix run --no-deps-check bench/nuts_truth.exs
 USE_NIF=0      mix run --no-deps-check bench/nuts_truth.exs   # pure Elixir tree
 FULL_TREE_NIF=1 mix run --no-deps-check bench/nuts_truth.exs  # Rust build_full_tree
+
+# the observed-model evidence sweep — the check that closed §2 item 1
+COMPILER=none   SEEDS=42,1,2,3 mix run --no-deps-check bench/observed_model_evidence.exs
+COMPILER=vulkan SEEDS=42,1,2,3 mix run --no-deps-check bench/observed_model_evidence.exs
+
+# crash recovery under supervision — the check that closed §2 item 7.
+# INJECT=0 is the control; `placeholders: 0` with injection on means the run
+# never exercised recovery, however green it looks.
+COMPILER=none   DEPTH=1  mix run --no-deps-check bench/crash_recovery.exs
+COMPILER=vulkan DEPTH=3  mix run --no-deps-check bench/crash_recovery.exs
+COMPILER=vulkan INJECT=0 mix run --no-deps-check bench/crash_recovery.exs
 
 # the regression tests (move _build/test/lib/exla aside first — §0)
 mix test --no-deps-check test/nuts/p0_correctness_test.exs

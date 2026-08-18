@@ -239,10 +239,17 @@ defmodule Exmc.FaultTolerantTest do
     test "sampling completes with injected crash, posterior reasonable" do
       ir = standard_normal_ir()
 
-      # Use depth-based injection so it only fires at depth 3 subtrees,
-      # not on every leaf. This lets most of warmup adapt correctly,
-      # with occasional crashes during deeper tree expansions.
-      FaultInjector.activate(%{depth: 3, error: :crash})
+      # Depth 1, not depth 3. At depth 3 this test was VACUOUS on the host
+      # path: measured 2026-08-17, `compiler: :none` consulted the injector
+      # 1463 times and hit `divergent_placeholder` **zero** times, because a
+      # well-adapted host sampler on N(0,1) never builds a subtree that deep.
+      # It passed for two backends without recovery ever running. Depth 1
+      # fires on every backend — 357 recoveries on `:none`, 29 on `:vulkan`.
+      #
+      # The `recoveries > 0` assertion below is what keeps it honest: if a
+      # future change stops the injector reaching this path, the test fails
+      # instead of quietly passing.
+      FaultInjector.activate(%{depth: 1, error: :crash})
 
       {trace, stats} =
         Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 300, seed: 42, supervised: true)
@@ -251,6 +258,11 @@ defmodule Exmc.FaultTolerantTest do
 
       # Sampling completed
       assert Nx.shape(trace["x"]) == {300}
+
+      # NON-VACUITY: recovery must actually have run.
+      assert Map.get(stats, :recoveries, 0) > 0,
+             "no crash was recovered — the injector never reached a supervised subtree, " <>
+               "so this test proves nothing about recovery"
 
       # Posterior should still be vaguely reasonable (N(0,1) target)
       vals = Nx.to_flat_list(trace["x"])
@@ -264,6 +276,53 @@ defmodule Exmc.FaultTolerantTest do
 
       # Stats should report divergences/recoveries
       assert is_number(stats.divergences)
+    end
+
+    # Regression guard for the crash/step-size feedback loop.
+    #
+    # A crashed subtree reports acceptance 0.0. Fed to dual averaging that
+    # reads as "eps is catastrophically too large", so eps shrinks, so
+    # trajectories need more steps to reach a U-turn, so trees get deeper, so
+    # they hit the failing region more often — a loop. Under `compiler:
+    # :vulkan` it drove eps from 1.053 to 2.41e-11 and collapsed the posterior
+    # to variance 1.45e-15 while reporting success.
+    #
+    # The variance assertion above would catch a full collapse. This one
+    # catches the mechanism directly, and catches it earlier: eps is the thing
+    # that moves eleven orders of magnitude.
+    @tag timeout: 120_000
+    test "crash recovery does not destroy the adapted step size" do
+      ir = standard_normal_ir()
+
+      FaultInjector.activate(%{depth: 1, error: :crash})
+
+      {_trace, stats} =
+        Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 300, seed: 42, supervised: true)
+
+      FaultInjector.deactivate()
+
+      assert Map.get(stats, :recoveries, 0) > 0, "vacuous: nothing was recovered"
+
+      eps =
+        case stats.step_size do
+          e when is_number(e) -> e
+          t -> Nx.to_number(t)
+        end
+
+      # Uninjected, this model adapts to eps ~1.0 on every backend. Anything
+      # below 0.01 means the crashes drove the adaptation, not the geometry.
+      assert eps > 0.01,
+             "step size collapsed to #{eps} under crash recovery — crashed subtrees are " <>
+               "being fed to dual averaging as if they measured something"
+
+      assert eps < 100.0, "step size exploded to #{eps}"
+
+      # Placeholders are not integrator divergences. Before the fix this
+      # reported 178 divergences for 176 placeholders.
+      assert stats.divergences < Map.get(stats, :recoveries, 0),
+             "divergences (#{stats.divergences}) not clearly below recoveries " <>
+               "(#{Map.get(stats, :recoveries, 0)}) — crash placeholders are probably " <>
+               "still being counted as divergences"
     end
   end
 

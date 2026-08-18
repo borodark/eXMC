@@ -418,38 +418,30 @@ defmodule Exmc.NUTS.Tree do
     n_steps = trunc(:math.pow(2, depth))
     direction = if go_right, do: :fwd, else: :bwd
 
+    # Supervision wraps whichever dispatch actually runs.
+    #
+    # It used to wrap only the non-speculative branch below, and
+    # `speculative_precompute` defaults to `true` — so on any host where the
+    # speculative buffer is live (i.e. the default path, EXLA included),
+    # `supervised: true` was accepted, reported, and did nothing at all. A
+    # crash there propagated and killed the run exactly as if the caller had
+    # never asked for supervision. Measured 2026-08-17 on the fault-injection
+    # model: `compiler: :none`, `supervised: true`, 861 subtree builds, all
+    # speculative, `safe_build_subtree` entered **zero** times.
     {subtree, rng, spec_buf} =
       if spec_buf do
-        # Speculative path: ensure buffer has enough steps, slice, dispatch
-        spec_buf = ensure_available(spec_buf, direction, n_steps)
+        # Speculative path: ensure buffer has enough steps, slice, dispatch.
+        # `ensure_available` is inside the guarded region on purpose — the bulk
+        # pre-compute is a leapfrog chain like any other and can fail the same
+        # ways.
+        with_supervision(supervised, start_q, start_p, start_grad, depth, spec_buf, fn ->
+          spec_buf = ensure_available(spec_buf, direction, n_steps)
 
-        {sliced_q, sliced_p, sliced_logp, sliced_grad, spec_buf} =
-          slice_precomputed(spec_buf, direction, n_steps)
+          {sliced_q, sliced_p, sliced_logp, sliced_grad, spec_buf} =
+            slice_precomputed(spec_buf, direction, n_steps)
 
-        {sub, rng} =
-          dispatch_subtree_precomputed(
-            step_fn,
-            start_q,
-            start_p,
-            start_grad,
-            dir_epsilon,
-            inv_mass_diag,
-            depth,
-            rng,
-            joint_logp_0,
-            inv_mass_list,
-            sliced_q,
-            sliced_p,
-            sliced_logp,
-            sliced_grad
-          )
-
-        {sub, rng, spec_buf}
-      else
-        # Non-speculative path (original)
-        {sub, rng} =
-          if supervised do
-            safe_build_subtree(
+          {sub, rng} =
+            dispatch_subtree_precomputed(
               step_fn,
               start_q,
               start_p,
@@ -459,11 +451,19 @@ defmodule Exmc.NUTS.Tree do
               depth,
               rng,
               joint_logp_0,
-              multi_step_fn,
               inv_mass_list,
-              supervised
+              sliced_q,
+              sliced_p,
+              sliced_logp,
+              sliced_grad
             )
-          else
+
+          {sub, rng, spec_buf}
+        end)
+      else
+        # Non-speculative path (original)
+        with_supervision(supervised, start_q, start_p, start_grad, depth, nil, fn ->
+          {sub, rng} =
             dispatch_subtree(
               step_fn,
               start_q,
@@ -477,9 +477,9 @@ defmodule Exmc.NUTS.Tree do
               multi_step_fn,
               inv_mass_list
             )
-          end
 
-        {sub, rng, nil}
+          {sub, rng, nil}
+        end)
       end
 
     # An invalid doubling contributes NOTHING to the trajectory.
@@ -1251,62 +1251,29 @@ defmodule Exmc.NUTS.Tree do
     end
   end
 
-  # Fault-tolerant subtree wrapper. On crash, returns a divergent placeholder.
-  defp safe_build_subtree(
-         step_fn,
-         q,
-         p,
-         grad,
-         epsilon,
-         inv_mass_diag,
-         depth,
-         rng,
-         joint_logp_0,
-         multi_step_fn,
-         inv_mass_list,
-         supervised
-       ) do
+  # Fault-tolerant dispatch wrapper. Runs `fun` and, when the caller asked for
+  # supervision, converts a crash or a timeout into a divergent placeholder
+  # instead of letting it kill the chain.
+  #
+  # `fun` returns `{subtree, rng, spec_buf}`; on recovery this returns the
+  # placeholder with `spec_buf` unchanged. That is safe because a recovered
+  # subtree is `divergent: true`, so `do_build/11` stops the doubling on the
+  # spot and the buffer is never sliced again for this trajectory.
+  defp with_supervision(supervised, q, p, grad, depth, spec_buf, fun) do
     case supervised do
       true ->
         try do
-          dispatch_subtree(
-            step_fn,
-            q,
-            p,
-            grad,
-            epsilon,
-            inv_mass_diag,
-            depth,
-            rng,
-            joint_logp_0,
-            multi_step_fn,
-            inv_mass_list
-          )
+          fun.()
         rescue
           e ->
             Logger.warning("[NUTS.Tree] Subtree crash at depth #{depth}: #{Exception.message(e)}")
-            divergent_placeholder(q, p, grad, depth)
+            {sub, rng} = divergent_placeholder(q, p, grad, depth)
+            {sub, rng, spec_buf}
         end
 
       :task ->
         timeout = Process.get(:exmc_supervised_timeout, 30_000)
-
-        task =
-          Task.async(fn ->
-            dispatch_subtree(
-              step_fn,
-              q,
-              p,
-              grad,
-              epsilon,
-              inv_mass_diag,
-              depth,
-              rng,
-              joint_logp_0,
-              multi_step_fn,
-              inv_mass_list
-            )
-          end)
+        task = Task.async(fun)
 
         case Task.yield(task, timeout) || Task.shutdown(task) do
           {:ok, result} ->
@@ -1314,34 +1281,23 @@ defmodule Exmc.NUTS.Tree do
 
           nil ->
             Logger.warning("[NUTS.Tree] Subtree timed out at depth #{depth} (#{timeout}ms)")
-            divergent_placeholder(q, p, grad, depth)
+            {sub, rng} = divergent_placeholder(q, p, grad, depth)
+            {sub, rng, spec_buf}
 
           {:exit, reason} ->
             Logger.warning(
               "[NUTS.Tree] Subtree task exited at depth #{depth}: #{inspect(reason)}"
             )
 
-            divergent_placeholder(q, p, grad, depth)
+            {sub, rng} = divergent_placeholder(q, p, grad, depth)
+            {sub, rng, spec_buf}
         end
 
       _ ->
-        dispatch_subtree(
-          step_fn,
-          q,
-          p,
-          grad,
-          epsilon,
-          inv_mass_diag,
-          depth,
-          rng,
-          joint_logp_0,
-          multi_step_fn,
-          inv_mass_list
-        )
+        fun.()
     end
   end
 
-  # Base case: single leapfrog step
   defp build_subtree(
          step_fn,
          q,
@@ -2091,10 +2047,17 @@ defmodule Exmc.NUTS.Tree do
   # Build a divergent placeholder subtree from the starting state.
   # Used when a subtree crashes and must be replaced with a valid structure.
   # Uses a fresh RNG (post-crash trajectories are valid but not deterministic).
+  #
+  # `n_steps: 0`, not `2 ** depth`. Those leaves were never integrated — the
+  # crash is why there is a placeholder at all — so counting them puts phantom
+  # leaves in the denominator of `accept_sum / n_steps` and pulls the reported
+  # acceptance toward zero in proportion to how deep the crash was. The whole
+  # iteration is excluded from dual averaging anyway (see `:recovered` in
+  # Sampler), but `n_steps` is also reported per-draw in `sample_stats`, and a
+  # fabricated leaf count there is a fabricated number wherever it is read.
   defp divergent_placeholder(q, p, grad, depth) do
     q_list = Nx.to_flat_list(q)
     p_list = Nx.to_flat_list(p)
-    n_steps = trunc(:math.pow(2, depth))
     recovery_rng = :rand.seed_s(:exsss, System.unique_integer([:positive]))
 
     subtree = %{
@@ -2114,7 +2077,7 @@ defmodule Exmc.NUTS.Tree do
       rho_list: p_list,
       depth: depth,
       log_sum_weight: -1001.0,
-      n_steps: n_steps,
+      n_steps: 0,
       divergent: true,
       accept_sum: 0.0,
       turning: false,

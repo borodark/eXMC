@@ -717,7 +717,7 @@ defmodule Exmc.NUTS.Sampler do
         # Use the DA's current epsilon for each step
         eps = current_epsilon(da_state)
 
-        {state, accept_stat} =
+        {state, accept_stat, recovered} =
           nuts_step_warmup(
             step_fn,
             state,
@@ -729,7 +729,7 @@ defmodule Exmc.NUTS.Sampler do
             multi_step_fn
           )
 
-        da_state = StepSize.update(da_state, accept_stat)
+        da_state = maybe_adapt(da_state, accept_stat, recovered)
 
         {state, da_state}
       end)
@@ -781,7 +781,7 @@ defmodule Exmc.NUTS.Sampler do
 
           div_before = state.divergences
 
-          {state, accept_stat} =
+          {state, accept_stat, recovered} =
             nuts_step_warmup(
               step_fn,
               state,
@@ -793,7 +793,7 @@ defmodule Exmc.NUTS.Sampler do
               multi_step_fn
             )
 
-          da_state = StepSize.update(da_state, accept_stat)
+          da_state = maybe_adapt(da_state, accept_stat, recovered)
 
           # Stan excludes divergent transitions from mass matrix estimation
           # (divergent trees are truncated, biasing the selected position)
@@ -859,6 +859,28 @@ defmodule Exmc.NUTS.Sampler do
     :math.exp(da_state.log_epsilon)
   end
 
+  # Dual averaging over an iteration whose subtree crashed.
+  #
+  # A crashed subtree contributes acceptance 0.0, and dual averaging reads that
+  # as "the step size is catastrophically too large". It is not evidence about
+  # the step size at all — the subtree crashed for a reason unrelated to eps,
+  # and nothing was measured. Feeding it in closes a feedback loop that
+  # destroys the run:
+  #
+  #   crash -> accept_stat 0.0 -> eps shrinks -> trajectories lengthen to reach
+  #   a U-turn -> trees get deeper -> deeper trees hit the failing region more
+  #   often -> crash
+  #
+  # Measured 2026-08-17 on `fault_tolerant_test.exs` under `compiler: :vulkan`,
+  # a prior-only N(0,1) with crashes injected at depth 3: eps fell from 1.053
+  # (uninjected) to 2.41e-11, eleven orders of magnitude, and the posterior
+  # collapsed to variance 1.45e-15 inside a neighbourhood of ~4e-8 — while the
+  # run reported success. The iteration is skipped instead. The cost is a
+  # slower adaptation when crashes are frequent, which is the correct trade:
+  # fewer observations, not fabricated ones.
+  defp maybe_adapt(da_state, _accept_stat, true), do: da_state
+  defp maybe_adapt(da_state, accept_stat, _recovered), do: StepSize.update(da_state, accept_stat)
+
   # --- NUTS step ---
 
   # NUTS step with pre-cached inv_mass_list and optional batched leapfrog
@@ -905,7 +927,23 @@ defmodule Exmc.NUTS.Sampler do
       end
 
     {_, rng} = :rand.uniform_s(rng)
-    divergences = if result.divergent, do: state.divergences + 1, else: state.divergences
+    recovered = Map.get(result, :recovered, false)
+
+    # A crash-recovered iteration is NOT a divergence. `divergent_placeholder`
+    # sets `divergent: true` to stop the doubling, and that flag is the only
+    # reason `result.divergent` can be true here when `recovered` is: a genuine
+    # divergence in an earlier subtree would have stopped the loop before the
+    # crashing one was ever built (`do_build/11` breaks on
+    # `subtree.divergent or subtree.turning`), so the two cannot co-occur in
+    # one iteration. Reporting them as divergences buried the real count —
+    # measured 176 placeholders against 178 reported divergences.
+    divergences =
+      if result.divergent and not recovered,
+        do: state.divergences + 1,
+        else: state.divergences
+
+    recoveries =
+      if recovered, do: Map.get(state, :recoveries, 0) + 1, else: Map.get(state, :recoveries, 0)
 
     new_state = %{
       q: result.q,
@@ -913,10 +951,10 @@ defmodule Exmc.NUTS.Sampler do
       grad: result.grad,
       rng: rng,
       divergences: divergences,
-      recoveries: Map.get(state, :recoveries, 0)
+      recoveries: recoveries
     }
 
-    {new_state, accept_stat}
+    {new_state, accept_stat, recovered}
   end
 
   # NUTS step returning additional stats for diagnostics
@@ -966,8 +1004,14 @@ defmodule Exmc.NUTS.Sampler do
       end
 
     {_, rng} = :rand.uniform_s(rng)
-    divergences = if result.divergent, do: state.divergences + 1, else: state.divergences
     recovered = Map.get(result, :recovered, false)
+
+    # See nuts_step_warmup: a placeholder's `divergent: true` is structural,
+    # not a report about the integrator.
+    divergences =
+      if result.divergent and not recovered,
+        do: state.divergences + 1,
+        else: state.divergences
 
     recoveries =
       if recovered, do: Map.get(state, :recoveries, 0) + 1, else: Map.get(state, :recoveries, 0)
@@ -987,7 +1031,7 @@ defmodule Exmc.NUTS.Sampler do
     step_info = %{
       depth: result.depth,
       n_steps: result.n_steps,
-      divergent: result.divergent,
+      divergent: result.divergent and not recovered,
       energy: energy,
       recovered: recovered
     }
