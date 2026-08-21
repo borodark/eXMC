@@ -258,8 +258,16 @@ Key it off the detected backend, not the config.
   `mix.exs` and I swept it in without noticing. It is already on `origin`, so
   it stays; this is the note that says so. `82db4f8` adds the `Exmc.SBI`
   groups the same way, and does say so.
-- **`gate1/reconcile-core` is pushed to `origin` only through `b536a40`.**
-  Everything after it is local. `origin` is the private server; `upstream` is
+- **`gate1/reconcile-core` is pushed to `origin` through `b2aefca`.**
+  *(Corrected 2026-08-20 by the other session. This bullet originally read
+  "only through `b536a40`. Everything after it is local." That was measured
+  before the P0 run was pushed and it is four commits stale — `6c1589a`,
+  `765d86f`, `bd86e96` and `b2aefca` are all on `origin`. Acting on the old
+  sentence, by force-pushing back to `b536a40` or by trying to "rescue" work
+  believed to be local only, would discard the whole item 1 / 7 / 2 run. Check
+  `git rev-parse origin/gate1/reconcile-core` rather than this file.)*
+  The only local commits are the two from the applications-tree session,
+  `9c74bb0` and `0fe59d2`. `origin` is the private server; `upstream` is
   GitHub and pushing there is a release — see `NEXT.md` §0.
 
 ---
