@@ -1,5 +1,12 @@
 import Config
 
+# The tripwire `test/config_test.exs` asserts on. It has to be something this
+# file sets unconditionally on every platform, which is why it is a marker and
+# not a real setting: the original tripwire was `:exla, :default_client`, and
+# that key is deliberately absent on FreeBSD (below), so a proxy would have
+# reported this file as dead on the one platform whose test run nobody watches.
+config :exmc, test_config_loaded: true
+
 # Force EXLA to use CPU (host) client for tests.
 # Without this, EXLA tries to init a CUDA client which may:
 # 1. Fail with CUDA_ERROR_OUT_OF_MEMORY on machines with small/busy GPUs
@@ -7,7 +14,17 @@ import Config
 # 3. Cascade to every subsequent test that touches JIT
 #
 # Run EXLA on the GPU instead: CUDA_VISIBLE_DEVICES=0 mix test
-config :exla, default_client: :host
+#
+# Guarded on the platform because exla is not a dependency on FreeBSD — the
+# `xla` archive ships darwin and linux-gnu targets only, see the `@freebsd?`
+# conditional in mix.exs and b536a40. Configuring an application that is not
+# available is not an error, but Mix prints a nine-line "you have configured
+# application :exla ... but the application is not available" block on every
+# single test run, and a warning nobody can act on is one people learn to read
+# past. This became visible only when b2f462c made this file load at all.
+unless match?({:unix, :freebsd}, :os.type()) do
+  config :exla, default_client: :host
+end
 
 # Backend selection for the test run:
 #

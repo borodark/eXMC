@@ -14,13 +14,31 @@ defmodule Exmc.ConfigTest do
   """
 
   test "config/test.exs is loaded" do
-    assert Application.get_env(:exla, :default_client) == :host, """
-    config/test.exs is not being loaded. It sets `config :exla, default_client: :host`
-    and that setting has not arrived, so every other setting in that file — the
-    EXMC_COMPILER switch, allow_vulkan_perop_sampling — is dead too.
+    assert Application.get_env(:exmc, :test_config_loaded) == true, """
+    config/test.exs is not being loaded. It sets `config :exmc, test_config_loaded: true`
+    as its first line and that has not arrived, so every other setting in that
+    file — the EXMC_COMPILER switch, allow_vulkan_perop_sampling — is dead too.
 
     Restore the `import_config "test.exs"` in config/config.exs.
     """
+  end
+
+  test "the EXLA host client is configured wherever exla is a dependency" do
+    # This was the tripwire above until it turned out to be platform-specific:
+    # exla is not a dependency on FreeBSD, so the key is legitimately absent
+    # there and a proxy assertion would have called a live config file dead.
+    # It is still worth asserting where it applies — it is what keeps EXLA off
+    # a busy CUDA device during the suite.
+    if match?({:unix, :freebsd}, :os.type()) do
+      refute Code.ensure_loaded?(EXLA),
+             "exla is loadable on FreeBSD, so config/test.exs should be configuring it"
+
+      assert Application.get_env(:exla, :default_client) == nil,
+             "config/test.exs is configuring :exla on FreeBSD, which makes Mix warn " <>
+               "on every run about an application that is not a dependency there"
+    else
+      assert Application.get_env(:exla, :default_client) == :host
+    end
   end
 
   describe "EXMC_COMPILER" do
