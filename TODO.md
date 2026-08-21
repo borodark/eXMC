@@ -12,9 +12,13 @@ ends, ordered by how much it costs to leave them.
 
 ---
 
-## 0. There is one uncommitted file and it is mine
+## 0. ~~There is one uncommitted file and it is mine~~ — closed
 
-`test/optional_deps_test.exs`. Do not `git checkout` it.
+**Decided and committed 2026-08-20 as `92afdee`.** Nothing is outstanding here;
+the section is kept because the reasoning is the durable part. The working tree
+is clean.
+
+`test/optional_deps_test.exs`.
 
 `b536a40` dropped `exla` from the dependency list on FreeBSD, because the `xla`
 archive ships darwin and linux-gnu targets only and `mix compile` dies inside
@@ -27,7 +31,12 @@ exla is loadable; on FreeBSD it asserts the inverse — that exla is **absent** 
 so that the next person to "fix" that conditional in `mix.exs` finds out from a
 red test rather than from a Kepler.
 
-Commit it or tell me to. It is 19 lines and it has no other dependencies.
+One change on the way in: the failure message originally pointed at
+`docs/GATE1_RECONCILIATION.md F4`, which lives in the applications tree and is
+untracked in either repo (§3). An OSS test must not cite a document nobody
+outside that checkout can open, so it now names the `@freebsd?` conditional in
+`mix.exs` and `b536a40`, both of which are here. 4 tests, 0 failures on Linux;
+the FreeBSD arm is exercised on the fleet by construction.
 
 ---
 
