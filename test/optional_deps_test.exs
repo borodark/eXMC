@@ -27,10 +27,25 @@ defmodule Exmc.OptionalDepsTest do
       """
     end
 
-    test "exla is still on the code path when installed" do
-      # `runtime: false` must not make exla invisible — only unstarted. If this
-      # fails, Exmc.JIT can never select EXLA on any host.
-      assert Code.ensure_loaded?(EXLA), "exla is not installed in this environment"
+    if match?({:unix, :freebsd}, :os.type()) do
+      test "exla is deliberately absent on FreeBSD" do
+        # The inverse invariant, and it is the one that matters here. The `xla`
+        # archive ships darwin and linux-gnu targets only, so on FreeBSD merely
+        # *declaring* exla makes `mix compile` die in the dependency before
+        # reaching a module of this library. mix.exs drops it from the dep list
+        # on this platform; this is the assertion that says so out loud, so the
+        # next person to "fix" that conditional finds out here rather than on
+        # the fleet.
+        refute Code.ensure_loaded?(EXLA),
+               "exla must not be a dependency on FreeBSD — see the @freebsd? " <>
+                 "conditional in mix.exs, and b536a40 for the measurement"
+      end
+    else
+      test "exla is still on the code path when installed" do
+        # `runtime: false` must not make exla invisible — only unstarted. If this
+        # fails, Exmc.JIT can never select EXLA on any host.
+        assert Code.ensure_loaded?(EXLA), "exla is not installed in this environment"
+      end
     end
   end
 
