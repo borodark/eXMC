@@ -121,8 +121,6 @@ defmodule Exmc.NUTS.CustomSynth.Eval do
   for {op, fun} <- [
         exp: &:math.exp/1,
         log: &:math.log/1,
-        log1p: &:math.log1p/1,
-        expm1: &:math.expm1/1,
         sqrt: &:math.sqrt/1,
         sin: &:math.sin/1,
         cos: &:math.cos/1,
@@ -139,6 +137,42 @@ defmodule Exmc.NUTS.CustomSynth.Eval do
     defp do_eval(unquote(op), [a], layout) do
       with {:ok, av} <- evaluate(a, layout), do: {:ok, broadcast1(av, unquote(fun))}
     end
+  end
+
+  # `log1p` and `expm1` are the naive expressions on purpose, and that is not
+  # an oversight for someone to tidy up later.
+  #
+  # They were `&:math.log1p/1` and `&:math.expm1/1`. Erlang's `:math` has
+  # neither. A capture of a non-existent remote function is legal, so this
+  # compiled with a warning and raised `UndefinedFunctionError` the first time
+  # anything evaluated one — which is every model with a positive-constrained
+  # or bounded RV, since `softplus` and `logit` inverse transforms are built
+  # out of `Nx.log1p/1` and `Nx.expm1/1`.
+  #
+  # The tempting fix is the numerically stable form. It would be wrong here.
+  # This module's entire purpose is to agree with `Nx.Defn.Evaluator` so that
+  # agreement certifies the GLSL walker beside it, and *both* of those compute
+  # the naive expression:
+  #
+  #     Nx.log1p(1.0e-16)  =>  0.0         (not 1.0e-16)
+  #     log_1p_safe_d(x)   =>  log_d(1.0lf + x)
+  #     expm1_safe_d(x)    =>  exp_d(x) - 1.0lf
+  #                            — multi_rv_custom_spec.ex:680,684
+  #
+  # A more accurate `Eval` would disagree with the reference in exactly the
+  # regime where the reference is inaccurate, and the faithfulness check would
+  # report a discrepancy against a walker that is faithful. The accuracy of
+  # these two ops is a property of Nx and of the shader helpers — despite the
+  # `_safe` in their names, those are not the stable forms either — and moving
+  # it means moving all three together, deliberately, with the shaders.
+  defp do_eval(:log1p, [a], layout) do
+    with {:ok, av} <- evaluate(a, layout),
+         do: {:ok, broadcast1(av, &:math.log(1.0 + &1))}
+  end
+
+  defp do_eval(:expm1, [a], layout) do
+    with {:ok, av} <- evaluate(a, layout),
+         do: {:ok, broadcast1(av, &(:math.exp(&1) - 1.0))}
   end
 
   defp do_eval(:rsqrt, [a], layout) do
