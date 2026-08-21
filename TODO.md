@@ -162,20 +162,43 @@ today:
 | function names in common | 24 | 24 |
 
 The whole delta is two names each way. Private has `reference/_` and
-`run_reference/_`; OSS has `run_exla/_` and `cauchy_quantiles/_`. That is a
-rename plus one helper, not a missing subsystem.
+`run_reference/_`; OSS has `run_exla/_` and `cauchy_quantiles/_`.
 
-And on the substance the direction reverses: **OSS's `analytic_moments/1` is
-ahead of private's.** OSS carries `:gamma`, `:beta`, and a `:studentt` pair
-that returns `:unknown` for `2 < ν ≤ 4` before giving moments for `ν > 4`.
-Private has none of those three and a single unguarded `ν > 2` clause — which
-will hand back a variance for a distribution whose fourth moment does not
-exist.
+### …and that reading was wrong too — resolved 2026-08-20
 
-So the work item is the reverse of what is written: port OSS's extra clauses
-**into** the applications tree, and settle the `reference`/`run_exla` naming.
-Correct the document before anyone acts on it, and correct `MISSION.md` §7 P1
-item 7 with it.
+**Counting names is what produced both errors.** The delta was never in the
+function list, it was in the **bodies**, and `diff -u` on the two files is 624
+lines. It runs in both directions and three of the private→OSS items are live
+defects, not style:
+
+1. OSS defined `check_analytic/3` and **never called it from `compare/3`**. So
+   `validate/3` ran mean, variance and KS — all differential — and was
+   structurally blind to any defect the two arms share, which is the whole
+   reason that function exists. Its moduledoc said so while the code did not do
+   it.
+2. OSS's `check_mean/2`, `check_variance/2`, `check_median/2` and `check_iqr/2`
+   divided by `length/1`, not `ess/1`.
+3. OSS's `run_exla/2` cleared `:exmc, :compiler` and let auto-detect run —
+   which resolves to `Nx.Vulkan` on any host without EXLA. **That is the
+   self-comparison bug private already fixed**, still live in OSS, and the
+   FreeBSD fleet is exactly the host class it bites.
+
+The OSS→private direction was right as far as it went, and it was one item
+short: private also still carried the `0.25 · IQR / sqrt(n)` Cauchy gate, which
+is ~6× too tight and would fail a correct sampler.
+
+**Both directions are now merged.** The trees are byte-identical on
+`lib/exmc/nuts/vulkan/validator.ex` and on
+`test/exmc/nuts/vulkan/validator_test.exs` — OSS had no
+`test/exmc/nuts/vulkan/` directory at all, which is why its copy was free to
+drift, and that is the part of Batch D that was accurate. `GATE1_RECONCILIATION.md`
+Batch D and `MISSION.md` §7 P1 item 7 are corrected in place rather than
+deleted, and the reasoning is filed as **D92**.
+
+Still open from this section: the four other test files in private's
+`test/exmc/nuts/vulkan/` (`batch_coordinator`, `bulkhead`, `chaos`, `server`)
+have no OSS counterpart, and the plan-document arrangement above still needs an
+operator decision.
 
 ---
 

@@ -2,10 +2,18 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   @moduledoc """
   Statistical validation harness for GPU-node chain shaders.
 
-  Runs the same NUTS sampler on the same prior model under both the
-  EXLA reference path and the candidate Vulkan-fused-chain path, with
-  the same random seed. Compares the resulting posterior samples via
+  Runs the same NUTS sampler on the same prior model under both an
+  independent reference path and the candidate Vulkan-fused-chain path,
+  with the same random seed. Compares the resulting posterior samples via
   three layered tests:
+
+  The reference is `:exla` where EXLA is loadable and `:none` (pure-CPU
+  `Nx.BinaryBackend`) otherwise — see `reference/0`. It is never the
+  candidate backend. It used to be: the arm was selected by clearing
+  `:exmc, :compiler` and letting auto-detection run, which resolves to
+  `Nx.Vulkan` on any host without EXLA. On the FreeBSD fleet, where EXLA
+  does not exist at all, this harness spent three weeks comparing Vulkan
+  against Vulkan and reporting that it agreed.
 
     1. **Mean** within 3σ — first-moment agreement.
     2. **Variance** within 3σ — second-moment agreement (catches the
@@ -14,6 +22,13 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     3. **Two-sample Kolmogorov–Smirnov** rejected at α = 0.001 —
        distribution-shape agreement (asymptotic critical value
        `c(α=0.001) ≈ 1.95` × `sqrt((n+m)/(n·m))`).
+    4. **Analytic moments**, on *each* arm independently — the only check
+       here that can fail for a defect the two arms SHARE. The first three
+       all ask "do these agree?", so a bug in the host NUTS tree moves both
+       arms identically and passes them. See `check_analytic/3`.
+
+  All standard errors divide by effective sample size, not by `length/1` —
+  these are Markov chains. See `ess/1` for what the iid assumption cost.
 
   Returns `:ok` only if all three pass. Otherwise `{:error, reason}`
   identifying which check rejected, with the observed and tolerated
@@ -52,15 +67,19 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   # Multiplier on standard error for mean / variance checks (~3σ).
   @sigma_tol 3.0
 
-  # Multiplier for the ANALYTIC checks. Wider than @sigma_tol because those
-  # compare one arm against a fixed number rather than two arms against each
-  # other, so there is no cancellation of shared sampler noise.
+  # Multiplier for the ANALYTIC check. Wider than @sigma_tol because it is a
+  # one-sample test against a fixed truth rather than a two-sample comparison,
+  # and because ESS is itself estimated — a noisy denominator on an absolute
+  # gate is how you get a flaky suite. 4σ still catches the defect this check
+  # exists for by a wide margin: the invalid-doubling bug put Normal(0,1)'s
+  # variance 45% high, which is ~14σ at n=800.
   @analytic_tol 4.0
 
   @default_opts [n_warmup: 500, n_samples: 1000, seed: 42]
 
   @doc """
-  Validate a candidate Vulkan shader against the EXLA reference path.
+  Validate a candidate Vulkan shader against an independent reference path
+  (`reference/0` — `:exla`, or `:none` where EXLA is absent).
 
   `ir` is a single-RV `Exmc.IR` (built with `Exmc.Builder.new_ir/0` +
   `Exmc.Builder.rv/4`). `vulkan_meta` is the tagged-tuple consumed by
@@ -74,11 +93,14 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   def validate(ir, vulkan_meta, opts \\ []) do
     opts = Keyword.merge(@default_opts, opts)
 
-    exla_samples = run_exla(ir, opts)
+    ref_samples = run_reference(ir, opts)
 
     case run_vulkan(ir, vulkan_meta, opts) do
       {:ok, vulkan_samples} ->
-        compare(exla_samples, vulkan_samples, vulkan_meta)
+        case compare(ref_samples, vulkan_samples, vulkan_meta) do
+          :ok -> :ok
+          {:error, reason} -> {:error, Map.put(reason, :reference, reference())}
+        end
 
       {:error, reason} ->
         {:error, %{check: :backend_unavailable, reason: reason}}
@@ -88,48 +110,110 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   @doc """
   Run the comparison pipeline on two pre-collected sample lists.
   Exposed so callers can wire in alternative sample sources (e.g.
-  for the negative test we feed two different EXLA distributions).
+  for the negative test we feed two different reference distributions).
 
   `meta` only matters for selecting the location-scale check
   (`:cauchy` → median/IQR; otherwise mean/variance).
   """
   @spec compare([number()], [number()], tuple()) :: :ok | {:error, map()}
-  def compare(exla_samples, vulkan_samples, meta) do
+  def compare(reference_samples, vulkan_samples, meta) do
     cauchy? = match?({:cauchy, _, _, _}, meta) or match?({:cauchy, _, _}, meta)
 
     location_check =
       if cauchy? do
-        check_median(exla_samples, vulkan_samples)
+        check_median(reference_samples, vulkan_samples)
       else
-        check_mean(exla_samples, vulkan_samples)
+        check_mean(reference_samples, vulkan_samples)
       end
 
     scale_check =
       if cauchy? do
-        check_iqr(exla_samples, vulkan_samples)
+        check_iqr(reference_samples, vulkan_samples)
       else
-        check_variance(exla_samples, vulkan_samples)
+        check_variance(reference_samples, vulkan_samples)
       end
 
+    # The analytic check runs on BOTH arms, and it is the only one here that
+    # can fail for a defect the two arms share. location/scale/KS all ask
+    # "do these agree?", so a bug in the host NUTS tree — which moves both arms
+    # identically — passes them unanimously. That is exactly what happened: an
+    # invalid doubling merged post-U-turn states into the trajectory and put
+    # Normal(0,1)'s variance at ~1.45 against a true 1.0 in both arms, under a
+    # green comparison, until someone thought to check against the
+    # distribution itself.
+    #
+    # Ordered last so a genuine backend divergence is still reported as such:
+    # if the arms disagree, that is the more specific finding.
     with :ok <- location_check,
          :ok <- scale_check,
-         :ok <- check_ks(exla_samples, vulkan_samples) do
+         :ok <- check_ks(reference_samples, vulkan_samples),
+         :ok <- check_analytic(reference_samples, :reference, meta),
+         :ok <- check_analytic(vulkan_samples, :vulkan, meta) do
       :ok
     end
   end
 
   # --- Backends ---------------------------------------------------
 
-  defp run_exla(ir, opts) do
-    # Force EXLA path: clear any compiler / fused-meta overrides.
+  @doc """
+  The compiler this harness uses for the REFERENCE arm on this host.
+
+  `:exla` where EXLA is loadable, `:none` (pure-CPU `Nx.BinaryBackend`)
+  otherwise. Never `:vulkan` — see the comment in `run_reference/2`.
+
+  Report this alongside any validation result: a verdict is only as good as
+  the thing it was compared against.
+  """
+  @spec reference() :: :exla | :none
+  def reference do
+    if Code.ensure_loaded?(EXLA) and function_exported?(EXLA, :__info__, 1),
+      do: :exla,
+      else: :none
+  end
+
+  defp run_reference(ir, opts) do
+    # Pin the reference compiler EXPLICITLY.
+    #
+    # This used to `Application.delete_env(:exmc, :compiler)` and rely on
+    # `Exmc.JIT.detect_compiler/0` falling through to EXLA. But its private
+    # `auto_detect/0` is `EXLA -> Nx.Vulkan -> nil`, so on any host
+    # WITHOUT EXLA it resolved to Nx.Vulkan — the arm under test. Reference and
+    # candidate were then the same backend, sampled with the same seed, and the
+    # mean/variance/KS checks compared a run against itself.
+    #
+    # FreeBSD has no EXLA at all, so every validation run on the Kepler fleet
+    # was that self-comparison: mac-247's "16 tests, 0 failures" was vacuous,
+    # and super-io scored 8/16 only because it was the one host actually
+    # performing the test. The fleet's standing verdict — "super-io is not
+    # valid for numerical validation, the macs are the reference" — was
+    # exactly backwards, and it stood for three weeks.
+    #
+    # `:none` is slower than EXLA but it is a genuine independent reference:
+    # pure-Elixir BinaryBackend shares no shader, no NIF and no driver with the
+    # candidate. A slow honest reference beats a fast vacuous one.
+    ref = reference()
+
     prev_compiler = Application.get_env(:exmc, :compiler)
     prev_meta = Application.get_env(:exmc, :fused_leapfrog_meta)
     prev_norm_meta = Application.get_env(:exmc, :fused_leapfrog_normal_meta)
     prev_force_prec = Application.get_env(:exmc, :force_precision)
 
-    Application.delete_env(:exmc, :compiler)
+    Application.put_env(:exmc, :compiler, ref)
     Application.delete_env(:exmc, :fused_leapfrog_meta)
     Application.delete_env(:exmc, :fused_leapfrog_normal_meta)
+
+    # Belt and braces. If a future change to detect_compiler/0 ever routes the
+    # reference back onto the candidate, fail loudly rather than return a
+    # comparison that cannot fail.
+    if Code.ensure_loaded?(Nx.Vulkan) and Exmc.JIT.detect_compiler() == Nx.Vulkan do
+      restore(:compiler, prev_compiler)
+
+      raise """
+      Validator reference arm resolved to Nx.Vulkan — the backend under test.
+      Comparing a backend against itself passes unconditionally and validates
+      nothing. Reference requested: #{inspect(ref)}.
+      """
+    end
 
     # When the caller passes `precision: :f32`, force the EXLA path
     # to f32 so it matches the chain shader's working precision.
@@ -205,8 +289,9 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     {mean_a, var_a} = mean_var(a)
     {mean_b, var_b} = mean_var(b)
 
-    se_a = :math.sqrt(var_a / length(a))
-    se_b = :math.sqrt(var_b / length(b))
+    # ESS, not length: these are NUTS draws, not iid samples. See ess/1.
+    se_a = :math.sqrt(var_a / ess(a))
+    se_b = :math.sqrt(var_b / ess(b))
     se_combined = :math.sqrt(se_a * se_a + se_b * se_b)
 
     diff = abs(mean_a - mean_b)
@@ -237,8 +322,8 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     {_, var_a} = mean_var(a)
     {_, var_b} = mean_var(b)
 
-    n_a = length(a)
-    n_b = length(b)
+    n_a = ess(a)
+    n_b = ess(b)
 
     se_a = var_a * :math.sqrt(2.0 / max(n_a - 1, 1))
     se_b = var_b * :math.sqrt(2.0 / max(n_b - 1, 1))
@@ -262,23 +347,104 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     end
   end
 
-  # --- Analytic checks --------------------------------------------
-  #
-  # Everything above this line is DIFFERENTIAL: it asks whether two arms
-  # agree. That is structurally blind to any defect the two arms share — and
-  # both arms run the same NUTS tree, so a defect in the tree moves them
-  # identically and the comparison passes. Two real defects lived behind a
-  # green mean/variance/KS suite for weeks because of exactly this. The checks
-  # below compare ONE arm against the distribution's own moments, which is the
-  # only thing that can see a shared defect.
+  @doc """
+  Two-sample Kolmogorov–Smirnov test.
+
+  Computes the maximum absolute difference between the two empirical
+  CDFs, then compares against the asymptotic critical value at
+  α = 0.001:
+
+      D > c(α) · sqrt((n + m) / (n · m))     where c(0.001) ≈ 1.95
+
+  Returns `:ok` if the test does *not* reject (i.e. the samples are
+  statistically indistinguishable at this α), `{:error, ...}` if it
+  rejects.
+  """
+  @spec check_ks([number()], [number()]) :: :ok | {:error, map()}
+  def check_ks(a, b) do
+    sa = Enum.sort(a)
+    sb = Enum.sort(b)
+    n = length(sa)
+    m = length(sb)
+
+    d = ks_statistic(sa, sb, n, m)
+    crit = @ks_c_001 * :math.sqrt((n + m) / (n * m))
+
+    if d <= crit do
+      :ok
+    else
+      # Asymptotic p-value approximation (Kolmogorov 1933 series, first term).
+      # Used purely for diagnostic reporting — the gate is `d <= crit`.
+      lambda = d * :math.sqrt(n * m / (n + m))
+      p = 2.0 * :math.exp(-2.0 * lambda * lambda)
+
+      {:error,
+       %{
+         check: :ks,
+         d: d,
+         crit: crit,
+         alpha: 0.001,
+         approx_p: p,
+         n: n,
+         m: m
+       }}
+    end
+  end
+
+  # Median + IQR variants for Cauchy (no defined moments).
+
+  defp check_median(a, b) do
+    med_a = median(a)
+    med_b = median(b)
+    # Bootstrap-free SE proxy for the median of a continuous
+    # distribution: scale-IQR / sqrt(n) (rough but fine as a 3σ gate).
+    se_a = iqr(a) / 1.349 / :math.sqrt(ess(a))
+    se_b = iqr(b) / 1.349 / :math.sqrt(ess(b))
+    se_combined = :math.sqrt(se_a * se_a + se_b * se_b)
+
+    diff = abs(med_a - med_b)
+    tol = @sigma_tol * max(se_combined, 1.0e-12)
+
+    if diff <= tol do
+      :ok
+    else
+      {:error, %{check: :median, exla: med_a, vulkan: med_b, diff: diff, tol: tol}}
+    end
+  end
+
+  defp check_iqr(a, b) do
+    iqr_a = iqr(a)
+    iqr_b = iqr(b)
+    # SE of IQR has no closed form independent of distribution; use
+    # 25% of the IQR as a conservative tolerance band per side.
+    se = 0.25 * (iqr_a + iqr_b) / 2.0 / :math.sqrt(min(ess(a), ess(b)))
+    diff = abs(iqr_a - iqr_b)
+    tol = @sigma_tol * max(se, 1.0e-12)
+
+    if diff <= tol do
+      :ok
+    else
+      {:error, %{check: :iqr, exla: iqr_a, vulkan: iqr_b, diff: diff, tol: tol}}
+    end
+  end
+
+  # --- Stat helpers -----------------------------------------------
 
   @doc """
-  Effective sample size by Geyer's initial monotone positive sequence.
+  Effective sample size of a NUTS chain, by Geyer's initial monotone positive
+  sequence — the estimator Stan uses.
 
-  Needed because NUTS output is autocorrelated: an iid standard error
-  understates the true one, and a gate that is too tight rejects correct runs.
-  A validator that cries wolf gets switched off, which is the same way a
-  vacuous check survives — nobody reads a harness they do not trust.
+  Every standard error in this module divides by this rather than by
+  `length/1`. They used to divide by `length/1`, which assumes iid draws;
+  NUTS output is a Markov chain, and these chains carry lag-1 autocorrelation
+  around 0.33–0.38. That understates the true standard error by roughly
+  1.5–2×, so a nominal 3σ gate was really operating near 1.7σ and rejecting
+  perfectly good runs — one Exponential(2) verdict flipped between seeds while
+  its pooled variance was *closer* to truth than the run that passed.
+
+  A validator that cries wolf gets switched off, which is the same way the
+  self-comparing reference arm survived: a harness nobody trusts is a harness
+  nobody reads.
 
   Returns a float in `[1, n]`. Capped at `n`: NUTS is often antithetic
   (negative odd-lag autocorrelation) which can push the true ESS above `n`,
@@ -339,6 +505,17 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   @doc """
   Analytic moments implied by a chain-shader `meta`, or `:unknown`.
 
+  This is the check the differential tests cannot perform. `compare/3` asks
+  whether two arms agree; it is structurally blind to any defect they share,
+  because a bug in the host NUTS tree moves both arms identically and the
+  comparison passes.
+
+  That is not hypothetical. A missing `if (!valid_subtree) break;` in
+  `Tree.do_build/11` merged post-U-turn states into the trajectory, inflating
+  Normal(0,1)'s posterior variance to ~1.45 against a true 1.0 — in BOTH arms,
+  for weeks, under a green mean/variance/KS comparison. Only measuring against
+  the distribution's own moments could see it.
+
   Cauchy has no moments, so it reports median and IQR instead, which are
   defined: median `loc`, IQR `2 * scale`.
   """
@@ -361,8 +538,6 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     {:moments, %{mean: m, var: v}}
   end
 
-  # StudentT's variance is nu/(nu-2) and only exists for nu > 2; below that the
-  # moment check would be comparing against an undefined quantity.
   # Gamma(alpha, beta) in the shape/RATE parameterisation, which is what
   # Exmc.Dist.Gamma uses: mean alpha/beta, var alpha/beta^2.
   def analytic_moments({:gamma, alpha, beta}) when alpha > 0 and beta > 0,
@@ -377,18 +552,20 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   #
   # The mean and variance exist for nu > 2, but every gate built on them is a
   # multiple of the standard error of the SAMPLE variance, and that standard
-  # error is sqrt((mu4 - sigma^4)/n). For 2 < nu <= 4 the fourth moment is
-  # INFINITE, so the sample variance has infinite variance and no sigma-multiple
-  # gate on it means anything at all — it will compute a number, and the number
-  # is noise. Returning :unknown makes callers say so out loud instead.
+  # error is sqrt((mu4 - sigma^4)/n) — see variance_se/2. For 2 < nu <= 4 the
+  # fourth moment is INFINITE, so the sample variance has infinite variance and
+  # no sigma-multiple gate on it means anything at all: it will compute a
+  # number, and the number is noise. Returning :unknown makes callers say so
+  # out loud instead. This clause must precede the nu > 4 one.
   def analytic_moments({:studentt, _mu, _sigma, nu, _c}) when nu > 2 and nu <= 4, do: :unknown
 
   def analytic_moments({:studentt, mu, sigma, nu, _c}) when nu > 4,
     do: {:moments, %{mean: mu * 1.0, var: sigma * sigma * nu / (nu - 2.0)}}
 
   # `f_quartile` is the density AT the quartiles, and it is what makes a
-  # quantile gate a gate rather than a number. Cauchy's quartiles are
-  # loc +/- scale, where f = 1/(pi * scale * (1 + 1^2)) = 1/(2 pi scale).
+  # quantile gate a gate rather than a number — see the se_iqr comment in
+  # check_analytic/3. Cauchy's quartiles are loc +/- scale, where
+  # f = 1/(pi * scale * (1 + 1^2)) = 1/(2 pi scale).
   def analytic_moments({:cauchy, loc, scale, _log_pi_scale}), do: cauchy_quantiles(loc, scale)
 
   def analytic_moments({:cauchy, loc, scale}), do: cauchy_quantiles(loc, scale)
@@ -429,7 +606,8 @@ defmodule Exmc.NUTS.Vulkan.Validator do
       :unknown ->
         # Visible, not silent. A check that quietly returns :ok for families it
         # cannot evaluate reports the same thing as a check that ran and
-        # passed, which is how a vacuous verdict survives.
+        # passed, which is how a vacuous verdict survives — see run_reference/2
+        # for what that already cost once here.
         require Logger
         Logger.info("[Validator] no analytic moments for #{inspect(meta)} — moment check SKIPPED")
         :ok
@@ -477,8 +655,12 @@ defmodule Exmc.NUTS.Vulkan.Validator do
 
         se_med = tiqr / 1.349 / :math.sqrt(n)
 
-        # The IQR's standard error is not a fixed fraction of the IQR, and the
-        # `0.25 * iqr / sqrt(n)` proxy that used to stand here was not
+        # Checking the scale at all matters: without it the Cauchy branch
+        # verified location and said nothing whatever about spread, so a
+        # sampler that got the centre right and the spread wrong passed.
+        #
+        # But the IQR's standard error is NOT a fixed fraction of the IQR, and
+        # the `0.25 * iqr / sqrt(n)` proxy that used to stand here was not
         # conservative — it was about **six times too tight** for Cauchy, so it
         # would have failed a correct sampler rather than passed a wrong one.
         #
@@ -491,6 +673,9 @@ defmodule Exmc.NUTS.Vulkan.Validator do
         # pi * scale / sqrt(n), against the old proxy's 0.5 * scale / sqrt(n).
         # Checked against a t(4) chain, where the same proxy was 5x too tight
         # and the correct form put the measured IQR at 1.9 sigma.
+        #
+        # The fallback keeps the old proxy for a `meta` whose quantile map
+        # carries no density — wrong, but no more wrong than it was.
         se_iqr =
           case q do
             %{f_quartile: f} when is_number(f) and f > 0.0 -> 0.5 / (f * :math.sqrt(n))
@@ -528,16 +713,19 @@ defmodule Exmc.NUTS.Vulkan.Validator do
 
   # Standard error of the sample variance, WITHOUT assuming normality.
   #
-  # The Gaussian form `var * sqrt(2/(n-1))` used by check_variance/2 comes from
-  # Var(s²) = 2σ⁴/n, which holds only when the fourth central moment is 3σ⁴.
-  # The general result is Var(s²) = (μ₄ − σ⁴)/n, so for any heavier-tailed
+  # This was `var * sqrt(2/(n-1))`, which is the Gaussian special case: it comes
+  # from Var(s²) = 2σ⁴/n, which holds only when the fourth central moment is
+  # 3σ⁴. The general result is Var(s²) = (μ₄ − σ⁴)/n, so for any heavier-tailed
   # distribution the Gaussian form UNDERSTATES the true standard error — by
   # exactly 2.00x for Exponential and StudentT(5), 1.99x for LogNormal(0, 0.5),
   # since all three have μ₄ = 9σ⁴ or near it.
   #
   # A gate two times too tight rejects correct runs. Measured at n=800 and 4σ
   # over 20,000 replications of *iid* draws: Exponential(1) false-rejected
-  # 4.30% of the time against a nominal 0.0063%.
+  # 4.30% of the time against a nominal 0.0063%. Widening @analytic_tol from
+  # 3 to 4 masked that rather than fixing it, and it is the likely mechanism
+  # behind an Exponential(2) verdict that flipped between seeds while its
+  # pooled variance was closer to truth than the run that passed.
   #
   # μ₄ is estimated from the sample rather than added to the analytic table:
   # it generalises to every family, including the ones analytic_moments/1
@@ -554,89 +742,6 @@ defmodule Exmc.NUTS.Vulkan.Validator do
 
     max(:math.sqrt(max(m4 - v * v, 0.0) / max(ess, 1.0)), 1.0e-30)
   end
-
-  @doc """
-  Two-sample Kolmogorov–Smirnov test.
-
-  Computes the maximum absolute difference between the two empirical
-  CDFs, then compares against the asymptotic critical value at
-  α = 0.001:
-
-      D > c(α) · sqrt((n + m) / (n · m))     where c(0.001) ≈ 1.95
-
-  Returns `:ok` if the test does *not* reject (i.e. the samples are
-  statistically indistinguishable at this α), `{:error, ...}` if it
-  rejects.
-  """
-  @spec check_ks([number()], [number()]) :: :ok | {:error, map()}
-  def check_ks(a, b) do
-    sa = Enum.sort(a)
-    sb = Enum.sort(b)
-    n = length(sa)
-    m = length(sb)
-
-    d = ks_statistic(sa, sb, n, m)
-    crit = @ks_c_001 * :math.sqrt((n + m) / (n * m))
-
-    if d <= crit do
-      :ok
-    else
-      # Asymptotic p-value approximation (Kolmogorov 1933 series, first term).
-      # Used purely for diagnostic reporting — the gate is `d <= crit`.
-      lambda = d * :math.sqrt(n * m / (n + m))
-      p = 2.0 * :math.exp(-2.0 * lambda * lambda)
-
-      {:error,
-       %{
-         check: :ks,
-         d: d,
-         crit: crit,
-         alpha: 0.001,
-         approx_p: p,
-         n: n,
-         m: m
-       }}
-    end
-  end
-
-  # Median + IQR variants for Cauchy (no defined moments).
-
-  defp check_median(a, b) do
-    med_a = median(a)
-    med_b = median(b)
-    # Bootstrap-free SE proxy for the median of a continuous
-    # distribution: scale-IQR / sqrt(n) (rough but fine as a 3σ gate).
-    se_a = iqr(a) / 1.349 / :math.sqrt(length(a))
-    se_b = iqr(b) / 1.349 / :math.sqrt(length(b))
-    se_combined = :math.sqrt(se_a * se_a + se_b * se_b)
-
-    diff = abs(med_a - med_b)
-    tol = @sigma_tol * max(se_combined, 1.0e-12)
-
-    if diff <= tol do
-      :ok
-    else
-      {:error, %{check: :median, exla: med_a, vulkan: med_b, diff: diff, tol: tol}}
-    end
-  end
-
-  defp check_iqr(a, b) do
-    iqr_a = iqr(a)
-    iqr_b = iqr(b)
-    # SE of IQR has no closed form independent of distribution; use
-    # 25% of the IQR as a conservative tolerance band per side.
-    se = 0.25 * (iqr_a + iqr_b) / 2.0 / :math.sqrt(min(length(a), length(b)))
-    diff = abs(iqr_a - iqr_b)
-    tol = @sigma_tol * max(se, 1.0e-12)
-
-    if diff <= tol do
-      :ok
-    else
-      {:error, %{check: :iqr, exla: iqr_a, vulkan: iqr_b, diff: diff, tol: tol}}
-    end
-  end
-
-  # --- Stat helpers -----------------------------------------------
 
   @doc false
   def mean_var(xs) do
