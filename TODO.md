@@ -90,22 +90,33 @@ While you are in there, two more compile warnings that are not noise:
 6,724 insertions, 26 files. Verified green before committing: `mix test
 test/sbi test/mclmc` → **97 tests, 0 failures, 2 excluded**, 226s.
 
-One caveat on that number, stated plainly: twelve of those files were not
-formatted, I ran `mix format` on them, and the green run was taken *before* the
-format pass. Formatting is an AST round-trip and cannot change semantics, but
-I never re-ran afterwards — the build was broken by the concurrent edit by the
-time I tried. If you want the belt-and-braces number, that command is the whole
-of it.
+Twelve of those files were not formatted; I ran `mix format` on them, and that
+green run was taken *before* the format pass. **Re-run 2026-08-20, after it,
+and both are still green:** `mix test test/sbi` → 55 tests, 0 failures, 2
+excluded, 33.7s; `mix test test/mclmc` → 42 tests, 0 failures, 267.4s. The
+caveat is closed.
 
-`NEXT.md` §6 documents B1 well. **There is no §7 for C2.** `Exmc.SBI` appears
-twice in the whole file, both times incidentally, in a table cell counting
-tests. That is 1,852 lines of new subsystem — rejection ABC, ABC-SMC, an M/M/1
-fixture, and a simulation-based-calibration gate that measures its own power
-before claiming a pass — with no entry in the plan of record. Someone arriving
-at this repo would not learn it exists.
+The 2 excluded are `sbc_test.exs:183` and `:213`, both `@tag :slow` — see
+`NEXT.md` §7, they are the tests that measure the SBC gate's own error rates.
 
-Write the section, or tell me to. The commit message for `82db4f8` has the
-material.
+~~There is no §7 for C2.~~ **Written 2026-08-20** — `NEXT.md` §7 now covers it.
+Three things in it are new findings rather than restatement, and are the reason
+it was worth writing:
+
+- **C2.4 was never started**, and it is the stage the roadmap item is named
+  after — "simulation-based inference *on `sim_ex`*". There is no bridge, no
+  notebook, and no reference to `sim_ex` anywhere under `lib/exmc/sbi/` or
+  `test/sbi/`. What landed is a correct, tested ABC library with no consumer,
+  and the roadmap's "abandon if" — does the simulator call dominate so badly
+  that useful particle counts are unreachable — is therefore still unanswered.
+- **C2.3 is half done.** `Task.async_stream` landed; `Mesh.Pool` did not,
+  because `lib/exmc/mesh/` does not exist in this repository. It is one of the
+  private-only subtrees. The distributed arm is blocked on the split, not on
+  ABC.
+- **The two tests that establish the SBC gate's error rates are excluded from
+  the default run** (`@tag :slow`, `sbc_test.exs:183` and `:213`). So `mix test`
+  re-checks the gate but never re-checks the gate's credibility, and nothing in
+  CI would notice those numbers drifting.
 
 ---
 
@@ -266,9 +277,12 @@ Key it off the detected backend, not the config.
   sentence, by force-pushing back to `b536a40` or by trying to "rescue" work
   believed to be local only, would discard the whole item 1 / 7 / 2 run. Check
   `git rev-parse origin/gate1/reconcile-core` rather than this file.)*
-  The only local commits are the two from the applications-tree session,
-  `9c74bb0` and `0fe59d2`. `origin` is the private server; `upstream` is
-  GitHub and pushing there is a release — see `NEXT.md` §0.
+  Of the two local commits named there, only `0fe59d2` (this file) is the
+  applications-tree session's — `9c74bb0 notebooks(bda-cyber)` is the other
+  session's own, and its files were already untracked in the checkout before
+  B1 and C2 were staged. The list has since grown either way; take
+  `git rev-parse` over any sentence in here. `origin` is the private server;
+  `upstream` is GitHub and pushing there is a release — see `NEXT.md` §0.
 
 ---
 

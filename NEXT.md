@@ -647,3 +647,149 @@ tensors. Any place that does is computing at f32 while believing it is at f64,
 and `MISSION.md` §4's "the f64 default is not costing anything and it is a
 correctness asset" is only true where the default actually applies. Worth a
 grep before the next precision question is diagnosed as a backend problem.
+
+---
+
+## 7. C2 (SBI / ABC) — landed, and the thing it was built for is not
+
+**Written 2026-08-20.** Roadmap item C2 from
+`/home/io/projects/learn_erl/pymc/exmc/docs/PLAN_SAMPLER_ROADMAP.md` §5, whose
+title is "simulation-based inference **on `sim_ex`**". Four of its five stages
+are complete and gated. **C2.4 — the `sim_ex` bridge and the calibration
+notebook — was not started**, and since that is the stage the item is named
+after, read the rest of this section with that in mind: what landed is a
+correct, tested ABC library with no consumer.
+
+Committed as `82db4f8`.
+
+### What landed
+
+| file | what |
+|---|---|
+| `lib/exmc/sbi/simulator.ex` | the behaviour — `simulate(params, rng) :: {summary, rng}`, a parameter map of plain floats and a functional `:rand` state in, a summary vector and the advanced state out |
+| `lib/exmc/sbi/prior.ex` | independent scalar priors, drawable and evaluable. Deliberately standalone rather than a route into `Exmc.IR`: ABC needs draw and `logpdf` and nothing else — no gradient, no transform |
+| `lib/exmc/sbi/abc.ex` | rejection ABC — the reference arm |
+| `lib/exmc/sbi/abc_smc.ex` | Toni et al. (2009), Del Moral's adaptive tolerance, the Beaumont et al. (2009) perturbation kernel |
+| `lib/exmc/sbi/engine.ex` | option resolution, the distance, RNG splitting, batched evaluation |
+| `lib/exmc/sbi.ex` | `run/3`, `run!/3`, and the posterior accessors — `posterior_mean/1`, `credible_interval/3`, `weight_ess/1`, `resample/3`, `rank/5`, `prior_predictive_scale/3` |
+| `test/sbi/*` | 55 tests, all green |
+
+Nothing outside `lib/exmc/sbi/` changed except `mix.exs`, which gained the
+ex_doc groups. There is no dependency on the model layer at all: `Exmc.SBI`
+never calls `Exmc.Compiler`, never builds an `Exmc.IR`, and never
+differentiates anything. It is the only inference path in the repository that
+does not.
+
+### The stages, and which one is missing
+
+| # | work | state |
+|---|---|---|
+| C2.1 | `Simulator` behaviour + rejection ABC | ✅ |
+| C2.2 | ABC-SMC — schedule, kernel, weights, resampling | ✅ |
+| C2.3 | parallel evaluation over `Task.async_stream`, **then `Mesh.Pool`** | ✅ / **✗** |
+| C2.4 | the `sim_ex_exmc` bridge + the M/M/1 calibration notebook | **✗ not started** |
+| C2.5 | the SBC gate | ✅ |
+
+C2.3 is half done and the half that is missing is the one that matters for the
+BEAM claim. `Task.async_stream` fans a population out across schedulers on one
+node; `Mesh.Pool` is what would fan it across the cluster. **`lib/exmc/mesh/`
+does not exist in this repository** — it is one of the private-only subtrees the
+Gate 1 survey found. So the distributed arm of C2.3 is blocked on the
+core/applications split, not on ABC.
+
+### The gate, and the two tests the default run does not execute
+
+`test/sbi/sbc_test.exs` is the primary gate, and it is the one place in the
+whole roadmap where SBC is the right tool: Geweke is ~40× cheaper but needs an
+exact-invariance argument about a Markov kernel, and a likelihood-free
+posterior has none. It is affordable here because the target is a
+Normal–Normal conjugate model whose simulator is ten normal draws — 800
+complete ABC-SMC fits cost about ten seconds, not the hours a NUTS SBC would.
+
+The target is conjugate for a second reason worth keeping: its summary, the
+sample mean, is **sufficient**. Run SBC on the M/M/1 queue instead and a red
+gate is ambiguous between "the sampler is wrong" and "mean waiting time is not
+sufficient for (λ, μ)" — and an ambiguous gate teaches people to ignore it.
+
+The module documents its own error rates rather than asserting them. Null, 300
+experiments of 800 replicates: rejection at α = 0.01 measured **0.0033**
+against a nominal 0.01, median p-value **0.485**. Power at α = 0.01 against a
+posterior whose standard deviation is wrong by a fixed factor: **0.913** at
+sd × 0.85, **0.427** at sd × 0.90, **0.307** at sd × 1.10. 800 replicates and
+10 bins were both chosen off that table rather than picked. And the gate is
+then measured *in situ* against the real sampler by throwing the importance
+weights away — the single most likely way for an ABC-SMC implementation to be
+wrong — which gives **p = 7.3e-8** against **0.299** for the unmodified
+posteriors.
+
+**But the two tests that produce those error rates are `@tag :slow` and are
+excluded from the default run** — `sbc_test.exs:183` (false-positive rate under
+the null) and `:213` (power against a known scale error). That is a defensible
+call, since between them they are 300 complete SBC experiments. It does mean
+the default `mix test` re-checks the gate but never re-checks the gate's
+credibility. The numbers above are as measured on the day and nothing in CI
+would notice them drifting.
+
+```sh
+mix test --include slow test/sbi/sbc_test.exs   # runtime not measured; budget generously
+```
+
+The M/M/1 arm (`test/sbi/mm1_test.exs`) validates the fixture against
+`ρ = λ/μ`, `Wq = ρ/(μ−λ)` and `Lq = ρ²/(1−ρ)` **before** using it to gate the
+inference, which is what makes it a gate rather than a comparison against
+another piece of our own code. Every tolerance in it is a standard error
+computed from the run's own replications or a binomial bound on a coverage
+count.
+
+### What is not done, and should be
+
+- **C2.4, the whole of it.** No `sim_ex_exmc` bridge — `sim_ex` is not
+  referenced anywhere under `lib/exmc/sbi/` or `test/sbi/`. No calibration
+  notebook; `notebooks/` has nothing on ABC. The M/M/1 that exists is a test
+  fixture in `test/sbi/support/mm1.exs`, not a document anyone would read.
+  This is the deliverable the roadmap calls P-3 and describes as "the only item
+  on this roadmap that is plausibly publishable on its own", and it is the item
+  the "abandon if" condition is written about — whether the simulator call
+  dominates so completely that useful particle counts are out of reach. **That
+  question is currently unanswered**, because the only simulator ABC has been
+  run against is a fixture designed to be fast.
+- **`Mesh.Pool` evaluation.** Above. Blocked on the split.
+- **No `bench/` script and no `bench_results/` file.** §4 of this document says
+  every claim should point at raw output; C2 is the newest subsystem in the
+  repo and is the one with no such file. The SBC error-rate table lives in a
+  `@moduledoc` and the M/M/1 coverage numbers live in assertions. Both should
+  be re-derivable by running one script.
+- **Neither arm has been run on Vulkan or EXLA**, because neither touches Nx.
+  That is correct — a simulator is a process, not a tensor lane — but it means
+  C2 contributes nothing to the backend sweep in §2 and should not be counted
+  toward it.
+
+### One design decision worth not undoing
+
+Proposals are generated **sequentially** from the parent `:rand` state and
+evaluated in a **batch whose size is fixed before any simulator runs**, so
+nothing about the result depends on the concurrency. `parallel: false` and
+`parallel: true` over the same seed produce bit-identical particles, weights
+and simulation counts — which turns "is the parallel path the same algorithm?"
+from a hopeful assertion into an equality test, and
+`test/sbi/determinism_test.exs` asserts exactly that, including across worker
+counts.
+
+The cost is real and is not hidden: a batch may simulate more proposals than
+the population needs, because it cannot stop early. `n_simulations` in every
+result counts what actually ran. Anyone tempted to reclaim those simulations by
+generating proposals inside the workers should understand they are trading the
+equality test for them.
+
+### The caveat that belongs on the front page
+
+`Exmc.SBI`'s `@moduledoc` carries it as a warning block and it should stay
+there: ABC targets `p(θ | S(y*))`, not `p(θ | y*)`, and those are the same
+distribution only when `S` is sufficient. Driving `ε → 0` does not repair it.
+There are two approximations in every ABC posterior and only `ε` is under the
+user's control — insufficiency does not appear in any diagnostic, does not
+shrink with budget, and does not show up as a divergence or a low ESS. The
+roadmap made this an explicit gate requirement ("in the docs and not only in
+the tests") because the characteristic failure of ABC software is that the
+sentence exists somewhere and nobody reads it. If the README ever grows an SBI
+section, it goes there too.
