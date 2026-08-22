@@ -7,6 +7,13 @@ was committing B1 and C2. That edit has since landed as `bd86e96` and the tree
 compiles, so nothing is broken. This file is the other half of that collision:
 what I know that is not in `NEXT.md`, and what I touched.
 
+> **Taking over both trees?** Start at
+> `/home/io/projects/learn_erl/pymc/exmc/docs/HANDOVER_SPLIT.md` (tracked in
+> `phd.git` as of 2026-08-22) rather than here. It carries the current fork
+> measurement, where the work stands against the gate ladder, the five open
+> operator decisions, and the traps — including the one about credentials on
+> mac-248. This file stays the OSS-side running list; that one is the map.
+
 `NEXT.md` remains the plan of record for the OSS repo. This is a list of loose
 ends, ordered by how much it costs to leave them.
 
