@@ -29,9 +29,26 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
   use GenServer
 
   alias Exmc.NUTS.Vulkan.Dispatch
-  alias Exmc.NUTS.Vulkan.Scheduler, as: GPUScheduler
 
   @default_flush_ms 25
+
+  # The compute scheduler is a seam, not a fixed module.
+  #
+  # This line used to be `alias Exmc.NUTS.Vulkan.Scheduler, as: GPUScheduler`
+  # here and `alias Exmc.Trading.GPUScheduler` in the applications tree — and
+  # that alias was the *only* difference between the two copies of this file.
+  # Core code naming an application module is what makes a file forkable, so
+  # the application supplies its own scheduler through config instead:
+  #
+  #     config :exmc, :gpu_scheduler, MyApp.GPUScheduler
+  #
+  # The contract is one function: `run/1`, taking a zero- or one-arity function
+  # and returning whatever that function returns. `Exmc.NUTS.Vulkan.Scheduler`
+  # is the default and the reference implementation; it degrades to direct
+  # execution when it is not started, so the seam costs nothing when unused.
+  @doc false
+  def scheduler,
+    do: Application.get_env(:exmc, :gpu_scheduler, Exmc.NUTS.Vulkan.Scheduler)
 
   def start_link(batched_meta, batch_size, opts \\ []) do
     GenServer.start_link(__MODULE__, {batched_meta, batch_size, opts})
@@ -185,7 +202,8 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
   end
 
   def handle_call(:pending_count, _from, state) do
-    {:reply, %{forward: length(state.pending.forward), backward: length(state.pending.backward)}, state}
+    {:reply, %{forward: length(state.pending.forward), backward: length(state.pending.backward)},
+     state}
   end
 
   # Task #171 Step 2: chain dispatch enqueue handler. Mirrors :request
@@ -300,7 +318,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
 
     results =
       if state.use_gpu_scheduler do
-        GPUScheduler.run(fn _device -> dispatch.() end)
+        scheduler().run(fn _device -> dispatch.() end)
       else
         dispatch.()
       end
@@ -415,7 +433,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
     results =
       try do
         if state.use_gpu_scheduler do
-          GPUScheduler.run(fn _device -> dispatch.() end)
+          scheduler().run(fn _device -> dispatch.() end)
         else
           dispatch.()
         end
@@ -425,9 +443,11 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
           # retry via route_chain_direct. The coord process itself
           # survives.
           reason = {:dispatch_raise, Exception.message(e)}
+
           Enum.each(queue, fn {from, _, _, _, _, _, _, _} ->
             GenServer.reply(from, {:fallback, reason})
           end)
+
           :crashed
       end
 
