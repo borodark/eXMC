@@ -15,7 +15,8 @@ defmodule Exmc.NUTS.MassMatrix do
     %{
       mode: :diagonal,
       n: 0,
-      mean: Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d}),
+      mean:
+        Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d}),
       m2: Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
     }
   end
@@ -28,8 +29,13 @@ defmodule Exmc.NUTS.MassMatrix do
     %{
       mode: :dense,
       n: 0,
-      mean: Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d}),
-      m2: Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d, d})
+      mean:
+        Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d}),
+      m2:
+        Nx.broadcast(
+          Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend),
+          {d, d}
+        )
     }
   end
 
@@ -44,7 +50,10 @@ defmodule Exmc.NUTS.MassMatrix do
     new_mean =
       Nx.add(
         mean,
-        Nx.divide(delta, Nx.tensor(new_n * 1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
+        Nx.divide(
+          delta,
+          Nx.tensor(new_n * 1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+        )
       )
 
     delta2 = Nx.subtract(q, new_mean)
@@ -60,7 +69,10 @@ defmodule Exmc.NUTS.MassMatrix do
     new_mean =
       Nx.add(
         mean,
-        Nx.divide(delta, Nx.tensor(new_n * 1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
+        Nx.divide(
+          delta,
+          Nx.tensor(new_n * 1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+        )
       )
 
     delta2 = Nx.subtract(q, new_mean)
@@ -80,7 +92,12 @@ defmodule Exmc.NUTS.MassMatrix do
   end
 
   def finalize(%{mode: :diagonal, n: n, m2: m2}) do
-    variance = Nx.divide(m2, Nx.tensor((n - 1) * 1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
+    variance =
+      Nx.divide(
+        m2,
+        Nx.tensor((n - 1) * 1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+      )
+
     floor = Nx.tensor(1.0e-6, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
     variance = Nx.max(variance, floor)
 
@@ -88,7 +105,10 @@ defmodule Exmc.NUTS.MassMatrix do
     alpha = 5.0 / (n + 5.0)
 
     Nx.add(
-      Nx.multiply(Nx.tensor(1.0 - alpha, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), variance),
+      Nx.multiply(
+        Nx.tensor(1.0 - alpha, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend),
+        variance
+      ),
       Nx.multiply(
         Nx.tensor(alpha, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend),
         Nx.tensor(1.0e-3, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
@@ -104,39 +124,47 @@ defmodule Exmc.NUTS.MassMatrix do
   """
   def finalize_dense(%{mode: :dense, n: n, mean: mean}) when n < 3 do
     {d} = Nx.shape(mean)
-    eye = Nx.eye(d, type: Exmc.JIT.precision())
+    eye = Nx.eye(d, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
     %{cov: eye, chol_cov: eye}
   end
 
   def finalize_dense(%{mode: :dense, n: n, m2: m2}) do
-    cov = Nx.divide(m2, Nx.tensor((n - 1) * 1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
-    {d, _} = Nx.shape(cov)
+    # Everything in this function operates on BinaryBackend covariance
+    # tensors, but calls into `Nx.LinAlg.cholesky/1` and (originally)
+    # `Nx.take_diagonal/1` create internal index/scratch tensors on
+    # the default backend — Vulkano under D88 defaults. Mixed-backend
+    # ops (BinaryBackend outer, Vulkano indices inner) crash in
+    # `BinaryBackend.clamp_indices` / `to_binary`. Force the default
+    # backend to BinaryBackend for the duration to keep every scratch
+    # tensor on the same backend as the covariance. Detected on Nx
+    # 0.12.1; the same bug is present on Nx 0.10.0.
+    Nx.with_default_backend(Nx.BinaryBackend, fn ->
+      cov = Nx.divide(m2, Nx.tensor((n - 1) * 1.0, type: Exmc.JIT.precision()))
+      {d, _} = Nx.shape(cov)
 
-    # Shrink toward sample diagonal — preserves marginal variances,
-    # reduces noisy off-diagonal correlation estimates.
-    # Stronger than scalar regularization: ensures positive definiteness
-    # even with few samples relative to dimension.
-    alpha = 5.0 / (n + 5.0)
-    # Extract diagonal as a diagonal matrix
-    diag_cov = Nx.multiply(Nx.take_diagonal(cov), Nx.eye(d, type: Exmc.JIT.precision()))
-    # Floor the diagonal at 1e-6
-    diag_floored =
-      Nx.max(
-        diag_cov,
-        Nx.multiply(
-          Nx.tensor(1.0e-6, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend),
-          Nx.eye(d, type: Exmc.JIT.precision())
+      # Shrink toward sample diagonal — preserves marginal variances,
+      # reduces noisy off-diagonal correlation estimates. Stronger
+      # than scalar regularization: ensures positive definiteness
+      # even with few samples relative to dimension.
+      alpha = 5.0 / (n + 5.0)
+      eye = Nx.eye(d, type: Exmc.JIT.precision())
+      diag_cov = Nx.multiply(cov, eye)
+      # Floor the diagonal at 1e-6
+      diag_floored =
+        Nx.max(
+          diag_cov,
+          Nx.multiply(Nx.tensor(1.0e-6, type: Exmc.JIT.precision()), eye)
         )
-      )
 
-    cov =
-      Nx.add(
-        Nx.multiply(Nx.tensor(1.0 - alpha, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), cov),
-        Nx.multiply(Nx.tensor(alpha, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), diag_floored)
-      )
+      cov =
+        Nx.add(
+          Nx.multiply(Nx.tensor(1.0 - alpha, type: Exmc.JIT.precision()), cov),
+          Nx.multiply(Nx.tensor(alpha, type: Exmc.JIT.precision()), diag_floored)
+        )
 
-    chol_cov = Nx.LinAlg.cholesky(cov)
-    %{cov: cov, chol_cov: chol_cov}
+      chol_cov = Nx.LinAlg.cholesky(cov)
+      %{cov: cov, chol_cov: chol_cov}
+    end)
   end
 
   @doc """

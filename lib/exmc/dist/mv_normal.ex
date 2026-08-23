@@ -39,10 +39,17 @@ defmodule Exmc.Dist.MvNormal do
   Call this eagerly before gradient tracing to avoid LinAlg ops in the traced function.
   """
   def prepare_params(%{mu: mu, cov: cov}) do
-    l = Nx.LinAlg.cholesky(cov)
-    log_det_cov = Nx.multiply(Nx.tensor(2.0), Nx.sum(Nx.log(Nx.take_diagonal(l))))
-    prec = Nx.LinAlg.invert(cov)
-    %{mu: mu, prec: prec, log_det_cov: log_det_cov}
+    # `Nx.LinAlg.cholesky`, `Nx.take_diagonal`, and `Nx.LinAlg.invert`
+    # all create internal scratch tensors on the default backend
+    # (Vulkano under D88 f64 defaults); mixed with BinaryBackend
+    # inputs they crash in `BinaryBackend.gather` / `to_binary`.
+    # Force BinaryBackend for the eager linalg pre-compute.
+    Nx.with_default_backend(Nx.BinaryBackend, fn ->
+      l = Nx.LinAlg.cholesky(cov)
+      log_det_cov = Nx.multiply(Nx.tensor(2.0), Nx.sum(Nx.log(Nx.take_diagonal(l))))
+      prec = Nx.LinAlg.invert(cov)
+      %{mu: mu, prec: prec, log_det_cov: log_det_cov}
+    end)
   end
 
   def prepare_params(%{mu: _, prec: _, log_det_cov: _} = params), do: params
@@ -55,17 +62,19 @@ defmodule Exmc.Dist.MvNormal do
 
   @impl true
   def sample(%{mu: mu, cov: cov}, rng) do
-    d = elem(Nx.shape(mu), 0)
-    l = Nx.LinAlg.cholesky(cov)
+    Nx.with_default_backend(Nx.BinaryBackend, fn ->
+      d = elem(Nx.shape(mu), 0)
+      l = Nx.LinAlg.cholesky(cov)
 
-    {z_list, rng} =
-      Enum.map_reduce(1..d, rng, fn _i, r ->
-        :rand.normal_s(r)
-      end)
+      {z_list, rng} =
+        Enum.map_reduce(1..d, rng, fn _i, r ->
+          :rand.normal_s(r)
+        end)
 
-    z = Nx.tensor(z_list, type: :f64)
-    x = Nx.add(mu, Nx.dot(l, z))
-    {x, rng}
+      z = Nx.tensor(z_list, type: :f64)
+      x = Nx.add(mu, Nx.dot(l, z))
+      {x, rng}
+    end)
   end
 
   def sample(%{mu: _, prec: _, log_det_cov: _}, _rng) do

@@ -18,6 +18,14 @@ defmodule Exmc.JIT do
   > cannot exercise. When such a machine is on hand, re-introduce EMLX as a
   > detected compiler here (f32 precision, f64→f32 downcast via
   > `ensure_precision/1`) and restore its `:emlx` branch in `test/test_helper.exs`.
+  >
+  > **Apple GPU is not blocked on that, though.** The forward plan for
+  > Metal-class hardware is `nx_vulkan` (VulkanoBackend) through MoltenVK, which
+  > already runs f64 on the FreeBSD fleet. If vulkano holds up on Darwin then
+  > that is the Apple GPU path and EMLX does not need to come back at all.
+  > Dropping EMLX also collapses the compiler matrix to **EXLA > Vulkan >
+  > Evaluator**, all f64-capable, which is what took the f32/f64 fork out of the
+  > hot path.
 
   ## Configuration
 

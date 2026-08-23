@@ -73,17 +73,32 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   # Synthesised chain shader dispatch. Meta tuple produced by
   # `Exmc.NUTS.CustomSynth.synthesise/1`. All models route through
   # the f64 synth path — the legacy f32 family SPVs are removed.
+  #
+  # On the `d <= 256` guard below: 256 is the SHADER's limit. The chain
+  # templates declare `local_size_x = 256` with `shared double q_shared[256]`,
+  # one thread per free RV. It is a real bound and it is almost never the one
+  # that bites.
+  #
+  # The binding cap is the 128-byte push-constants block, which after a 24-byte
+  # header leaves room for 13 f64 of prior parameters — so 13 RVs with
+  # one-parameter priors, 6 with two. `Exmc.NUTS.CustomSynth.Push.pack/1` is
+  # authoritative and rejects at synth time with `:push_too_large`; this guard
+  # only catches a model that somehow got past it.
+  #
+  # Stating 256 alone (as this guard and two doc sites used to) is wrong twice
+  # over: wrong number, and wrong variable — the limit is on prior parameter
+  # floats, not on RV count.
   defp do_chain(
-        {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin} = meta,
-        d,
-        epsilon,
-        inv_mass,
-        q,
-        p,
-        k,
-        dir_sign
-      )
-      when is_integer(d) and d <= 256 do
+         {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin} = meta,
+         d,
+         epsilon,
+         inv_mass,
+         q,
+         p,
+         k,
+         dir_sign
+       )
+       when is_integer(d) and d <= 256 do
     chain_synth_vulkano(meta, d, epsilon, inv_mass, q, p, k, dir_sign)
   end
 
@@ -101,6 +116,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
          dir_sign
        ) do
     signed_eps = dir_sign * epsilon
+
     {:ok, push, _bytes} =
       Exmc.NUTS.CustomSynth.Push.pack(%{push_spec | eps: signed_eps, K: k})
 
@@ -114,20 +130,35 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     # consumer can pair this with the cpu_leap_in probe emitted by
     # Leapfrog.step.
     Exmc.Dyntrace.p(
-      :erlang.phash2(q_bin), :erlang.phash2(p_bin),
-      k, d,
-      "vk_leap_in", "", "", ""
+      :erlang.phash2(q_bin),
+      :erlang.phash2(p_bin),
+      k,
+      d,
+      "vk_leap_in",
+      "",
+      "",
+      ""
     )
 
     {:ok, {q_chain_bin, p_chain_bin, grad_chain_bin, logp_chain_bin}} =
       Nx.Vulkan.NativeV.leapfrog_chain_synth_f64(
-        q_bin, p_bin, extras_bin, push, k, spv_path
+        q_bin,
+        p_bin,
+        extras_bin,
+        push,
+        k,
+        spv_path
       )
 
     Exmc.Dyntrace.p(
-      :erlang.phash2(q_chain_bin), :erlang.phash2(p_chain_bin),
-      :erlang.phash2(grad_chain_bin), :erlang.phash2(logp_chain_bin),
-      "vk_leap_out", "", "", ""
+      :erlang.phash2(q_chain_bin),
+      :erlang.phash2(p_chain_bin),
+      :erlang.phash2(grad_chain_bin),
+      :erlang.phash2(logp_chain_bin),
+      "vk_leap_out",
+      "",
+      "",
+      ""
     )
 
     bins_to_chain_tensors(
@@ -208,8 +239,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
 
     # Pack inputs: instance-contiguous layout (f64)
     {q_bin, p_bin, extras_bin} =
-      Enum.reduce(instances, {<<>>, <<>>, <<>>}, fn {q, p, inv_mass, obs},
-                                                    {qa, pa, ea} ->
+      Enum.reduce(instances, {<<>>, <<>>, <<>>}, fn {q, p, inv_mass, obs}, {qa, pa, ea} ->
         q_b = q |> Nx.as_type(:f64) |> Nx.to_binary()
         p_b = p |> Nx.as_type(:f64) |> Nx.to_binary()
         obs_b = obs |> Nx.as_type(:f64) |> Nx.to_binary()
@@ -220,7 +250,12 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
 
     {:ok, {q_chain_bin, p_chain_bin, grad_chain_bin, logp_chain_bin}} =
       Nx.Vulkan.NativeV.leapfrog_chain_synth_batch_f64(
-        q_bin, p_bin, extras_bin, push, k, spv_path
+        q_bin,
+        p_bin,
+        extras_bin,
+        push,
+        k,
+        spv_path
       )
 
     # Unpack per-instance slices
@@ -230,8 +265,12 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     for i <- 0..(n_instances - 1) do
       q_slice = binary_part(q_chain_bin, i * chain_bytes_per_instance, chain_bytes_per_instance)
       p_slice = binary_part(p_chain_bin, i * chain_bytes_per_instance, chain_bytes_per_instance)
-      grad_slice = binary_part(grad_chain_bin, i * chain_bytes_per_instance, chain_bytes_per_instance)
-      logp_slice = binary_part(logp_chain_bin, i * logp_bytes_per_instance, logp_bytes_per_instance)
+
+      grad_slice =
+        binary_part(grad_chain_bin, i * chain_bytes_per_instance, chain_bytes_per_instance)
+
+      logp_slice =
+        binary_part(logp_chain_bin, i * logp_bytes_per_instance, logp_bytes_per_instance)
 
       bins_to_chain_tensors({q_slice, p_slice, grad_slice, logp_slice}, k, d, :f64)
     end

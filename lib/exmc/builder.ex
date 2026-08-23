@@ -17,7 +17,14 @@ defmodule Exmc.Builder do
   the string `"__obs_data"`.
   """
   def data(%IR{} = ir, %Nx.Tensor{} = tensor) do
-    %{ir | data: tensor}
+    # Force observation data onto BinaryBackend at ingress. Downstream,
+    # Compiler.build_vag_fn/build_step_fn closes over this tensor inside
+    # Nx.Defn.value_and_grad, and the defn tracer rejects captured tensors on
+    # non-Defn-compatible backends (Nx.Vulkan.VulkanoBackend and friends) with
+    # "two incompatible tensor implementations". Obs data is small and
+    # conceptually host-resident, so the copy is cheap and it removes the whole
+    # class of cross-backend errors at the root rather than at each call site.
+    %{ir | data: Nx.backend_copy(tensor, Nx.BinaryBackend)}
   end
 
   @doc """
@@ -34,6 +41,15 @@ defmodule Exmc.Builder do
   def rv(%IR{} = ir, id, dist, params, opts \\ []) when is_binary(id) and is_map(params) do
     transform = Keyword.get(opts, :transform)
     shape = Keyword.get(opts, :shape)
+
+    # Same coercion as data/2, for the same reason: the logp_fn closes over
+    # these prior params inside Nx.Defn.value_and_grad. BinaryBackend constants
+    # substitute cleanly into the Expr tree regardless of the global default.
+    params =
+      Map.new(params, fn
+        {k, %Nx.Tensor{} = t} -> {k, Nx.backend_copy(t, Nx.BinaryBackend)}
+        {k, v} -> {k, v}
+      end)
 
     op =
       if is_nil(transform) do

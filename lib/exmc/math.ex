@@ -3,7 +3,11 @@ defmodule Exmc.Math do
   Special math functions via Lanczos approximation.
 
   All ops are pure Nx and differentiable through `Nx.Defn.grad`.
+  Uses `deftransform` so Lanczos coefficients become compile-time
+  constants when called from JIT-traced contexts (EXLA/EMLX).
   """
+
+  import Nx.Defn
 
   # Lanczos approximation coefficients (g=7, 9 terms)
   @lanczos_g 7.0
@@ -24,11 +28,10 @@ defmodule Exmc.Math do
 
   Accurate to ~15 digits for Re(x) > 0.5.
   """
-  def lgamma(x) do
+  deftransform lgamma(x) do
     # Lanczos: lgamma(x) = 0.5*ln(2*pi) + (x-0.5)*ln(t) - t + ln(Ag(x))
     # where t = x + g - 0.5
     half_log_2pi = Nx.tensor(0.5 * :math.log(2.0 * :math.pi()))
-
     # t = x + g - 0.5
     t = Nx.add(x, Nx.tensor(@lanczos_g - 0.5))
 
@@ -54,7 +57,7 @@ defmodule Exmc.Math do
   @doc """
   Log-beta function: lbeta(a, b) = lgamma(a) + lgamma(b) - lgamma(a+b).
   """
-  def lbeta(a, b) do
+  deftransform lbeta(a, b) do
     lgamma(a)
     |> Nx.add(lgamma(b))
     |> Nx.subtract(lgamma(Nx.add(a, b)))

@@ -117,6 +117,21 @@ defmodule Exmc.NUTS.CustomSynth.Push do
     if n <= @max_bytes do
       {:ok, bin, n}
     else
+      # The tuple stays two-wide — CustomSynth matches on it in two places and
+      # degrades to per-op sampling. But "too large" on its own tells nobody by
+      # how much or against what budget, and those numbers are only knowable
+      # here. A silent downgrade to a 100x-slower path is the kind of thing that
+      # gets diagnosed as a hardware problem three weeks later.
+      require Logger
+
+      Logger.warning(
+        "[Push] push block #{n} B > #{@max_bytes} B: #{length(prior_floats)} prior " <>
+          "parameter floats, budget is #{div(@max_bytes - byte_size(header), 8)} " <>
+          "(#{@max_bytes} B block less a #{byte_size(header)} B header). This is the " <>
+          "real width cap on the synthesised chain path — not d <= 256, which is the " <>
+          "shader's workgroup width and never binds first."
+      )
+
       {:error, :push_too_large}
     end
   end
@@ -129,7 +144,7 @@ defmodule Exmc.NUTS.CustomSynth.Push do
   def glsl_fields(%{priors: priors}) do
     prior_lines =
       priors
-      |> Enum.flat_map(&(prior_glsl_field_lines(&1, "double")))
+      |> Enum.flat_map(&prior_glsl_field_lines(&1, "double"))
       |> Enum.join("\n    ")
 
     """
@@ -217,15 +232,22 @@ defmodule Exmc.NUTS.CustomSynth.Push do
 
   defp scalar(params, key) do
     case Map.fetch!(params, key) do
-      v when is_number(v) -> v * 1.0
-      %Nx.Tensor{shape: {}} = t -> Nx.to_number(t) * 1.0
+      v when is_number(v) ->
+        v * 1.0
+
+      %Nx.Tensor{shape: {}} = t ->
+        Nx.to_number(t) * 1.0
+
       # Vectorized prior params (shape {d}): extract element 0.
       # Homogeneous vectorized priors (Normal d=8 with uniform mu/sigma)
       # store the same value for every element; push constants hold
       # the scalar. Heterogeneous vector params are not yet supported
       # in the push-constant packing (would need per-element SSBO).
-      %Nx.Tensor{} = t -> t |> Nx.squeeze() |> Nx.slice([0], [1]) |> Nx.squeeze() |> Nx.to_number() |> Kernel.*(1.0)
-      v -> raise "Push.scalar/2: param #{key} is not numeric: #{inspect(v)}"
+      %Nx.Tensor{} = t ->
+        t |> Nx.squeeze() |> Nx.slice([0], [1]) |> Nx.squeeze() |> Nx.to_number() |> Kernel.*(1.0)
+
+      v ->
+        raise "Push.scalar/2: param #{key} is not numeric: #{inspect(v)}"
     end
   end
 

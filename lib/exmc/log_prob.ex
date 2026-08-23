@@ -39,7 +39,12 @@ defmodule Exmc.LogProb do
     case Map.fetch(value_map, id) do
       {:ok, v} ->
         resolved = resolve_params(params, value_map)
-        [dist.logpdf(v, resolved)]
+        # Sum over the data dims so a multivariate prior returns a scalar
+        # joint logp. For scalar `v` this is a no-op; for `v` with shape > {}
+        # it collapses the per-element logp to log p(v_1,...,v_n | params).
+        # Without it Nx.Defn.Grad.transform fails on the vector-shaped output
+        # with "cannot reshape {n} to {}".
+        [Nx.sum(dist.logpdf(v, resolved))]
 
       :error ->
         []
@@ -53,7 +58,7 @@ defmodule Exmc.LogProb do
         x = Transform.apply(transform, z)
         logp = dist.logpdf(x, resolved)
         jac = Transform.log_abs_det_jacobian(transform, z)
-        [Nx.add(logp, jac)]
+        [Nx.sum(Nx.add(logp, jac))]
 
       :error ->
         []
@@ -107,7 +112,7 @@ defmodule Exmc.LogProb do
     case rv_node.op do
       {:rv, dist, params} ->
         x = jit_solve(a, value)
-        logp = dist.logpdf(x, params)
+        logp = dist.logpdf(x, params) |> Nx.backend_copy(Nx.BinaryBackend)
         jac = Nx.negate(Nx.log(Nx.abs(jit_determinant(a))))
         apply_obs_meta([Nx.add(logp, jac)], meta)
 
@@ -115,7 +120,7 @@ defmodule Exmc.LogProb do
         x = jit_solve(a, value)
         z = inverse_transform(transform, x)
         x2 = Transform.apply(transform, z)
-        logp = dist.logpdf(x2, params)
+        logp = dist.logpdf(x2, params) |> Nx.backend_copy(Nx.BinaryBackend)
         jac = Transform.log_abs_det_jacobian(transform, z)
         meas_jac = Nx.negate(Nx.log(Nx.abs(jit_determinant(a))))
         apply_obs_meta([Nx.add(Nx.add(logp, jac), meas_jac)], meta)
@@ -165,7 +170,13 @@ defmodule Exmc.LogProb do
 
   defp inverse_transform(nil, x), do: x
   defp inverse_transform(:log, x), do: Nx.log(x)
-  defp inverse_transform(:softplus, x), do: Nx.log(Nx.expm1(x))
+
+  defp inverse_transform(:softplus, x) do
+    # log(expm1(x)) = x + log1p(-exp(-x)) — the same function without the
+    # overflow. The naive form computes exp(x) first and loses it for large x.
+    Nx.add(x, Nx.log1p(Nx.negate(Nx.exp(Nx.negate(x)))))
+  end
+
   defp inverse_transform(:logit, x), do: Nx.subtract(Nx.log(x), Nx.log1p(Nx.negate(x)))
 
   defp apply_obs_meta([logp], meta) do

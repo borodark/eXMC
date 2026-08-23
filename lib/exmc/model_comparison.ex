@@ -244,7 +244,15 @@ defmodule Exmc.ModelComparison do
 
   defp inverse_transform(nil, x), do: x
   defp inverse_transform(:log, x), do: Nx.log(x)
-  defp inverse_transform(:softplus, x), do: Nx.log(Nx.expm1(x))
+
+  defp inverse_transform(:softplus, x) do
+    # log(expm1(x)) = x + log1p(-exp(-x)), which is the same function without
+    # the overflow: the naive form computes exp(x) first and loses the value
+    # entirely once x is large. Ported from the applications tree, where it was
+    # found and fixed independently.
+    Nx.add(x, Nx.log1p(Nx.negate(Nx.exp(Nx.negate(x)))))
+  end
+
   defp inverse_transform(:logit, x), do: Nx.subtract(Nx.log(x), Nx.log1p(Nx.negate(x)))
 
   # --- Math helpers (Erlang floats) ---

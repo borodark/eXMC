@@ -57,98 +57,107 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   """
 
   @template ~S"""
-#version 450
-#extension GL_ARB_gpu_shader_fp64 : require
+  #version 450
+  #extension GL_ARB_gpu_shader_fp64 : require
 
-// SYNTHESIZED by Exmc.NUTS.CustomSynth.MultiRvCustomSpec (f64)
-// Same as @template but with double-precision buffers and arithmetic.
+  // SYNTHESIZED by Exmc.NUTS.CustomSynth.MultiRvCustomSpec (f64)
+  // Same as @template but with double-precision buffers and arithmetic.
 
-layout (local_size_x = 256) in;
+  layout (local_size_x = 256) in;
 
-layout (push_constant) uniform Push {
-    uint   K;
-    uint   n_obs;
-    uint   d;
-    uint   _pad;
-    double eps;
-} pc;
+  layout (push_constant) uniform Push {
+      uint   K;
+      uint   n_obs;
+      uint   d;
+      uint   _pad;
+      double eps;
+  } pc;
 
-layout (std430, binding = 0) readonly  buffer In_q     { double q_init[]; };
-layout (std430, binding = 1) readonly  buffer In_p     { double p_init[]; };
-layout (std430, binding = 2) readonly  buffer In_extras {
-    double obs_inv_mass[];
-};
-layout (std430, binding = 3) writeonly buffer Out_q    { double q_chain[]; };
-layout (std430, binding = 4) writeonly buffer Out_p    { double p_chain[]; };
-layout (std430, binding = 5) writeonly buffer Out_grad { double grad_chain[]; };
-layout (std430, binding = 6) writeonly buffer Out_logp { double logp_chain[]; };
+  layout (std430, binding = 0) readonly  buffer In_q     { double q_init[]; };
+  layout (std430, binding = 1) readonly  buffer In_p     { double p_init[]; };
+  layout (std430, binding = 2) readonly  buffer In_extras {
+      double obs_inv_mass[];
+  };
+  layout (std430, binding = 3) writeonly buffer Out_q    { double q_chain[]; };
+  layout (std430, binding = 4) writeonly buffer Out_p    { double p_chain[]; };
+  layout (std430, binding = 5) writeonly buffer Out_grad { double grad_chain[]; };
+  layout (std430, binding = 6) writeonly buffer Out_logp { double logp_chain[]; };
 
-{{captured_decls}}
+  {{captured_decls}}
 
-shared double partial[256];
-shared double q_shared[256];
+  shared double partial[256];
+  shared double q_shared[256];
 
-void main() {
-    uint tid = gl_LocalInvocationIndex;
-    bool in_bounds = (tid < pc.d);
+  void main() {
+      uint tid = gl_LocalInvocationIndex;
+      bool in_bounds = (tid < pc.d);
 
-    double qi = in_bounds ? q_init[tid]                       : 0.0lf;
-    double pi = in_bounds ? p_init[tid]                       : 0.0lf;
-    double mi = in_bounds ? obs_inv_mass[pc.n_obs + tid]      : 0.0lf;
+      double qi = in_bounds ? q_init[tid]                       : 0.0lf;
+      double pi = in_bounds ? p_init[tid]                       : 0.0lf;
+      double mi = in_bounds ? obs_inv_mass[pc.n_obs + tid]      : 0.0lf;
 
-    for (uint k = 0u; k < pc.K; k++) {
-        if (in_bounds) q_shared[tid] = qi;
-        barrier();
+      for (uint k = 0u; k < pc.K; k++) {
+          if (in_bounds) q_shared[tid] = qi;
+          barrier();
 
-        double grad_q = 0.0lf;
-        if (in_bounds) {
-{{prior_grad_body_q}}
-        }
-        double p_half = pi + 0.5lf * pc.eps * grad_q;
+          double grad_q = 0.0lf;
+          if (in_bounds) {
+  {{prior_grad_body_q}}
+          }
+          double p_half = pi + 0.5lf * pc.eps * grad_q;
 
-        double qn = qi + pc.eps * mi * p_half;
-        qi = qn;
+          double qn = qi + pc.eps * mi * p_half;
+          qi = qn;
 
-        barrier();
-        if (in_bounds) q_shared[tid] = qi;
-        barrier();
+          barrier();
+          if (in_bounds) q_shared[tid] = qi;
+          barrier();
 
-        // The log-density MUST be evaluated here, on the POST-update position,
-        // because logp_chain[k] is read back alongside q_chain[k]/p_chain[k]
-        // and is expected to describe the same state they do. Evaluating it in
-        // the pre-update block above made logp_chain[k] describe the state
-        // BEFORE step k — a one-step lag that the host then fed straight into
-        // the Metropolis ratio and the U-turn test.
-        double grad_qn = 0.0lf;
-        double lp_i    = 0.0lf;
-        if (in_bounds) {
-{{prior_grad_body_qn}}
-{{prior_logp_body_qn}}
-        }
-        pi = p_half + 0.5lf * pc.eps * grad_qn;
+          // INVARIANT: the four outputs of iteration k must describe the SAME
+          // state. q_chain[k], p_chain[k] and grad_chain[k] are all post-step, so
+          // logp_chain[k] must be too — which is why the log-density body belongs
+          // here, below the position update and reading the refreshed q_shared,
+          // and not up beside prior_grad_body_q.
+          //
+          // It used to be up there. Tree.synth_chain_subtree/10 pairs the four by
+          // index, so every NUTS leaf carried log p(q_chain[k-1]) — a stale,
+          // systematically-too-high density. The multinomial then over-weighted
+          // the far end of each trajectory. Mis-scaled rather than mis-signed, so
+          // it produced no divergences and adaptation simply pushed eps up.
+          //
+          // This read as "Ampere over-dispersion" for three weeks (Normal(0,1)
+          // posterior variance 8.55 against a CPU reference's 1.45) and was
+          // blamed on the GPU. It is not hardware: both Keplers and the Ampere
+          // produce bit-identical q/p/grad from this shader.
+          double grad_qn = 0.0lf;
+          double lp_i    = 0.0lf;
+          if (in_bounds) {
+  {{prior_grad_body_qn}}
+  {{prior_logp_body_qn}}
+          }
+          pi = p_half + 0.5lf * pc.eps * grad_qn;
 
-        if (in_bounds) {
-            q_chain[k * pc.d + tid]    = qi;
-            p_chain[k * pc.d + tid]    = pi;
-            grad_chain[k * pc.d + tid] = grad_qn;
-        }
+          if (in_bounds) {
+              q_chain[k * pc.d + tid]    = qi;
+              p_chain[k * pc.d + tid]    = pi;
+              grad_chain[k * pc.d + tid] = grad_qn;
+          }
 
-        partial[tid] = lp_i;
-        barrier();
+          partial[tid] = lp_i;
+          barrier();
 
-        for (uint s = 128u; s > 0u; s /= 2u) {
-            if (tid < s) partial[tid] += partial[tid + s];
-            barrier();
-        }
+          for (uint s = 128u; s > 0u; s /= 2u) {
+              if (tid < s) partial[tid] += partial[tid + s];
+              barrier();
+          }
 
-        if (tid == 0u) {
-            logp_chain[k] = partial[0];
-        }
-        barrier();
-    }
-}
-"""
-
+          if (tid == 0u) {
+              logp_chain[k] = partial[0];
+          }
+          barrier();
+      }
+  }
+  """
 
   @typedoc "Components map produced by `CustomSynth.extract_components/1`."
   @type components :: %{
@@ -502,7 +511,9 @@ void main() {
         )
 
       grad_q_body = build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_q")
-      grad_qn_body = build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_qn")
+
+      grad_qn_body =
+        build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_qn")
 
       f64_helpers = f64_transcendental_helpers()
 
@@ -1077,7 +1088,8 @@ void main() {
         v = if Nx.rank(v) > 0, do: Nx.squeeze(Nx.slice(v, [0], [1])), else: v
         {k, v}
 
-      {k, v} -> {k, v}
+      {k, v} ->
+        {k, v}
     end)
   end
 
@@ -1302,7 +1314,9 @@ void main() {
 
       logp_body = build_logp_body_with_loops(d, log_p_loops, log_p_expr)
       grad_q_body = build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_q")
-      grad_qn_body = build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_qn")
+
+      grad_qn_body =
+        build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_qn")
 
       glsl =
         @batched_template
