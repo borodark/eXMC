@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.StudentT do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Student's t-distribution parameterized by df (degrees of freedom), loc, and scale.
 
@@ -13,19 +15,19 @@ defmodule Exmc.Dist.StudentT do
 
   @impl true
   def logpdf(x, %{df: df, loc: loc, scale: scale}) do
-    safe_scale = Nx.max(scale, Nx.tensor(1.0e-30))
-    safe_df = Nx.max(df, Nx.tensor(1.0e-30))
+    safe_scale = Nx.max(scale, c(1.0e-30, x))
+    safe_df = Nx.max(df, c(1.0e-30, x))
     z = Nx.divide(Nx.subtract(x, loc), safe_scale)
     z2 = Nx.multiply(z, z)
 
-    half_dfp1 = Nx.divide(Nx.add(safe_df, Nx.tensor(1.0)), Nx.tensor(2.0))
-    half_df = Nx.divide(safe_df, Nx.tensor(2.0))
+    half_dfp1 = Nx.divide(Nx.add(safe_df, c(1.0, x)), c(2.0, x))
+    half_df = Nx.divide(safe_df, c(2.0, x))
 
     Exmc.Math.lgamma(half_dfp1)
     |> Nx.subtract(Exmc.Math.lgamma(half_df))
-    |> Nx.subtract(Nx.multiply(Nx.tensor(0.5), Nx.log(Nx.multiply(safe_df, Nx.tensor(:math.pi())))))
+    |> Nx.subtract(Nx.multiply(c(0.5, x), Nx.log(Nx.multiply(safe_df, Nx.tensor(:math.pi())))))
     |> Nx.subtract(Nx.log(safe_scale))
-    |> Nx.subtract(Nx.multiply(half_dfp1, Nx.log(Nx.add(Nx.tensor(1.0), Nx.divide(z2, safe_df)))))
+    |> Nx.subtract(Nx.multiply(half_dfp1, Nx.log(Nx.add(c(1.0, x), Nx.divide(z2, safe_df)))))
   end
 
   @impl true

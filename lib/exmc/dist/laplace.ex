@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Laplace do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Laplace distribution parameterized by mu (location) and b (scale).
 
@@ -13,9 +15,9 @@ defmodule Exmc.Dist.Laplace do
 
   @impl true
   def logpdf(x, %{mu: mu, b: b}) do
-    safe_b = Nx.max(b, Nx.tensor(1.0e-30))
+    safe_b = Nx.max(b, c(1.0e-30, x))
 
-    Nx.negate(Nx.log(Nx.multiply(Nx.tensor(2.0), safe_b)))
+    Nx.negate(Nx.log(Nx.multiply(c(2.0, x), safe_b)))
     |> Nx.subtract(Nx.divide(Nx.abs(Nx.subtract(x, mu)), safe_b))
   end
 

@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Lognormal do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Lognormal distribution parameterized by mu and sigma of the underlying Normal.
 
@@ -13,14 +15,14 @@ defmodule Exmc.Dist.Lognormal do
 
   @impl true
   def logpdf(x, %{mu: mu, sigma: sigma}) do
-    safe_sigma = Nx.max(sigma, Nx.tensor(1.0e-30))
+    safe_sigma = Nx.max(sigma, c(1.0e-30, x))
     log_x = Nx.log(x)
     z = Nx.divide(Nx.subtract(log_x, mu), safe_sigma)
     z2 = Nx.multiply(z, z)
-    two_pi = Nx.tensor(2.0 * :math.pi())
-    log_term = Nx.add(Nx.log(two_pi), Nx.multiply(Nx.tensor(2.0), Nx.log(safe_sigma)))
+    two_pi = c(2.0 * :math.pi(), x)
+    log_term = Nx.add(Nx.log(two_pi), Nx.multiply(c(2.0, x), Nx.log(safe_sigma)))
 
-    Nx.multiply(Nx.tensor(-0.5), Nx.add(z2, log_term))
+    Nx.multiply(c(-0.5, x), Nx.add(z2, log_term))
     |> Nx.subtract(log_x)
   end
 

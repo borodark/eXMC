@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.MvNormal do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Multivariate Normal distribution.
 
@@ -25,7 +27,7 @@ defmodule Exmc.Dist.MvNormal do
     log_2pi = Nx.tensor(:math.log(2.0 * :math.pi()))
 
     Nx.multiply(
-      Nx.tensor(-0.5),
+      c(-0.5, x),
       Nx.add(Nx.add(Nx.multiply(Nx.tensor(d * 1.0), log_2pi), log_det_cov), mahal)
     )
   end

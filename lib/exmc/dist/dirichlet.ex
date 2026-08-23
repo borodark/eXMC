@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Dirichlet do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Dirichlet distribution on the K-simplex.
 
@@ -22,13 +24,14 @@ defmodule Exmc.Dist.Dirichlet do
   def logpdf(x, %{alpha: alpha}) do
     # logpdf = sum((alpha_i - 1) * log(x_i)) + lgamma(sum(alpha)) - sum(lgamma(alpha_i))
     log_x = Nx.log(x)
-    logp_kernel = Nx.sum(Nx.multiply(Nx.subtract(alpha, Nx.tensor(1.0)), log_x))
+    logp_kernel = Nx.sum(Nx.multiply(Nx.subtract(alpha, c(1.0, x)), log_x))
 
     # Log normalizing constant: lgamma(sum(alpha)) - sum(lgamma(alpha))
-    log_norm = Nx.subtract(
-      Exmc.Math.lgamma(Nx.sum(alpha)),
-      Nx.sum(Exmc.Math.lgamma(alpha))
-    )
+    log_norm =
+      Nx.subtract(
+        Exmc.Math.lgamma(Nx.sum(alpha)),
+        Nx.sum(Exmc.Math.lgamma(alpha))
+      )
 
     Nx.add(logp_kernel, log_norm)
   end

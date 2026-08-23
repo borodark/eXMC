@@ -1,4 +1,6 @@
 defmodule Exmc.Transform do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Minimal transform support with log-abs-det Jacobian.
 
@@ -24,7 +26,7 @@ defmodule Exmc.Transform do
     # f64: [-200, 200] → sigma ∈ [1e-87, 7e86]
     {lo, hi} = exp_safe_range()
     # Use max/min instead of Nx.clip — clip has broken gradient in Evaluator autodiff.
-    safe_z = Nx.max(Nx.tensor(lo), Nx.min(z, Nx.tensor(hi)))
+    safe_z = Nx.max(c(lo, z), Nx.min(z, c(hi, z)))
     Nx.exp(safe_z)
   end
 
@@ -44,13 +46,13 @@ defmodule Exmc.Transform do
   end
 
   @doc "Log absolute determinant of the Jacobian of the forward transform at `z`."
-  def log_abs_det_jacobian(nil, _z), do: Nx.tensor(0.0, backend: Nx.BinaryBackend)
+  def log_abs_det_jacobian(nil, z), do: c(0.0, z)
 
   def log_abs_det_jacobian(:log, z) do
     # x = exp(z), |dx/dz| = exp(z), log|dx/dz| = z
     # Clamp consistently with apply(:log, z) to keep Jacobian finite.
     {lo, hi} = exp_safe_range()
-    Nx.max(Nx.tensor(lo), Nx.min(z, Nx.tensor(hi)))
+    Nx.max(c(lo, z), Nx.min(z, c(hi, z)))
   end
 
   def log_abs_det_jacobian(:softplus, z) do
@@ -201,14 +203,18 @@ defmodule Exmc.Transform do
     y = sigmoid(z)
 
     {log_jac, _remaining} =
-      Enum.reduce(0..(k_minus_1 - 1), {Nx.broadcast(Nx.tensor(0.0), {n}), Nx.broadcast(Nx.tensor(1.0), {n})}, fn i, {lj, rem} ->
-        z_i = Nx.slice_along_axis(z, i, 1, axis: 1) |> Nx.reshape({n})
-        y_i = Nx.slice_along_axis(y, i, 1, axis: 1) |> Nx.reshape({n})
-        log_dy = Nx.add(Nx.negate(softplus(Nx.negate(z_i))), Nx.negate(softplus(z_i)))
-        contrib = Nx.add(Nx.log(rem), log_dy)
-        new_rem = Nx.multiply(rem, Nx.subtract(Nx.tensor(1.0), y_i))
-        {Nx.add(lj, contrib), new_rem}
-      end)
+      Enum.reduce(
+        0..(k_minus_1 - 1),
+        {Nx.broadcast(Nx.tensor(0.0), {n}), Nx.broadcast(Nx.tensor(1.0), {n})},
+        fn i, {lj, rem} ->
+          z_i = Nx.slice_along_axis(z, i, 1, axis: 1) |> Nx.reshape({n})
+          y_i = Nx.slice_along_axis(y, i, 1, axis: 1) |> Nx.reshape({n})
+          log_dy = Nx.add(Nx.negate(softplus(Nx.negate(z_i))), Nx.negate(softplus(z_i)))
+          contrib = Nx.add(Nx.log(rem), log_dy)
+          new_rem = Nx.multiply(rem, Nx.subtract(Nx.tensor(1.0), y_i))
+          {Nx.add(lj, contrib), new_rem}
+        end
+      )
 
     # Sum over K-1 dimensions already done via accumulation
     # But log_jac is {n} — each element is the total ladj for that sample
@@ -292,6 +298,6 @@ defmodule Exmc.Transform do
   # Rewritten as: x + log(1 + exp(-|x|)) — never overflows.
   defp softplus(x) do
     abs_x = Nx.abs(x)
-    Nx.add(Nx.max(x, Nx.tensor(0.0)), Nx.log1p(Nx.exp(Nx.negate(abs_x))))
+    Nx.add(Nx.max(x, c(0.0, x)), Nx.log1p(Nx.exp(Nx.negate(abs_x))))
   end
 end

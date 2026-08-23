@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Cauchy do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Cauchy distribution parameterized by loc and scale.
 
@@ -13,13 +15,13 @@ defmodule Exmc.Dist.Cauchy do
 
   @impl true
   def logpdf(x, %{loc: loc, scale: scale}) do
-    safe_scale = Nx.max(scale, Nx.tensor(1.0e-30))
+    safe_scale = Nx.max(scale, c(1.0e-30, x))
     z = Nx.divide(Nx.subtract(x, loc), safe_scale)
     z2 = Nx.multiply(z, z)
 
     Nx.tensor(-:math.log(:math.pi()))
     |> Nx.subtract(Nx.log(safe_scale))
-    |> Nx.subtract(Nx.log(Nx.add(Nx.tensor(1.0), z2)))
+    |> Nx.subtract(Nx.log(Nx.add(c(1.0, x), z2)))
   end
 
   @impl true

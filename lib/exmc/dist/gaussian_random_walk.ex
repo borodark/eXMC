@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.GaussianRandomWalk do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Gaussian Random Walk distribution.
 
@@ -19,20 +21,24 @@ defmodule Exmc.Dist.GaussianRandomWalk do
 
   @impl true
   def logpdf(x, %{sigma: sigma}) do
-    safe_sigma = Nx.max(sigma, Nx.tensor(1.0e-30))
+    safe_sigma = Nx.max(sigma, c(1.0e-30, x))
     t = elem(Nx.shape(x), 0)
 
     # First step: x[0] ~ Normal(0, sigma)
     x_init = Nx.slice(x, [0], [1]) |> Nx.reshape({})
 
-    two_pi = Nx.tensor(2.0 * :math.pi())
+    two_pi = c(2.0 * :math.pi(), x)
     log_sigma = Nx.log(safe_sigma)
 
     z_init = Nx.divide(x_init, safe_sigma)
+
     logp_init =
       Nx.multiply(
-        Nx.tensor(-0.5),
-        Nx.add(Nx.multiply(z_init, z_init), Nx.add(Nx.log(two_pi), Nx.multiply(Nx.tensor(2.0), log_sigma)))
+        c(-0.5, x),
+        Nx.add(
+          Nx.multiply(z_init, z_init),
+          Nx.add(Nx.log(two_pi), Nx.multiply(c(2.0, x), log_sigma))
+        )
       )
 
     if t == 1 do
@@ -44,11 +50,15 @@ defmodule Exmc.Dist.GaussianRandomWalk do
       diffs = Nx.subtract(x_rest, x_prev)
 
       z_steps = Nx.divide(diffs, safe_sigma)
+
       logp_steps =
         Nx.sum(
           Nx.multiply(
-            Nx.tensor(-0.5),
-            Nx.add(Nx.multiply(z_steps, z_steps), Nx.add(Nx.log(two_pi), Nx.multiply(Nx.tensor(2.0), log_sigma)))
+            c(-0.5, x),
+            Nx.add(
+              Nx.multiply(z_steps, z_steps),
+              Nx.add(Nx.log(two_pi), Nx.multiply(c(2.0, x), log_sigma))
+            )
           )
         )
 

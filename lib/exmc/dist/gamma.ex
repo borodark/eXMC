@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Gamma do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Gamma distribution parameterized by shape (alpha) and rate (beta).
 
@@ -15,7 +17,7 @@ defmodule Exmc.Dist.Gamma do
   def logpdf(x, %{alpha: alpha, beta: beta}) do
     Nx.subtract(
       Nx.add(
-        Nx.multiply(Nx.subtract(alpha, Nx.tensor(1.0)), Nx.log(x)),
+        Nx.multiply(Nx.subtract(alpha, c(1.0, x)), Nx.log(x)),
         Nx.multiply(alpha, Nx.log(beta))
       ),
       Nx.add(

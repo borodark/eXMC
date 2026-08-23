@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.TruncatedNormal do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Truncated Normal distribution with bounds [lower, upper].
 
@@ -14,13 +16,13 @@ defmodule Exmc.Dist.TruncatedNormal do
 
   @impl true
   def logpdf(x, %{mu: mu, sigma: sigma, lower: lower, upper: upper}) do
-    safe_sigma = Nx.max(sigma, Nx.tensor(1.0e-30))
+    safe_sigma = Nx.max(sigma, c(1.0e-30, x))
     # Normal logpdf
     z = Nx.divide(Nx.subtract(x, mu), safe_sigma)
     z2 = Nx.multiply(z, z)
-    two_pi = Nx.tensor(2.0 * :math.pi())
-    log_term = Nx.add(Nx.log(two_pi), Nx.multiply(Nx.tensor(2.0), Nx.log(safe_sigma)))
-    normal_logpdf = Nx.multiply(Nx.tensor(-0.5), Nx.add(z2, log_term))
+    two_pi = c(2.0 * :math.pi(), x)
+    log_term = Nx.add(Nx.log(two_pi), Nx.multiply(c(2.0, x), Nx.log(safe_sigma)))
+    normal_logpdf = Nx.multiply(c(-0.5, x), Nx.add(z2, log_term))
 
     # Normalizing constant: log(Phi((upper-mu)/sigma) - Phi((lower-mu)/sigma))
     alpha = Nx.divide(Nx.subtract(lower, mu), safe_sigma)

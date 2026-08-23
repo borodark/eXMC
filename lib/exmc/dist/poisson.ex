@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Poisson do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Poisson distribution parameterized by rate mu.
 
@@ -18,7 +20,7 @@ defmodule Exmc.Dist.Poisson do
     # y * log(mu) - mu - lgamma(y + 1)
     Nx.multiply(y, Nx.log(mu))
     |> Nx.subtract(mu)
-    |> Nx.subtract(Exmc.Math.lgamma(Nx.add(y, Nx.tensor(1.0))))
+    |> Nx.subtract(Exmc.Math.lgamma(Nx.add(y, c(1.0, y))))
   end
 
   @impl true

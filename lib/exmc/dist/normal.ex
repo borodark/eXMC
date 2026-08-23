@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Normal do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Univariate Normal distribution.
 
@@ -15,12 +17,12 @@ defmodule Exmc.Dist.Normal do
   def logpdf(x, %{mu: mu, sigma: sigma}) do
     # Guard sigma > 0 to prevent ArithmeticError on BinaryBackend (Erlang
     # arithmetic throws on divide-by-zero unlike GPU which returns NaN/Inf).
-    safe_sigma = Nx.max(sigma, Nx.tensor(1.0e-30))
-    two_pi = Nx.tensor(2.0 * :math.pi())
+    safe_sigma = Nx.max(sigma, c(1.0e-30, x))
+    two_pi = c(2.0 * :math.pi(), x)
     z = Nx.divide(Nx.subtract(x, mu), safe_sigma)
     z2 = Nx.multiply(z, z)
-    log_term = Nx.add(Nx.log(two_pi), Nx.multiply(Nx.tensor(2.0), Nx.log(safe_sigma)))
-    Nx.multiply(Nx.tensor(-0.5), Nx.add(z2, log_term))
+    log_term = Nx.add(Nx.log(two_pi), Nx.multiply(c(2.0, x), Nx.log(safe_sigma)))
+    Nx.multiply(c(-0.5, x), Nx.add(z2, log_term))
   end
 
   @impl true

@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Bernoulli do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Bernoulli distribution parameterized by probability p.
 
@@ -17,12 +19,12 @@ defmodule Exmc.Dist.Bernoulli do
   def logpdf(y, %{p: p}) do
     # y * log(p) + (1 - y) * log(1 - p)
     # Clamp p to avoid log(0) = -inf when sigmoid saturates at 0/1
-    eps = Nx.tensor(1.0e-7)
-    p_safe = Nx.clip(p, eps, Nx.subtract(Nx.tensor(1.0), eps))
+    eps = c(1.0e-7, y)
+    p_safe = Nx.clip(p, eps, Nx.subtract(c(1.0, y), eps))
 
     Nx.add(
       Nx.multiply(y, Nx.log(p_safe)),
-      Nx.multiply(Nx.subtract(Nx.tensor(1.0), y), Nx.log(Nx.subtract(Nx.tensor(1.0), p_safe)))
+      Nx.multiply(Nx.subtract(c(1.0, y), y), Nx.log(Nx.subtract(c(1.0, y), p_safe)))
     )
   end
 

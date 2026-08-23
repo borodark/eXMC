@@ -29,22 +29,21 @@ defmodule Exmc.HalfNormalTransformTest do
   alias Exmc.{Builder, LogProb, Transform}
   alias Exmc.Dist.HalfNormal
 
-  # 1e-7, and the number is the finding rather than a shrug.
+  # 1e-12, and getting here is the point.
   #
-  # With every literal in this test built at f64 the residual disagreement is
-  # ~1.75e-8, which is f32-scale, not f64-scale. It comes from the library, not
-  # from here: `Exmc.Dist.HalfNormal.logpdf/2` builds `Nx.tensor(-0.5)`,
-  # `Nx.tensor(2.0)` and `Nx.tensor(2.0 * :math.pi())`, and
-  # `Exmc.Transform.softplus/1` builds `Nx.tensor(0.0)` — all of which are f32,
-  # because f32 is Nx's default float type. A bare f32 constant in an f64
-  # expression makes the arithmetic f32-accurate while leaving the result
-  # f64-typed, which is TODO.md §5's unaudited class, here with a site and a
-  # magnitude attached.
+  # The first version of this test could only manage 1e-7. With every literal
+  # in the TEST built at f64 the Jacobian identity still disagreed by ~1.75e-8,
+  # which is f32 scale, and the source was the library: HalfNormal.logpdf/2
+  # built `Nx.tensor(-0.5)`, `Nx.tensor(2.0)` and `Nx.tensor(2.0 * :math.pi())`
+  # while Transform.softplus/1 built `Nx.tensor(0.0)` — all f32, because f32 is
+  # Nx's default float type, so the arithmetic ran f32-accurate and the result
+  # came back f64-*typed*. Nothing anywhere reported a problem.
   #
-  # Tighten this to 1e-12 once those literals are built at the tensor's own
-  # type; it should pass. Until then a tighter bound would be measuring Nx's
-  # default dtype rather than the transform.
-  defp close!(a, b, tol \\ 1.0e-7) do
+  # Those constants now go through `Exmc.Math.c/2`, which builds them at the
+  # operand's own type. The residual drops below 1e-12 — four orders of
+  # magnitude — which is what the diagnosis predicted and therefore what
+  # confirms it.
+  defp close!(a, b, tol \\ 1.0e-12) do
     assert_in_delta Nx.to_number(a), Nx.to_number(b), tol
   end
 

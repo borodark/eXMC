@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Beta do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Beta distribution parameterized by alpha and beta.
 
@@ -27,8 +29,8 @@ defmodule Exmc.Dist.Beta do
   def logpdf(x, %{alpha: alpha, beta: beta}) do
     Nx.add(
       Nx.add(
-        Nx.multiply(Nx.subtract(alpha, Nx.tensor(1.0)), Nx.log(x)),
-        Nx.multiply(Nx.subtract(beta, Nx.tensor(1.0)), Nx.log(Nx.subtract(Nx.tensor(1.0), x)))
+        Nx.multiply(Nx.subtract(alpha, c(1.0, x)), Nx.log(x)),
+        Nx.multiply(Nx.subtract(beta, c(1.0, x)), Nx.log(Nx.subtract(c(1.0, x), x)))
       ),
       Nx.negate(Exmc.Math.lbeta(alpha, beta))
     )

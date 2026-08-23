@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.HalfCauchy do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Half-Cauchy distribution with scale > 0 (location fixed at 0).
 
@@ -15,13 +17,13 @@ defmodule Exmc.Dist.HalfCauchy do
 
   @impl true
   def logpdf(x, %{scale: scale}) do
-    safe_scale = Nx.max(scale, Nx.tensor(1.0e-30))
+    safe_scale = Nx.max(scale, c(1.0e-30, x))
     z = Nx.divide(x, safe_scale)
     z2 = Nx.multiply(z, z)
 
     Nx.tensor(:math.log(2.0 / :math.pi()))
     |> Nx.subtract(Nx.log(safe_scale))
-    |> Nx.subtract(Nx.log(Nx.add(Nx.tensor(1.0), z2)))
+    |> Nx.subtract(Nx.log(Nx.add(c(1.0, x), z2)))
   end
 
   @impl true
