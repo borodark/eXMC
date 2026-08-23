@@ -114,7 +114,9 @@ defmodule Exmc.Stan.ErrorTest do
       model { mu ~ normal(0, 10); y ~ normal(mu, 1); z ~ normal(mu, 1); }
       """
 
-      assert {:error, {:missing_data, missing}} = Exmc.Stan.compile(code, %{"y" => Nx.tensor(1.0)})
+      assert {:error, {:missing_data, missing}} =
+               Exmc.Stan.compile(code, %{"y" => Nx.tensor(1.0)})
+
       assert "z" in missing
     end
   end

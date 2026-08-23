@@ -81,7 +81,8 @@ defmodule Exmc.NUTS.Statham.Merge do
       left_depth: left.depth,
       right_depth: right.depth,
       rho_correct: rho_additive?(left.rho_list, right.rho_list, merged.rho_list),
-      divergent_monotonic: merged.divergent >= left.divergent and merged.divergent >= right.divergent,
+      divergent_monotonic:
+        merged.divergent >= left.divergent and merged.divergent >= right.divergent,
       accepted_right: accepted_right
     }
   end
@@ -97,7 +98,8 @@ defmodule Exmc.NUTS.Statham.Merge do
 
     inv_mass = Nx.tensor(List.duplicate(1.0, d))
 
-    {merged, _rng} = Tree.merge_trajectories(traj, subtree, go_right, inv_mass, rng, s.inv_mass_list)
+    {merged, _rng} =
+      Tree.merge_trajectories(traj, subtree, go_right, inv_mass, rng, s.inv_mass_list)
 
     accepted_subtree = merged.q_prop == subtree.q_prop
 
@@ -109,7 +111,8 @@ defmodule Exmc.NUTS.Statham.Merge do
       traj_n_steps: traj.n_steps,
       subtree_n_steps: subtree.n_steps,
       rho_correct: rho_additive?(traj.rho_list, subtree.rho_list, merged.rho_list),
-      divergent_monotonic: merged.divergent >= traj.divergent and merged.divergent >= subtree.divergent,
+      divergent_monotonic:
+        merged.divergent >= traj.divergent and merged.divergent >= subtree.divergent,
       accepted_subtree: accepted_subtree,
       # The key D51 check: biased progressive uses subtree.lsw - traj.lsw, not balanced
       theoretical_accept_prob: min(1.0, :math.exp(subtree.log_sum_weight - traj.log_sum_weight))
@@ -180,22 +183,28 @@ defmodule Exmc.NUTS.Statham.Merge do
   def next_state(state, result, {:call, _, :do_merge_subtrees, _}) do
     case result do
       %{accepted_right: accepted} when is_boolean(accepted) ->
-        %{state |
-          merge_count: state.merge_count + 1,
-          subtree_accepts: [accepted | state.subtree_accepts]
+        %{
+          state
+          | merge_count: state.merge_count + 1,
+            subtree_accepts: [accepted | state.subtree_accepts]
         }
-      _ -> state
+
+      _ ->
+        state
     end
   end
 
   def next_state(state, result, {:call, _, :do_merge_trajectories, _}) do
     case result do
       %{accepted_subtree: accepted} when is_boolean(accepted) ->
-        %{state |
-          merge_count: state.merge_count + 1,
-          trajectory_accepts: [accepted | state.trajectory_accepts]
+        %{
+          state
+          | merge_count: state.merge_count + 1,
+            trajectory_accepts: [accepted | state.trajectory_accepts]
         }
-      _ -> state
+
+      _ ->
+        state
     end
   end
 
@@ -218,11 +227,19 @@ defmodule Exmc.NUTS.Statham.Merge do
     grad = Nx.tensor(List.duplicate(0.0, d))
 
     subtree = %{
-      q_left: q, p_left: p, grad_left: grad,
-      q_left_list: q_list, p_left_list: p_list,
-      q_right: q, p_right: p, grad_right: grad,
-      q_right_list: q_list, p_right_list: p_list,
-      q_prop: q, logp_prop: log_sum_weight, grad_prop: grad,
+      q_left: q,
+      p_left: p,
+      grad_left: grad,
+      q_left_list: q_list,
+      p_left_list: p_list,
+      q_right: q,
+      p_right: p,
+      grad_right: grad,
+      q_right_list: q_list,
+      p_right_list: p_list,
+      q_prop: q,
+      logp_prop: log_sum_weight,
+      grad_prop: grad,
       rho_list: rho_list,
       depth: depth,
       log_sum_weight: log_sum_weight,
@@ -354,23 +371,23 @@ defmodule Exmc.NUTS.StathamTest do
   end
 
   # Phase 2: U-turn properties
-  property "aligned momentum never triggers U-turn", [numtests: 200] do
+  property "aligned momentum never triggers U-turn", numtests: 200 do
     Exmc.NUTS.Statham.UTurn.prop_aligned_no_uturn()
   end
 
-  property "reversed momentum triggers U-turn", [numtests: 200] do
+  property "reversed momentum triggers U-turn", numtests: 200 do
     Exmc.NUTS.Statham.UTurn.prop_opposite_uturn()
   end
 
-  property "zero rho never triggers U-turn", [numtests: 200] do
+  property "zero rho never triggers U-turn", numtests: 200 do
     Exmc.NUTS.Statham.UTurn.prop_zero_rho_no_uturn()
   end
 
-  property "log_sum_exp is commutative", [numtests: 500] do
+  property "log_sum_exp is commutative", numtests: 500 do
     Exmc.NUTS.Statham.UTurn.prop_log_sum_exp_commutative()
   end
 
-  property "log_sum_exp >= max(a, b)", [numtests: 500] do
+  property "log_sum_exp >= max(a, b)", numtests: 500 do
     Exmc.NUTS.Statham.UTurn.prop_log_sum_exp_dominance()
   end
 end

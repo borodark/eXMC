@@ -41,7 +41,9 @@ defmodule Exmc.GaussianRandomWalkTest do
     x = Nx.tensor([0.5])
 
     result = GaussianRandomWalk.logpdf(x, %{sigma: sigma}) |> Nx.to_number()
-    expected = Normal.logpdf(Nx.tensor(0.5), %{mu: Nx.tensor(0.0), sigma: sigma}) |> Nx.to_number()
+
+    expected =
+      Normal.logpdf(Nx.tensor(0.5), %{mu: Nx.tensor(0.0), sigma: sigma}) |> Nx.to_number()
 
     assert_in_delta result, expected, 1.0e-6
   end
@@ -99,10 +101,23 @@ defmodule Exmc.GaussianRandomWalkTest do
 
     # Finite difference check
     eps = 1.0e-5
+
     fd_grad =
       Enum.map(0..2, fn i ->
-        flat_plus = Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.+(eps)]))
-        flat_minus = Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.+(eps * -1.0)]))
+        flat_plus =
+          Nx.indexed_put(
+            flat,
+            Nx.tensor([[i]]),
+            Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.+(eps)])
+          )
+
+        flat_minus =
+          Nx.indexed_put(
+            flat,
+            Nx.tensor([[i]]),
+            Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.+(eps * -1.0)])
+          )
+
         fp = logp_fn.(flat_plus) |> Nx.to_number()
         fm = logp_fn.(flat_minus) |> Nx.to_number()
         (fp - fm) / (2.0 * eps)

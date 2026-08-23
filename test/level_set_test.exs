@@ -8,13 +8,13 @@ defmodule Exmc.LevelSetTest do
     test "returns ~1.0 for large positive phi" do
       phi = Nx.tensor([[10.0, 10.0], [10.0, 10.0]])
       h = LevelSet.smooth_heaviside(phi, 1.0)
-      for v <- Nx.to_flat_list(h), do: assert v > 0.99
+      for v <- Nx.to_flat_list(h), do: assert(v > 0.99)
     end
 
     test "returns ~0.0 for large negative phi" do
       phi = Nx.tensor([[-10.0, -10.0], [-10.0, -10.0]])
       h = LevelSet.smooth_heaviside(phi, 1.0)
-      for v <- Nx.to_flat_list(h), do: assert v < 0.01
+      for v <- Nx.to_flat_list(h), do: assert(v < 0.01)
     end
 
     test "returns 0.5 at phi = 0" do
@@ -34,7 +34,7 @@ defmodule Exmc.LevelSetTest do
     test "is monotonically increasing" do
       phi = Nx.tensor([[-2.0, -1.0, 0.0, 1.0, 2.0]])
       h = LevelSet.smooth_heaviside(phi, 1.0) |> Nx.to_flat_list()
-      for {a, b} <- Enum.zip(h, tl(h)), do: assert a < b
+      for {a, b} <- Enum.zip(h, tl(h)), do: assert(a < b)
     end
   end
 
@@ -58,8 +58,17 @@ defmodule Exmc.LevelSetTest do
 
     test "respects eps parameter" do
       phi = Nx.tensor([[1.0]])
-      k_sharp = LevelSet.material_field(phi, Nx.tensor(5.0), Nx.tensor(1.0), eps: 0.1) |> Nx.squeeze() |> Nx.to_number()
-      k_smooth = LevelSet.material_field(phi, Nx.tensor(5.0), Nx.tensor(1.0), eps: 5.0) |> Nx.squeeze() |> Nx.to_number()
+
+      k_sharp =
+        LevelSet.material_field(phi, Nx.tensor(5.0), Nx.tensor(1.0), eps: 0.1)
+        |> Nx.squeeze()
+        |> Nx.to_number()
+
+      k_smooth =
+        LevelSet.material_field(phi, Nx.tensor(5.0), Nx.tensor(1.0), eps: 5.0)
+        |> Nx.squeeze()
+        |> Nx.to_number()
+
       # Sharp eps at phi=1 should be closer to kappa_a=5
       assert k_sharp > k_smooth
     end
@@ -76,18 +85,59 @@ defmodule Exmc.LevelSetTest do
     test "non-constant field has negative logp" do
       logpdf_fn = LevelSet.laplacian_prior_logpdf(4, 4)
       # Random-ish field
-      phi_flat = Nx.tensor([1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.5, -1.5,
-                            0.3, -0.3, 0.8, -0.8, 1.2, -1.2, 0.7, -0.7])
+      phi_flat =
+        Nx.tensor([
+          1.0,
+          -1.0,
+          2.0,
+          -2.0,
+          0.5,
+          -0.5,
+          1.5,
+          -1.5,
+          0.3,
+          -0.3,
+          0.8,
+          -0.8,
+          1.2,
+          -1.2,
+          0.7,
+          -0.7
+        ])
+
       logp = logpdf_fn.(Nx.tensor(0.0), %{phi: phi_flat, lambda: Nx.tensor(1.0)})
       assert Nx.to_number(logp) < 0.0
     end
 
     test "larger lambda gives more negative logp for same field" do
       logpdf_fn = LevelSet.laplacian_prior_logpdf(4, 4)
-      phi_flat = Nx.tensor([1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.5, -1.5,
-                            0.3, -0.3, 0.8, -0.8, 1.2, -1.2, 0.7, -0.7])
-      logp_small = logpdf_fn.(Nx.tensor(0.0), %{phi: phi_flat, lambda: Nx.tensor(0.1)}) |> Nx.to_number()
-      logp_large = logpdf_fn.(Nx.tensor(0.0), %{phi: phi_flat, lambda: Nx.tensor(10.0)}) |> Nx.to_number()
+
+      phi_flat =
+        Nx.tensor([
+          1.0,
+          -1.0,
+          2.0,
+          -2.0,
+          0.5,
+          -0.5,
+          1.5,
+          -1.5,
+          0.3,
+          -0.3,
+          0.8,
+          -0.8,
+          1.2,
+          -1.2,
+          0.7,
+          -0.7
+        ])
+
+      logp_small =
+        logpdf_fn.(Nx.tensor(0.0), %{phi: phi_flat, lambda: Nx.tensor(0.1)}) |> Nx.to_number()
+
+      logp_large =
+        logpdf_fn.(Nx.tensor(0.0), %{phi: phi_flat, lambda: Nx.tensor(10.0)}) |> Nx.to_number()
+
       assert logp_large < logp_small
     end
 
@@ -95,12 +145,27 @@ defmodule Exmc.LevelSetTest do
       # On a 4x4 grid, a perfect linear field still has Laplacian ~ 0
       # at interior points (2nd derivative of linear = 0)
       logpdf_fn = LevelSet.laplacian_prior_logpdf(4, 4)
-      phi_flat = Nx.tensor([
-        0.0, 1.0, 2.0, 3.0,
-        0.0, 1.0, 2.0, 3.0,
-        0.0, 1.0, 2.0, 3.0,
-        0.0, 1.0, 2.0, 3.0
-      ])
+
+      phi_flat =
+        Nx.tensor([
+          0.0,
+          1.0,
+          2.0,
+          3.0,
+          0.0,
+          1.0,
+          2.0,
+          3.0,
+          0.0,
+          1.0,
+          2.0,
+          3.0,
+          0.0,
+          1.0,
+          2.0,
+          3.0
+        ])
+
       logp = logpdf_fn.(Nx.tensor(0.0), %{phi: phi_flat, lambda: Nx.tensor(1.0)})
       # Linear field: Laplacian should be ~0 everywhere
       assert_in_delta Nx.to_number(logp), 0.0, 1.0e-4
@@ -116,6 +181,7 @@ defmodule Exmc.LevelSetTest do
 
       # Check middle row: should be ~0.5 (linear interpolation)
       mid_row = t[3] |> Nx.to_flat_list()
+
       for v <- Enum.slice(mid_row, 1..(nx - 2)) do
         assert_in_delta v, 0.5, 0.15
       end
@@ -131,9 +197,12 @@ defmodule Exmc.LevelSetTest do
       # Uniform kappa except a hot spot in the center
       kappa_base = Nx.broadcast(Nx.tensor(1.0), {ny, nx})
       # Create an inclusion: high conductivity in center
-      inclusion = for i <- 0..(ny - 1), j <- 0..(nx - 1) do
-        if i >= 3 and i <= 4 and j >= 3 and j <= 4, do: 10.0, else: 1.0
-      end |> Nx.tensor() |> Nx.reshape({ny, nx})
+      inclusion =
+        for i <- 0..(ny - 1), j <- 0..(nx - 1) do
+          if i >= 3 and i <= 4 and j >= 3 and j <= 4, do: 10.0, else: 1.0
+        end
+        |> Nx.tensor()
+        |> Nx.reshape({ny, nx})
 
       t_uniform = Heat2D.solve(kappa_base, bc_top: 1.0, bc_bottom: 0.0, iterations: 100)
       t_inclusion = Heat2D.solve(inclusion, bc_top: 1.0, bc_bottom: 0.0, iterations: 100)
@@ -152,7 +221,7 @@ defmodule Exmc.LevelSetTest do
       sensors = Heat2D.read_sensors(t, :bottom_row)
       assert Nx.shape(sensors) == {nx}
       # Bottom row should be near 0.0 (bc_bottom)
-      for v <- Nx.to_flat_list(sensors), do: assert v < 0.15
+      for v <- Nx.to_flat_list(sensors), do: assert(v < 0.15)
     end
   end
 end

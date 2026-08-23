@@ -161,4 +161,12 @@ defmodule Exmc.DiagnosticsTest do
     assert is_boolean(first.divergent)
     assert is_float(first.accept_prob) or is_integer(first.accept_prob)
   end
+
+  test "quantile/3 is public and works correctly" do
+    sorted = [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert_in_delta Diagnostics.quantile(sorted, 5, 0.0), 1.0, 0.01
+    assert_in_delta Diagnostics.quantile(sorted, 5, 0.5), 3.0, 0.01
+    assert_in_delta Diagnostics.quantile(sorted, 5, 1.0), 5.0, 0.01
+    assert_in_delta Diagnostics.quantile(sorted, 5, 0.25), 2.0, 0.01
+  end
 end

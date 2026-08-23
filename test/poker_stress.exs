@@ -33,10 +33,17 @@ all_profiles =
     profile
   end)
 
-mean_vpip = all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.vpip)) |> then(&(Enum.sum(&1) / length(&1)))
-mean_pfr = all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.pfr)) |> then(&(Enum.sum(&1) / length(&1)))
-mean_agg = all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.agg)) |> then(&(Enum.sum(&1) / length(&1)))
-mean_bluff = all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.bluff)) |> then(&(Enum.sum(&1) / length(&1)))
+mean_vpip =
+  all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.vpip)) |> then(&(Enum.sum(&1) / length(&1)))
+
+mean_pfr =
+  all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.pfr)) |> then(&(Enum.sum(&1) / length(&1)))
+
+mean_agg =
+  all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.agg)) |> then(&(Enum.sum(&1) / length(&1)))
+
+mean_bluff =
+  all_profiles |> Enum.flat_map(&Nx.to_flat_list(&1.bluff)) |> then(&(Enum.sum(&1) / length(&1)))
 
 IO.puts("")
 IO.puts("=== 88-chain poker stress test ===")

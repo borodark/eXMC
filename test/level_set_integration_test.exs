@@ -67,10 +67,16 @@ defmodule Exmc.LevelSetIntegrationTest do
     phi_dist = Dist.Custom.new(phi_prior_logpdf, support: :real)
 
     ir =
-      Dist.Custom.rv(ir, "phi", phi_dist, %{
-        lambda: Nx.tensor(0.5),
-        sigma_prior: Nx.tensor(2.0)
-      }, shape: {n})
+      Dist.Custom.rv(
+        ir,
+        "phi",
+        phi_dist,
+        %{
+          lambda: Nx.tensor(0.5),
+          sigma_prior: Nx.tensor(2.0)
+        },
+        shape: {n}
+      )
 
     # Observation noise
     ir = Builder.rv(ir, "sigma_obs", Dist.HalfCauchy, %{scale: Nx.tensor(0.05)}, transform: :log)
@@ -120,7 +126,6 @@ defmodule Exmc.LevelSetIntegrationTest do
         seed: 42,
         ncp: false
       )
-
 
     # Verify: posterior mean phi should have correct sign pattern
     # (positive at center, negative at corners)

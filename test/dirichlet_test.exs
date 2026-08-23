@@ -102,8 +102,20 @@ defmodule Exmc.DirichletTest do
     # Build Jacobian matrix (K x K-1)
     jac_cols =
       for j <- 0..(k_minus_1 - 1) do
-        z_plus = Nx.indexed_put(z, Nx.tensor([[j]]), Nx.tensor([Nx.to_flat_list(z) |> Enum.at(j) |> Kernel.+(eps)]))
-        z_minus = Nx.indexed_put(z, Nx.tensor([[j]]), Nx.tensor([Nx.to_flat_list(z) |> Enum.at(j) |> Kernel.-(eps)]))
+        z_plus =
+          Nx.indexed_put(
+            z,
+            Nx.tensor([[j]]),
+            Nx.tensor([Nx.to_flat_list(z) |> Enum.at(j) |> Kernel.+(eps)])
+          )
+
+        z_minus =
+          Nx.indexed_put(
+            z,
+            Nx.tensor([[j]]),
+            Nx.tensor([Nx.to_flat_list(z) |> Enum.at(j) |> Kernel.-(eps)])
+          )
+
         x_plus = Transform.apply(:stick_breaking, z_plus) |> Nx.to_flat_list()
         x_minus = Transform.apply(:stick_breaking, z_minus) |> Nx.to_flat_list()
         Enum.zip(x_plus, x_minus) |> Enum.map(fn {p, m} -> (p - m) / (2.0 * eps) end)
@@ -232,10 +244,23 @@ defmodule Exmc.DirichletTest do
 
     # Finite difference check
     eps = 1.0e-5
+
     fd_grad =
       Enum.map(0..1, fn i ->
-        flat_plus = Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.+(eps)]))
-        flat_minus = Nx.indexed_put(flat, Nx.tensor([[i]]), Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.-(eps)]))
+        flat_plus =
+          Nx.indexed_put(
+            flat,
+            Nx.tensor([[i]]),
+            Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.+(eps)])
+          )
+
+        flat_minus =
+          Nx.indexed_put(
+            flat,
+            Nx.tensor([[i]]),
+            Nx.tensor([Nx.to_flat_list(flat) |> Enum.at(i) |> Kernel.-(eps)])
+          )
+
         fp = logp_fn.(flat_plus) |> Nx.to_number()
         fm = logp_fn.(flat_minus) |> Nx.to_number()
         (fp - fm) / (2.0 * eps)

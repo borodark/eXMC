@@ -12,7 +12,11 @@ defmodule Exmc.WeibullTest do
     # f(1; 2, 1) = 2 * 1 * exp(-1) = 2*exp(-1)
     # logpdf = log(2) + 0 - 1 = log(2) - 1
     expected = :math.log(2.0) - 1.0
-    result = Weibull.logpdf(Nx.tensor(1.0), %{k: Nx.tensor(2.0), lambda: Nx.tensor(1.0)}) |> Nx.to_number()
+
+    result =
+      Weibull.logpdf(Nx.tensor(1.0), %{k: Nx.tensor(2.0), lambda: Nx.tensor(1.0)})
+      |> Nx.to_number()
+
     assert_in_delta result, expected, 1.0e-6
   end
 
@@ -20,7 +24,11 @@ defmodule Exmc.WeibullTest do
     # Weibull(k=1, lambda=1) = Exponential(rate=1)
     # logpdf = log(1) - 1*log(1) + 0*log(2) - 2 = -2
     expected = Exponential.logpdf(Nx.tensor(2.0), %{lambda: Nx.tensor(1.0)}) |> Nx.to_number()
-    result = Weibull.logpdf(Nx.tensor(2.0), %{k: Nx.tensor(1.0), lambda: Nx.tensor(1.0)}) |> Nx.to_number()
+
+    result =
+      Weibull.logpdf(Nx.tensor(2.0), %{k: Nx.tensor(1.0), lambda: Nx.tensor(1.0)})
+      |> Nx.to_number()
+
     assert_in_delta result, expected, 1.0e-6
   end
 
@@ -31,7 +39,10 @@ defmodule Exmc.WeibullTest do
     k = 3.0
     lam = 2.0
     expected = :math.log(k) - k * :math.log(lam) + (k - 1) * :math.log(t) - :math.pow(t / lam, k)
-    result = Weibull.logpdf(Nx.tensor(t), %{k: Nx.tensor(k), lambda: Nx.tensor(lam)}) |> Nx.to_number()
+
+    result =
+      Weibull.logpdf(Nx.tensor(t), %{k: Nx.tensor(k), lambda: Nx.tensor(lam)}) |> Nx.to_number()
+
     assert_in_delta result, expected, 1.0e-6
   end
 
@@ -74,13 +85,19 @@ defmodule Exmc.WeibullTest do
   # ── Survival function ───────────────────────────────────
 
   test "Weibull log_survival at t=0+ is ~0" do
-    result = Weibull.log_survival(Nx.tensor(0.001), %{k: Nx.tensor(2.0), lambda: Nx.tensor(1.0)}) |> Nx.to_number()
+    result =
+      Weibull.log_survival(Nx.tensor(0.001), %{k: Nx.tensor(2.0), lambda: Nx.tensor(1.0)})
+      |> Nx.to_number()
+
     assert_in_delta result, 0.0, 1.0e-4
   end
 
   test "Weibull log_survival at t=lambda, k=1 is -1" do
     # SF(lambda; 1, lambda) = exp(-1), so log(SF) = -1
-    result = Weibull.log_survival(Nx.tensor(2.0), %{k: Nx.tensor(1.0), lambda: Nx.tensor(2.0)}) |> Nx.to_number()
+    result =
+      Weibull.log_survival(Nx.tensor(2.0), %{k: Nx.tensor(1.0), lambda: Nx.tensor(2.0)})
+      |> Nx.to_number()
+
     assert_in_delta result, -1.0, 1.0e-6
   end
 
@@ -88,8 +105,13 @@ defmodule Exmc.WeibullTest do
 
   test "Censored right-censored Weibull log-likelihood" do
     # Right-censored at t=1 with k=2, lambda=1: log(SF) = -(1/1)^2 = -1
-    result = Censored.log_likelihood(:right, Nx.tensor(1.0), Exmc.Dist.Weibull,
-      %{k: Nx.tensor(2.0), lambda: Nx.tensor(1.0)}) |> Nx.to_number()
+    result =
+      Censored.log_likelihood(:right, Nx.tensor(1.0), Exmc.Dist.Weibull, %{
+        k: Nx.tensor(2.0),
+        lambda: Nx.tensor(1.0)
+      })
+      |> Nx.to_number()
+
     assert_in_delta result, -1.0, 1.0e-6
   end
 
@@ -110,5 +132,37 @@ defmodule Exmc.WeibullTest do
     k_mean = Nx.to_number(Nx.mean(trace["k"]))
     assert k_mean > 0.0
     assert stats.divergences < 50
+  end
+
+  # Single-RV Weibull model exercised via the fused chain shader. This is
+  # the model class leapfrog_chain_weibull is designed for: prior-only,
+  # no observations, no hierarchy. Verifies the chain shader matches the
+  # EXLA reference under EXMC_COMPILER=vulkan with the tagged meta set.
+  @tag :requires_vulkan
+  test "single Weibull RV samples correctly via fused chain shader" do
+    weibull_k = 2.0
+    lambda = 1.0
+    n_dim = 1
+    logp_const = n_dim * (:math.log(weibull_k) - weibull_k * :math.log(lambda))
+
+    ir =
+      Builder.new_ir()
+      |> Builder.rv("t", Weibull, %{k: Nx.tensor(weibull_k), lambda: Nx.tensor(lambda)})
+
+    Application.put_env(:exmc, :fused_leapfrog_meta, {:weibull, weibull_k, lambda, logp_const})
+
+    try do
+      {trace, stats} =
+        Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 500, seed: 42)
+
+      ts = trace["t"] |> Nx.to_flat_list()
+      mean_t = Enum.sum(ts) / length(ts)
+
+      # Weibull(2, 1) has mean = lambda * Gamma(1 + 1/k) = 1 * Gamma(1.5) ≈ 0.886
+      assert_in_delta mean_t, 0.886, 0.2
+      assert stats.divergences < 50
+    after
+      Application.delete_env(:exmc, :fused_leapfrog_meta)
+    end
   end
 end

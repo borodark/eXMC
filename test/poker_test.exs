@@ -19,68 +19,158 @@ defmodule Exmc.PokerTest do
 
     test "evaluate_5 recognizes hand categories" do
       # Royal flush (straight flush, A-high)
-      royal = [Cards.parse("Ah"), Cards.parse("Kh"), Cards.parse("Qh"), Cards.parse("Jh"), Cards.parse("Th")]
+      royal = [
+        Cards.parse("Ah"),
+        Cards.parse("Kh"),
+        Cards.parse("Qh"),
+        Cards.parse("Jh"),
+        Cards.parse("Th")
+      ]
+
       {cat, _} = Cards.evaluate_5(royal)
       assert cat == 8
 
       # Four of a kind
-      quads = [Cards.parse("Ac"), Cards.parse("Ad"), Cards.parse("Ah"), Cards.parse("As"), Cards.parse("2c")]
+      quads = [
+        Cards.parse("Ac"),
+        Cards.parse("Ad"),
+        Cards.parse("Ah"),
+        Cards.parse("As"),
+        Cards.parse("2c")
+      ]
+
       {cat, _} = Cards.evaluate_5(quads)
       assert cat == 7
 
       # Full house
-      boat = [Cards.parse("Kc"), Cards.parse("Kd"), Cards.parse("Kh"), Cards.parse("Qs"), Cards.parse("Qc")]
+      boat = [
+        Cards.parse("Kc"),
+        Cards.parse("Kd"),
+        Cards.parse("Kh"),
+        Cards.parse("Qs"),
+        Cards.parse("Qc")
+      ]
+
       {cat, _} = Cards.evaluate_5(boat)
       assert cat == 6
 
       # Flush
-      flush = [Cards.parse("2h"), Cards.parse("5h"), Cards.parse("7h"), Cards.parse("9h"), Cards.parse("Jh")]
+      flush = [
+        Cards.parse("2h"),
+        Cards.parse("5h"),
+        Cards.parse("7h"),
+        Cards.parse("9h"),
+        Cards.parse("Jh")
+      ]
+
       {cat, _} = Cards.evaluate_5(flush)
       assert cat == 5
 
       # Straight
-      straight = [Cards.parse("5c"), Cards.parse("6d"), Cards.parse("7h"), Cards.parse("8s"), Cards.parse("9c")]
+      straight = [
+        Cards.parse("5c"),
+        Cards.parse("6d"),
+        Cards.parse("7h"),
+        Cards.parse("8s"),
+        Cards.parse("9c")
+      ]
+
       {cat, _} = Cards.evaluate_5(straight)
       assert cat == 4
 
       # Wheel (A-2-3-4-5)
-      wheel = [Cards.parse("Ac"), Cards.parse("2d"), Cards.parse("3h"), Cards.parse("4s"), Cards.parse("5c")]
+      wheel = [
+        Cards.parse("Ac"),
+        Cards.parse("2d"),
+        Cards.parse("3h"),
+        Cards.parse("4s"),
+        Cards.parse("5c")
+      ]
+
       {cat, _} = Cards.evaluate_5(wheel)
       assert cat == 4
 
       # Three of a kind
-      trips = [Cards.parse("7c"), Cards.parse("7d"), Cards.parse("7h"), Cards.parse("Ks"), Cards.parse("2c")]
+      trips = [
+        Cards.parse("7c"),
+        Cards.parse("7d"),
+        Cards.parse("7h"),
+        Cards.parse("Ks"),
+        Cards.parse("2c")
+      ]
+
       {cat, _} = Cards.evaluate_5(trips)
       assert cat == 3
 
       # Two pair
-      two_pair = [Cards.parse("Jc"), Cards.parse("Jd"), Cards.parse("5h"), Cards.parse("5s"), Cards.parse("Ac")]
+      two_pair = [
+        Cards.parse("Jc"),
+        Cards.parse("Jd"),
+        Cards.parse("5h"),
+        Cards.parse("5s"),
+        Cards.parse("Ac")
+      ]
+
       {cat, _} = Cards.evaluate_5(two_pair)
       assert cat == 2
 
       # One pair
-      pair = [Cards.parse("Tc"), Cards.parse("Td"), Cards.parse("8h"), Cards.parse("5s"), Cards.parse("2c")]
+      pair = [
+        Cards.parse("Tc"),
+        Cards.parse("Td"),
+        Cards.parse("8h"),
+        Cards.parse("5s"),
+        Cards.parse("2c")
+      ]
+
       {cat, _} = Cards.evaluate_5(pair)
       assert cat == 1
 
       # High card
-      high = [Cards.parse("Ac"), Cards.parse("Kd"), Cards.parse("9h"), Cards.parse("5s"), Cards.parse("2c")]
+      high = [
+        Cards.parse("Ac"),
+        Cards.parse("Kd"),
+        Cards.parse("9h"),
+        Cards.parse("5s"),
+        Cards.parse("2c")
+      ]
+
       {cat, _} = Cards.evaluate_5(high)
       assert cat == 0
     end
 
     test "hand ranking comparison" do
-      flush = [Cards.parse("2h"), Cards.parse("5h"), Cards.parse("7h"), Cards.parse("9h"), Cards.parse("Jh")]
-      straight = [Cards.parse("5c"), Cards.parse("6d"), Cards.parse("7h"), Cards.parse("8s"), Cards.parse("9c")]
+      flush = [
+        Cards.parse("2h"),
+        Cards.parse("5h"),
+        Cards.parse("7h"),
+        Cards.parse("9h"),
+        Cards.parse("Jh")
+      ]
+
+      straight = [
+        Cards.parse("5c"),
+        Cards.parse("6d"),
+        Cards.parse("7h"),
+        Cards.parse("8s"),
+        Cards.parse("9c")
+      ]
+
       assert Cards.evaluate_5(flush) > Cards.evaluate_5(straight)
     end
 
     test "evaluate_7 picks best 5 from 7" do
       # 7 cards containing a flush
       cards = [
-        Cards.parse("2h"), Cards.parse("5h"), Cards.parse("7h"),
-        Cards.parse("9h"), Cards.parse("Jh"), Cards.parse("3c"), Cards.parse("Kd")
+        Cards.parse("2h"),
+        Cards.parse("5h"),
+        Cards.parse("7h"),
+        Cards.parse("9h"),
+        Cards.parse("Jh"),
+        Cards.parse("3c"),
+        Cards.parse("Kd")
       ]
+
       {cat, _} = Cards.evaluate_7(cards)
       assert cat == 5
     end
@@ -141,9 +231,15 @@ defmodule Exmc.PokerTest do
       hs_list = [0.1, 0.3, 0.5, 0.7, 0.9]
 
       hs_tensor = Nx.tensor(hs_list)
-      log_probs = ActionModel.log_action_probs_nx(
-        Nx.tensor(vpip), Nx.tensor(pfr), Nx.tensor(agg), Nx.tensor(bluff), hs_tensor
-      )
+
+      log_probs =
+        ActionModel.log_action_probs_nx(
+          Nx.tensor(vpip),
+          Nx.tensor(pfr),
+          Nx.tensor(agg),
+          Nx.tensor(bluff),
+          hs_tensor
+        )
 
       for {hs, i} <- Enum.with_index(hs_list) do
         {pf, pc, pr} = ActionModel.action_probs(vpip, pfr, agg, bluff, hs)

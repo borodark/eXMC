@@ -12,14 +12,22 @@ defmodule Exmc.NewDistTest do
   test "Lognormal logpdf at x=1 with mu=0, sigma=1 equals Normal(0,1) at 0" do
     # Lognormal(0,1) at x=1: log(x)=0, so same as Normal(0,1) at 0 minus log(1)=0
     expected = -0.5 * :math.log(2.0 * :math.pi())
-    result = Lognormal.logpdf(Nx.tensor(1.0), %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}) |> Nx.to_number()
+
+    result =
+      Lognormal.logpdf(Nx.tensor(1.0), %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
+      |> Nx.to_number()
+
     assert_in_delta result, expected, 1.0e-5
   end
 
   test "Lognormal logpdf at x=e with mu=0, sigma=1" do
     # log(e)=1, Normal(0,1) at 1 = -0.5*(1+log(2pi)), minus log(e)=1
     expected = -0.5 * (1.0 + :math.log(2.0 * :math.pi())) - 1.0
-    result = Lognormal.logpdf(Nx.tensor(:math.exp(1.0)), %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}) |> Nx.to_number()
+
+    result =
+      Lognormal.logpdf(Nx.tensor(:math.exp(1.0)), %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
+      |> Nx.to_number()
+
     assert_in_delta result, expected, 1.0e-5
   end
 
@@ -73,27 +81,55 @@ defmodule Exmc.NewDistTest do
     norm_const = 2.0 * phi_1 - 1.0
     expected = -0.5 * :math.log(2.0 * :math.pi()) - :math.log(norm_const)
 
-    params = %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0), lower: Nx.tensor(-1.0), upper: Nx.tensor(1.0)}
+    params = %{
+      mu: Nx.tensor(0.0),
+      sigma: Nx.tensor(1.0),
+      lower: Nx.tensor(-1.0),
+      upper: Nx.tensor(1.0)
+    }
+
     result = TruncatedNormal.logpdf(Nx.tensor(0.0), params) |> Nx.to_number()
     assert_in_delta result, expected, 1.0e-4
   end
 
   test "TruncatedNormal with wide bounds matches Normal" do
     # With bounds at +/-100, normalizing constant ~= 1, so logpdf ~= Normal logpdf
-    params = %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0), lower: Nx.tensor(-100.0), upper: Nx.tensor(100.0)}
+    params = %{
+      mu: Nx.tensor(0.0),
+      sigma: Nx.tensor(1.0),
+      lower: Nx.tensor(-100.0),
+      upper: Nx.tensor(100.0)
+    }
+
     tn_result = TruncatedNormal.logpdf(Nx.tensor(0.5), params) |> Nx.to_number()
-    n_result = Normal.logpdf(Nx.tensor(0.5), %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}) |> Nx.to_number()
+
+    n_result =
+      Normal.logpdf(Nx.tensor(0.5), %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
+      |> Nx.to_number()
+
     assert_in_delta tn_result, n_result, 1.0e-5
   end
 
   test "TruncatedNormal support and transform" do
-    params = %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0), lower: Nx.tensor(-1.0), upper: Nx.tensor(1.0)}
+    params = %{
+      mu: Nx.tensor(0.0),
+      sigma: Nx.tensor(1.0),
+      lower: Nx.tensor(-1.0),
+      upper: Nx.tensor(1.0)
+    }
+
     assert TruncatedNormal.support(params) == :real
     assert TruncatedNormal.transform(params) == nil
   end
 
   test "TruncatedNormal sample within bounds" do
-    params = %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0), lower: Nx.tensor(-1.0), upper: Nx.tensor(1.0)}
+    params = %{
+      mu: Nx.tensor(0.0),
+      sigma: Nx.tensor(1.0),
+      lower: Nx.tensor(-1.0),
+      upper: Nx.tensor(1.0)
+    }
+
     rng = :rand.seed_s(:exsss, 42)
 
     {values, _rng} =
@@ -182,7 +218,9 @@ defmodule Exmc.NewDistTest do
 
     compiled = Exmc.NUTS.Sampler.compile(ir)
     # compile succeeds, verify by sampling 1 step
-    {trace, _stats} = Exmc.NUTS.Sampler.sample_compiled(compiled, %{}, num_warmup: 50, num_samples: 10, seed: 42)
+    {trace, _stats} =
+      Exmc.NUTS.Sampler.sample_compiled(compiled, %{}, num_warmup: 50, num_samples: 10, seed: 42)
+
     values = Nx.to_flat_list(trace["x"])
     assert Enum.all?(values, &(is_number(&1) and &1 > 0.0))
   end
@@ -193,7 +231,10 @@ defmodule Exmc.NewDistTest do
       |> Builder.rv("sigma", HalfCauchy, %{scale: Nx.tensor(2.5)})
 
     compiled = Exmc.NUTS.Sampler.compile(ir)
-    {trace, _stats} = Exmc.NUTS.Sampler.sample_compiled(compiled, %{}, num_warmup: 50, num_samples: 10, seed: 42)
+
+    {trace, _stats} =
+      Exmc.NUTS.Sampler.sample_compiled(compiled, %{}, num_warmup: 50, num_samples: 10, seed: 42)
+
     values = Nx.to_flat_list(trace["sigma"])
     assert Enum.all?(values, &(is_number(&1) and &1 > 0.0))
   end
@@ -212,7 +253,10 @@ defmodule Exmc.NewDistTest do
       })
 
     compiled = Exmc.NUTS.Sampler.compile(ir)
-    {trace, _stats} = Exmc.NUTS.Sampler.sample_compiled(compiled, %{}, num_warmup: 50, num_samples: 10, seed: 42)
+
+    {trace, _stats} =
+      Exmc.NUTS.Sampler.sample_compiled(compiled, %{}, num_warmup: 50, num_samples: 10, seed: 42)
+
     values = Nx.to_flat_list(trace["x"])
     assert Enum.all?(values, &is_number/1)
     mean = Enum.sum(values) / length(values)
@@ -237,7 +281,9 @@ defmodule Exmc.NewDistTest do
     # under `EXMC_COMPILER=vulkan`, i.e. it passed on one arm and reported
     # INCONCLUSIVE on the other. ESS is backend-dependent, so the draw count
     # has to be sized for the slower arm.
-    {trace, _stats} = Exmc.NUTS.Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 10000, seed: 42)
+    {trace, _stats} =
+      Exmc.NUTS.Sampler.sample(ir, %{}, num_warmup: 500, num_samples: 10000, seed: 42)
+
     values = Nx.to_flat_list(trace["x"])
     assert Enum.all?(values, &(&1 > 0.0))
 
@@ -253,7 +299,9 @@ defmodule Exmc.NewDistTest do
       Builder.new_ir()
       |> Builder.rv("sigma", HalfCauchy, %{scale: Nx.tensor(1.0)})
 
-    {trace, _stats} = Exmc.NUTS.Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 200, seed: 42)
+    {trace, _stats} =
+      Exmc.NUTS.Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 200, seed: 42)
+
     values = Nx.to_flat_list(trace["sigma"])
     assert Enum.all?(values, &(&1 > 0.0))
   end
