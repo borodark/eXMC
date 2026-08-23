@@ -68,9 +68,53 @@ defmodule Exmc.JIT do
   def detect_compiler do
     case Application.get_env(:exmc, :compiler) do
       nil -> auto_detect()
-      :exla -> if loaded?(EXLA), do: EXLA, else: auto_detect()
-      :vulkan -> if loaded?(Nx.Vulkan), do: Nx.Vulkan, else: auto_detect()
+      :auto -> auto_detect()
+      :exla -> demand(EXLA, :exla)
+      :vulkan -> demand(Nx.Vulkan, :vulkan)
       :none -> nil
+    end
+  end
+
+  # A named backend is a demand, not a preference.
+  #
+  # These clauses used to be `if loaded?(mod), do: mod, else: auto_detect()`:
+  # ask for EXLA, get Vulkan, hear nothing about it. That is not a convenience,
+  # it is the failure mode that makes a degraded run look like a healthy one.
+  #
+  # Measured, 2026-08-23. This host's CUDA `exla` could not resolve
+  # `libnvshmem_host.so.3` because a non-interactive shell lacks the
+  # LD_LIBRARY_PATH the pip nvshmem/nvrtc wheels need. `loaded?/1` correctly
+  # judged EXLA unusable and the old clause fell through to Vulkan, so the
+  # suite went from 546/1 to 549/10 — seven SynthUnsupportedError plus the
+  # distributed pair — and read exactly like a code regression. It cost about
+  # an hour to find, and the whole of it was that nothing said "you asked for
+  # EXLA and you are not getting it".
+  #
+  # `config :exmc, :compiler, :auto` (or leaving it unset) is the fall-through
+  # behaviour, still available and now named.
+  defp demand(mod, requested) do
+    if loaded?(mod) do
+      mod
+    else
+      raise """
+      Requested compiler #{inspect(requested)}, but #{inspect(mod)} is not usable on this host.
+
+      "Not usable" means more than "not loaded": #{inspect(mod)} must be present
+      AND its application must start. A dependency that ships every module and
+      then fails in `Application.ensure_all_started/1` — a CUDA exla whose NIF
+      cannot find libnvshmem_host.so.3 is the standard case — lands here.
+
+      Detected alternative: #{inspect(auto_detect())}
+
+      Either fix the backend, or ask for what you actually want:
+
+          config :exmc, :compiler, :auto      # EXLA -> Nx.Vulkan -> Evaluator
+          config :exmc, :compiler, :none      # pure-Elixir Nx.BinaryBackend
+
+      This used to fall through silently. It does not any more, because a
+      silently substituted backend produces a plausible-looking run whose
+      numbers belong to a different machine than the one you think you are on.
+      """
     end
   end
 
@@ -94,6 +138,29 @@ defmodule Exmc.JIT do
   masking shader correctness behind precision-gap artifacts for fat-tailed
   distributions).
   """
+  @doc """
+  A one-line description of what this process will actually compute with.
+
+  Everything here is resolved at call time from global state, which is why it
+  is worth printing rather than assuming: the compiler comes from
+  `detect_compiler/0`, the precision from `precision/0` (which reads the
+  VM-global `:exmc, :force_precision`), and the backend from `backend/0`.
+
+  `test/test_helper.exs` prints this once at suite start. That line would have
+  saved most of a day on 2026-08-23, when a missing LD_LIBRARY_PATH made this
+  host silently Vulkan-only and nine extra test failures looked like a code
+  regression.
+  """
+  @spec describe() :: String.t()
+  def describe do
+    configured = Application.get_env(:exmc, :compiler)
+
+    "compiler=#{inspect(detect_compiler())} " <>
+      "(configured: #{inspect(configured)}) " <>
+      "backend=#{inspect(backend())} " <>
+      "precision=#{inspect(precision())}"
+  end
+
   def precision do
     case Application.get_env(:exmc, :force_precision) do
       :f32 -> :f32

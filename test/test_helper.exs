@@ -126,16 +126,43 @@ end)
 # list. Carry forward the [:diag, :slow] base from ExUnit.start above.
 base_excludes = [:diag, :slow]
 
-f32? = Application.get_env(:exmc, :force_precision) == :f32
+f32? = Exmc.JIT.precision() == :f32
 
-case Application.get_env(:exmc, :compiler) do
-  :vulkan ->
+# Keyed off the DETECTED backend, not the configured one.
+#
+# This read `Application.get_env(:exmc, :compiler)`, and those two disagree on
+# every host that does not set the key — which is the entire FreeBSD fleet,
+# where exla is not a dependency and auto-detection resolves to Nx.Vulkan.
+# The configured value there is nil, so this took the `_ ->` branch: it
+# excluded :requires_vulkan WHILE RUNNING ON VULKAN, and ran
+# :vulkan_known_failure tests on the one backend they are known to fail on.
+#
+# Measured on mac-247 and mac-248, 2026-08-22: configured nil, detected
+# Nx.Vulkan, EXLA absent, 7 of 8 suite failures were SynthUnsupportedError from
+# models the Plan B' guard refuses on the Vulkan path — tests that the
+# exclusion above was meant to have skipped. TODO.md §6 called this out from
+# reading the code; this is the same conclusion with numbers on it.
+#
+# detect_compiler/0 raises now if a named backend is unusable, so this cannot
+# quietly describe a run that did not happen.
+case Exmc.JIT.detect_compiler() do
+  Nx.Vulkan ->
     f64_excludes = if f32?, do: [:requires_f64], else: []
     ExUnit.configure(exclude: base_excludes ++ f64_excludes ++ [:vulkan_known_failure])
 
   _ ->
     ExUnit.configure(exclude: base_excludes ++ [:requires_vulkan])
 end
+
+# What this run is actually computing with, said once and out loud.
+#
+# Every part of it is resolved from global state at call time, so none of it is
+# inferable from the command line. On 2026-08-23 a missing LD_LIBRARY_PATH made
+# a CUDA exla unstartable on this host; auto-detection correctly fell through
+# to Vulkan, the suite went 546/1 -> 549/10, and the nine extra failures read
+# as a code regression for an hour. This line is what that hour bought.
+IO.puts("\n  exmc: #{Exmc.JIT.describe()}")
+IO.puts("  exmc: excluding #{inspect(ExUnit.configuration()[:exclude])}\n")
 
 # Numeric compare helper for Nx tensors
 
