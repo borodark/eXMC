@@ -1,4 +1,6 @@
 defmodule Exmc.Dist.Censored do
+  import Exmc.Math, only: [c: 2]
+
   @moduledoc """
   Censored observation support.
 
@@ -42,7 +44,7 @@ defmodule Exmc.Dist.Censored do
 
   @doc "Normal CDF: Phi(z) = 0.5 * erfc(-z / sqrt(2))"
   def normal_cdf(z) do
-    Nx.multiply(Nx.tensor(0.5), erfc(Nx.negate(Nx.divide(z, Nx.tensor(:math.sqrt(2.0))))))
+    Nx.multiply(c(0.5, z), erfc(Nx.negate(Nx.divide(z, c(:math.sqrt(2.0), z)))))
   end
 
   defp log_cdf(z), do: Nx.log(normal_cdf(z))

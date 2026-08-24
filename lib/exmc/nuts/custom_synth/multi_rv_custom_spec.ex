@@ -224,21 +224,52 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     transforms_by_id =
       Map.new(priors, fn {id, mod, params} -> {id, mod.transform(params)} end)
 
+    # `ncp_info` mirrors `IR.ncp_info`: an NCP'd RV is sampled as a standard
+    # normal `z` and reconstructed as `mu + sigma * z` wherever another node
+    # names it. Absent for models the NCP pass did not touch.
+    ncp_info = Map.get(components, :ncp_info) || %{}
+
+    # Dependency order for reference resolution, computed once at build time —
+    # an NCP source may itself be a reference, so resolution is recursive and
+    # the order has to be settled before tracing. Cycles raise here rather than
+    # hanging inside the traced closure.
+    #
+    # NOT the layout order. `layout` is the q-vector order and must keep
+    # matching Exmc.PointMap; this is purely an evaluation order.
+    order = resolution_order!(layout, ncp_info)
+
+    # Every reference must name a sampled coordinate, checked at build time so
+    # an unresolvable one is a clear error at synthesis rather than a
+    # Map.fetch! deep inside a Defn trace.
+    validate_refs!(priors, observed, custom_info, q_index)
+
     fn q, obs ->
+      # id -> CONSTRAINED value of every sampled RV. Ports
+      # Compiler.resolve_ref/4 to slices of the position vector.
+      resolved_rvs = resolve_rv_values(order, q, q_index, transforms_by_id, ncp_info)
+
       prior_lp =
         Enum.reduce(priors, Nx.tensor(0.0), fn {id, mod, params}, acc ->
           idx = Map.fetch!(q_index, id)
           z = q[idx]
           transform = Map.fetch!(transforms_by_id, id)
+          # An RV's own density is always evaluated at its OWN coordinate,
+          # never at the NCP reconstruction: after the rewrite its params are
+          # N(0,1), so this is the z-density, and the reconstruction appears
+          # only where other nodes refer to it.
           x = Exmc.Transform.apply(transform, z)
-          logp = mod.logpdf(x, params)
+          # This is the line the hierarchical case turned on. The params map
+          # went to logpdf raw, so `%{mu: "mu"}` handed Nx a BitString and the
+          # trace died before any GLSL existed.
+          resolved = resolve_params(params, obs, resolved_rvs)
+          logp = mod.logpdf(x, resolved)
           jac = Exmc.Transform.log_abs_det_jacobian(transform, z)
           Nx.add(acc, Nx.add(logp, jac))
         end)
 
       observed_lp =
         Enum.reduce(observed, Nx.tensor(0.0), fn {_id, mod, params, _value, _meta}, acc ->
-          resolved = resolve_params(params, q, obs, q_index, transforms_by_id)
+          resolved = resolve_params(params, obs, resolved_rvs)
           # The observation vector is the `obs` argument (binding-2 SSBO).
           # Nx.sum collapses the obs axis into a scalar log-likelihood; the
           # emitter rewrites that sum into the per-tid GLSL reduce loop over
@@ -247,24 +278,147 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
           Nx.add(acc, lp)
         end)
 
-      custom_lp = compose_custom_term(custom_info, q, obs, q_index, transforms_by_id)
+      custom_lp = compose_custom_term(custom_info, obs, resolved_rvs)
 
       Nx.add(prior_lp, Nx.add(observed_lp, custom_lp))
     end
   end
 
-  defp compose_custom_term(nil, _q, _obs, _q_index, _transforms_by_id), do: Nx.tensor(0.0)
+  defp compose_custom_term(nil, _obs, _resolved_rvs), do: Nx.tensor(0.0)
 
   defp compose_custom_term(
          {_id, %Exmc.Dist.Custom{logpdf_fn: logpdf_fn}, params_map},
-         q,
          obs,
-         q_index,
-         transforms_by_id
+         resolved_rvs
        ) do
-    resolved = resolve_params(params_map, q, obs, q_index, transforms_by_id)
+    resolved = resolve_params(params_map, obs, resolved_rvs)
     logpdf_fn.(Nx.tensor(0.0), resolved)
   end
+
+  # --- Reference resolution ------------------------------------------------
+  #
+  # Port of Exmc.Compiler.resolve_ref/4 + resolve_value/4 + entry_transform/2
+  # to the position vector. The host reads a value map; here every RV's value
+  # is a slice of `q`, and the transform comes from `mod.transform(params)` —
+  # the same source Rewrite.AttachDefaultTransforms uses to fill the PointMap
+  # entry the host reads, so the two agree by construction rather than by
+  # coincidence.
+  #
+  # Returns %{id => constrained tensor} for every sampled coordinate.
+  defp resolve_rv_values(order, q, q_index, transforms_by_id, ncp_info) do
+    Enum.reduce(order, %{}, fn id, acc ->
+      z = q[Map.fetch!(q_index, id)]
+
+      value =
+        case Map.get(ncp_info, id) do
+          nil ->
+            Exmc.Transform.apply(Map.get(transforms_by_id, id), z)
+
+          %{mu: mu_src, sigma: sigma_src} ->
+            # NCP reconstruction. mu/sigma may themselves be references, and
+            # `order` guarantees they are already in `acc`.
+            mu = ref_value(mu_src, acc)
+            sigma = ref_value(sigma_src, acc)
+            Nx.add(mu, Nx.multiply(sigma, z))
+        end
+
+      Map.put(acc, id, value)
+    end)
+  end
+
+  defp ref_value(v, resolved_rvs) when is_binary(v), do: Map.fetch!(resolved_rvs, v)
+  defp ref_value(%Nx.Tensor{} = t, _resolved_rvs), do: Nx.backend_copy(t, Nx.BinaryBackend)
+  defp ref_value(v, _resolved_rvs) when is_number(v), do: Nx.tensor(v)
+
+  # Dependency-ordered layout ids.
+  #
+  # Only an NCP'd RV depends on other RVs, through its recorded mu/sigma
+  # sources; every other RV is a function of its own coordinate alone, so the
+  # graph is small. That also means a future value-level dependency which is
+  # NOT an NCP edge would be silently unordered — worth knowing before adding
+  # one.
+  @doc false
+  def resolution_order!(layout, ncp_info) do
+    ids = MapSet.new(layout)
+
+    {order, _done} =
+      Enum.reduce(layout, {[], MapSet.new()}, fn id, acc ->
+        visit_ref(id, ncp_info, ids, acc, [])
+      end)
+
+    Enum.reverse(order)
+  end
+
+  defp visit_ref(id, ncp_info, ids, {order, done} = acc, path) do
+    cond do
+      MapSet.member?(done, id) ->
+        acc
+
+      # `path` is the descent stack, so this is a real cycle check rather than
+      # a visit counter that would also trip on a legitimate diamond.
+      id in path ->
+        raise ArgumentError,
+              "reference cycle in the model's hierarchy: " <>
+                Enum.join(Enum.reverse([id | path]), " -> ")
+
+      true ->
+        deps =
+          case Map.get(ncp_info, id) do
+            nil -> []
+            %{mu: mu_src, sigma: sigma_src} -> Enum.filter([mu_src, sigma_src], &is_binary/1)
+          end
+
+        {order, done} =
+          Enum.reduce(deps, {order, done}, fn dep, inner ->
+            unless MapSet.member?(ids, dep) do
+              raise ArgumentError,
+                    "non-centered parameterization of #{inspect(id)} refers to " <>
+                      "#{inspect(dep)}, which is not a sampled coordinate"
+            end
+
+            visit_ref(dep, ncp_info, ids, inner, [id | path])
+          end)
+
+        {[id | order], MapSet.put(done, id)}
+    end
+  end
+
+  # Every binary/atom param value is treated as a reference to a sampled RV —
+  # that is what resolve_params/3 does with it — so check at build time that
+  # each one names a layout entry. A distribution carrying a legitimate atom
+  # param (a mode selector, say) would raise here; none currently does.
+  defp validate_refs!(priors, observed, custom_info, q_index) do
+    param_maps =
+      Enum.map(priors, fn {_id, _mod, params} -> params end) ++
+        Enum.map(observed, fn {_id, _mod, params, _value, _meta} -> params end) ++
+        case custom_info do
+          {_id, _struct, params} -> [Map.delete(params, :__dist__)]
+          _ -> []
+        end
+
+    for params <- param_maps, {key, ref} <- params, key != :__obs_data do
+      case ref_key(ref) do
+        nil ->
+          :ok
+
+        name ->
+          unless Map.has_key?(q_index, name) or Map.has_key?(q_index, ref) do
+            raise ArgumentError,
+                  "parameter #{inspect(key)} refers to #{inspect(ref)}, which is not a " <>
+                    "sampled coordinate (layout: #{inspect(Map.keys(q_index))})"
+          end
+      end
+    end
+
+    :ok
+  end
+
+  # The layout key a param value refers to, or nil when it is a literal. Atom
+  # ids are rare (most IRs use strings) but supported: an atom matches either
+  # its string form or itself.
+  defp ref_key(ref) when is_binary(ref), do: ref
+  defp ref_key(ref) when is_atom(ref) and ref not in [nil, true, false], do: Atom.to_string(ref)
+  defp ref_key(_ref), do: nil
 
   # Resolve a distribution's params map to concrete traceable tensors:
   #   * `:__obs_data`         → the `obs` argument (binding-2 SSBO)
@@ -273,34 +427,35 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   #                             value (e.g. sigma as positive, not log-sigma)
   #   * literal               → passthrough
   # Shared by the Custom likelihood and observed standard-family logpdfs.
-  defp resolve_params(params_map, q, obs, q_index, transforms_by_id) do
+  # Resolve a params map to concrete traceable tensors:
+  #
+  #   :__obs_data       -> the `obs` argument (binding-2 SSBO)
+  #   binary/atom name  -> that RV's CONSTRAINED value, transform applied and
+  #                        NCP reconstructed, from `resolved_rvs`
+  #   literal           -> passthrough
+  #
+  # Took (q, q_index, transforms_by_id) and applied the transform itself, which
+  # handled a plain reference but not one to an NCP'd RV — those need
+  # `mu + sigma * z` with mu/sigma possibly references in turn. Reading a
+  # pre-resolved map instead makes the recursive case fall out for free.
+  defp resolve_params(params_map, obs, resolved_rvs) do
     params_map
     |> Map.delete(:__dist__)
     |> Enum.into(%{}, fn
       {:__obs_data, _} ->
         {:__obs_data, obs}
 
-      {key, ref} when is_binary(ref) ->
-        z = q[Map.fetch!(q_index, ref)]
-        x = Exmc.Transform.apply(Map.get(transforms_by_id, ref), z)
-        {key, x}
+      {key, ref} ->
+        case ref_key(ref) do
+          nil ->
+            {key, ref}
 
-      {key, ref} when is_atom(ref) and ref not in [nil, true, false] ->
-        # Atom layout id (rare — most IRs use strings).
-        key_str = Atom.to_string(ref)
-
-        {idx, transform_key} =
-          case Map.fetch(q_index, key_str) do
-            {:ok, idx} -> {idx, key_str}
-            :error -> {Map.fetch!(q_index, ref), ref}
-          end
-
-        z = q[idx]
-        x = Exmc.Transform.apply(Map.get(transforms_by_id, transform_key), z)
-        {key, x}
-
-      {key, val} ->
-        {key, val}
+          name ->
+            case Map.fetch(resolved_rvs, name) do
+              {:ok, value} -> {key, value}
+              :error -> {key, Map.fetch!(resolved_rvs, ref)}
+            end
+        end
     end)
   end
 

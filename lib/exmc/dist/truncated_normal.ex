@@ -36,7 +36,7 @@ defmodule Exmc.Dist.TruncatedNormal do
     # Phi(z) = 0.5 * (1 + erf(z / sqrt(2)))
     Nx.multiply(
       Nx.tensor(0.5),
-      Nx.add(Nx.tensor(1.0), Nx.erf(Nx.divide(z, Nx.tensor(:math.sqrt(2.0)))))
+      Nx.add(c(1.0, z), Nx.erf(Nx.divide(z, c(:math.sqrt(2.0), z))))
     )
   end
 

@@ -24,7 +24,7 @@ defmodule Exmc.Dist.MvNormal do
     d = elem(Nx.shape(mu), 0)
     diff = Nx.subtract(x, mu)
     mahal = Nx.dot(diff, Nx.dot(prec, diff))
-    log_2pi = Nx.tensor(:math.log(2.0 * :math.pi()))
+    log_2pi = c(:math.log(2.0 * :math.pi()), x)
 
     Nx.multiply(
       c(-0.5, x),

@@ -25,7 +25,7 @@ defmodule Exmc.Dist.StudentT do
 
     Exmc.Math.lgamma(half_dfp1)
     |> Nx.subtract(Exmc.Math.lgamma(half_df))
-    |> Nx.subtract(Nx.multiply(c(0.5, x), Nx.log(Nx.multiply(safe_df, Nx.tensor(:math.pi())))))
+    |> Nx.subtract(Nx.multiply(c(0.5, x), Nx.log(Nx.multiply(safe_df, c(:math.pi(), x)))))
     |> Nx.subtract(Nx.log(safe_scale))
     |> Nx.subtract(Nx.multiply(half_dfp1, Nx.log(Nx.add(c(1.0, x), Nx.divide(z2, safe_df)))))
   end

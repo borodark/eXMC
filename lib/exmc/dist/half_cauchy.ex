@@ -21,7 +21,7 @@ defmodule Exmc.Dist.HalfCauchy do
     z = Nx.divide(x, safe_scale)
     z2 = Nx.multiply(z, z)
 
-    Nx.tensor(:math.log(2.0 / :math.pi()))
+    c(:math.log(2.0 / :math.pi()), x)
     |> Nx.subtract(Nx.log(safe_scale))
     |> Nx.subtract(Nx.log(Nx.add(c(1.0, x), z2)))
   end
