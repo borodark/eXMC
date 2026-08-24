@@ -446,4 +446,126 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
       )
     end
   end
+
+  describe "R2.3 — parameter references (hierarchical models)" do
+    # The gate for reference resolution, and the reason it is host-vs-synth
+    # rather than a smoke test: the failure mode here is a finite, plausible,
+    # WRONG log-density. A transform applied in the wrong space or an NCP
+    # reconstruction that silently does not happen both produce a number, and
+    # the sampler runs happily on it. Only comparing against
+    # Exmc.Compiler.compile/1 at the same q can tell them apart.
+
+    defp t64(v), do: Nx.tensor(v, type: :f64, backend: Nx.BinaryBackend)
+
+    defp worst_gap(ir, draws, ncp_override \\ :keep) do
+      {logp_fn, pm} = Exmc.Compiler.compile(ir)
+      rewritten = Exmc.Rewrite.apply(ir, [])
+      {:ok, comps} = Exmc.NUTS.CustomSynth.extract_components(rewritten)
+
+      ncp =
+        case ncp_override do
+          :keep -> rewritten.ncp_info || %{}
+          other -> other
+        end
+
+      fun = MultiRvCustomSpec.compose_logp_defn(Map.put(comps, :ncp_info, ncp))
+      obs = Nx.tensor([3.0], type: :f64)
+      names = Enum.map(pm.entries, & &1.id)
+      :rand.seed(:exsss, {9, 9, 9})
+
+      Enum.reduce(1..draws, 0.0, fn _, acc ->
+        vals = Map.new(names, fn n -> {n, t64(:rand.normal())} end)
+        host = logp_fn.(Exmc.PointMap.pack(vals, pm)) |> Nx.to_number()
+
+        q =
+          Nx.tensor(Enum.map(comps.layout, &(vals |> Map.fetch!(&1) |> Nx.to_number())),
+            type: :f64
+          )
+
+        synth = Nx.Defn.jit_apply(fun, [q, obs], compiler: Nx.Defn.Evaluator) |> Nx.to_number()
+        max(acc, abs(host - synth) / max(abs(host), 1.0))
+      end)
+    end
+
+    defp ncp_ir do
+      # alpha is NCP'd (both params are refs) AND observed through y, which is
+      # what makes the mu + sigma*z reconstruction appear in the density. An
+      # NCP'd RV that nothing downstream names does not exercise it at all.
+      Exmc.Builder.new_ir()
+      |> Exmc.Builder.rv("mu", Exmc.Dist.Normal, %{mu: t64(0.0), sigma: t64(5.0)})
+      |> Exmc.Builder.rv("sigma", Exmc.Dist.Exponential, %{lambda: t64(1.0)})
+      |> Exmc.Builder.rv("alpha", Exmc.Dist.Normal, %{mu: "mu", sigma: "sigma"})
+      |> Exmc.Builder.rv("y", Exmc.Dist.Normal, %{mu: "alpha", sigma: t64(1.0)})
+      |> Exmc.Builder.obs("y_obs", "y", t64(3.0))
+    end
+
+    test "a plain reference matches the host" do
+      ir =
+        Exmc.Builder.new_ir()
+        |> Exmc.Builder.rv("mu", Exmc.Dist.Normal, %{mu: t64(0.0), sigma: t64(5.0)})
+        |> Exmc.Builder.rv("alpha", Exmc.Dist.Normal, %{mu: "mu", sigma: t64(1.0)})
+
+      assert worst_gap(ir, 100) < 1.0e-12
+    end
+
+    test "a reference to a transformed RV resolves in constrained space" do
+      # sigma carries transform: :log, so the referrer must see exp(z), not z.
+      # Resolving in the wrong space still yields a finite density.
+      ir =
+        Exmc.Builder.new_ir()
+        |> Exmc.Builder.rv("s", Exmc.Dist.Exponential, %{lambda: t64(1.0)})
+        |> Exmc.Builder.rv("alpha", Exmc.Dist.Normal, %{mu: t64(0.0), sigma: "s"})
+
+      assert worst_gap(ir, 100) < 1.0e-12
+    end
+
+    test "a two-level reference chain resolves in dependency order" do
+      ir =
+        Exmc.Builder.new_ir()
+        |> Exmc.Builder.rv("m0", Exmc.Dist.Normal, %{mu: t64(0.0), sigma: t64(2.0)})
+        |> Exmc.Builder.rv("m1", Exmc.Dist.Normal, %{mu: "m0", sigma: t64(1.0)})
+        |> Exmc.Builder.rv("m2", Exmc.Dist.Normal, %{mu: "m1", sigma: t64(1.0)})
+
+      assert worst_gap(ir, 100) < 1.0e-12
+    end
+
+    test "an NCP model matches the host" do
+      assert worst_gap(ncp_ir(), 100) < 1.0e-12
+    end
+
+    test "and dropping ncp_info makes it diverge — the gate has teeth" do
+      # Without this the previous test proves nothing: a resolver that ignored
+      # ncp_info entirely would still pass it on a model where the
+      # reconstruction never enters the density.
+      assert worst_gap(ncp_ir(), 50, %{}) > 1.0e-3
+    end
+
+    test "a reference to a non-coordinate is rejected by name at build time" do
+      ir =
+        Exmc.Builder.new_ir()
+        |> Exmc.Builder.rv("a", Exmc.Dist.Normal, %{mu: "nonexistent", sigma: t64(1.0)})
+
+      rewritten = Exmc.Rewrite.apply(ir, [])
+      {:ok, comps} = Exmc.NUTS.CustomSynth.extract_components(rewritten)
+
+      assert_raise ArgumentError, ~r/nonexistent.*not a\s+sampled coordinate/s, fn ->
+        MultiRvCustomSpec.compose_logp_defn(comps)
+      end
+    end
+
+    test "layout stays in PointMap order past the 32-key flatmap threshold" do
+      # layout IS the q-vector order. Map iteration order matches sorted order
+      # only under 32 keys; past that the shader would read q in one order and
+      # the sampler write it in another, with no error.
+      ir =
+        Enum.reduce(1..40, Exmc.Builder.new_ir(), fn i, acc ->
+          id = "x#{String.pad_leading(to_string(i), 2, "0")}"
+          Exmc.Builder.rv(acc, id, Exmc.Dist.Normal, %{mu: t64(0.0), sigma: t64(1.0)})
+        end)
+
+      rewritten = Exmc.Rewrite.apply(ir, [])
+      {:ok, comps} = Exmc.NUTS.CustomSynth.extract_components(rewritten)
+      assert comps.layout == Enum.map(Exmc.PointMap.build(rewritten).entries, & &1.id)
+    end
+  end
 end

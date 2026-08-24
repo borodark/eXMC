@@ -232,6 +232,22 @@ defmodule Exmc.NUTS.CustomSynth.Push do
 
   defp scalar(params, key) do
     case Map.fetch!(params, key) do
+      # A hierarchical parameter is the NAME of another RV, not a constant: it
+      # is a function of the position vector, resolved inside the shader body
+      # from q. It takes a slot here only so the 128-byte gate below stays
+      # conservative.
+      #
+      # Safe because no prior float in this binary is read by any shader. The
+      # template's Push block declares K/n_obs/d/_pad/eps and nothing else, and
+      # Push.glsl_fields/1 — which would add per-prior fields — has no callers
+      # anywhere in lib or test. Prior parameters reach the shader as constants
+      # inlined into the traced expression instead.
+      v when is_binary(v) ->
+        0.0
+
+      v when is_atom(v) and v not in [nil, true, false] ->
+        0.0
+
       v when is_number(v) ->
         v * 1.0
 
