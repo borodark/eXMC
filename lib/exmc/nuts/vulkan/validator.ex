@@ -75,6 +75,15 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   # variance 45% high, which is ~14σ at n=800.
   @analytic_tol 4.0
 
+  # The widest variance error this gate is allowed to call a pass.
+  #
+  # If `@analytic_tol * se` exceeds this fraction of the true variance, the
+  # chain cannot resolve an error of that size and the gate is not measuring
+  # anything — it is skipped and says so, rather than returning a verdict it
+  # has no power to support. 50% is deliberately generous: the point is to
+  # catch the cases where the band is most of the answer, not to be strict.
+  @max_resolvable 0.5
+
   @default_opts [n_warmup: 500, n_samples: 1000, seed: 42]
 
   @doc """
@@ -128,7 +137,7 @@ defmodule Exmc.NUTS.Vulkan.Validator do
 
     scale_check =
       if cauchy? do
-        check_iqr(reference_samples, vulkan_samples)
+        check_iqr(reference_samples, vulkan_samples, meta)
       else
         check_variance(reference_samples, vulkan_samples)
       end
@@ -412,19 +421,52 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     end
   end
 
-  defp check_iqr(a, b) do
+  # The differential IQR gate, and the second half of a fix that was only half
+  # done.
+  #
+  # This used `0.25 * IQR / sqrt(n)` as "a conservative tolerance band". It is
+  # not conservative, it is about SIX TIMES TOO TIGHT, and the identical proxy
+  # was removed from check_analytic/3 in the D92 merge while this copy — the
+  # differential one — was left standing. Measured on the FreeBSD fleet
+  # 2026-08-23, Cauchy(0,1) at ESS 131:
+  #
+  #     proxy SE per arm    0.0450        tol 0.1349
+  #     correct SE per arm  0.2747        tol 1.1657      6.11x
+  #     arms measured IQR 1.928 and 2.185, true value 2.0
+  #     observed diff 0.2572 -> failed against the proxy, passes against the truth
+  #
+  # Both arms bracketed the true IQR and the gate called it a backend
+  # disagreement. That is the failure direction that matters: a check which
+  # rejects a correct sampler gets switched off, and then it is not a check.
+  #
+  # SE(IQR) = 0.5 / (f sqrt(n)) with f the density at the quartiles, which the
+  # meta supplies via analytic_moments/1 for the families that know it. Without
+  # one there is no distribution-free answer, so the old proxy remains as the
+  # fallback — wrong, but no more wrong than it was, and now only where nothing
+  # better exists.
+  defp check_iqr(a, b, meta) do
     iqr_a = iqr(a)
     iqr_b = iqr(b)
-    # SE of IQR has no closed form independent of distribution; use
-    # 25% of the IQR as a conservative tolerance band per side.
-    se = 0.25 * (iqr_a + iqr_b) / 2.0 / :math.sqrt(min(ess(a), ess(b)))
+    n = min(ess(a), ess(b))
+
+    se_per_arm =
+      case analytic_moments(meta) do
+        {:quantiles, %{f_quartile: f}} when is_number(f) and f > 0.0 ->
+          0.5 / (f * :math.sqrt(n))
+
+        _ ->
+          0.25 * (iqr_a + iqr_b) / 2.0 / :math.sqrt(n)
+      end
+
+    # Two independent arms, so the combined SE is sqrt(2) times one of them.
+    se = :math.sqrt(2.0) * se_per_arm
     diff = abs(iqr_a - iqr_b)
     tol = @sigma_tol * max(se, 1.0e-12)
 
     if diff <= tol do
       :ok
     else
-      {:error, %{check: :iqr, exla: iqr_a, vulkan: iqr_b, diff: diff, tol: tol}}
+      {:error, %{check: :iqr, exla: iqr_a, vulkan: iqr_b, diff: diff, tol: tol, ess: n}}
     end
   end
 
@@ -631,6 +673,45 @@ defmodule Exmc.NUTS.Vulkan.Validator do
                tol: @analytic_tol * se_m,
                ess: n
              }}
+
+          # The variance gate only counts when it can resolve something.
+          #
+          # `@analytic_tol * se_v` is what this chain can distinguish, and on a
+          # heavy-tailed target it can be most of the truth. LogNormal(0,1) on
+          # the FreeBSD fleet, 2026-08-23: truth 4.6708, measured 2.4796, ESS
+          # 211, tolerance 2.0209 — the gate could resolve a 43% error and the
+          # observed shortfall was 47%, a ratio of 1.08. That is a coin flip
+          # reported as a verdict.
+          #
+          # And 2.4796 is not evidence of a broken sampler. The sample variance
+          # of a lognormal is downward-biased until n is enormous: with
+          # mu4 = e^4(e^6 - 4e^3 + 6e - 3), resolving 47% at 4 sigma needs ESS
+          # ~61,000 (~174,000 draws at 0.35 effective per draw), and 20% needs
+          # ESS ~336,000. At ESS 211 this gate cannot tell a correct sampler
+          # from a badly broken one, so a failure from it says nothing.
+          #
+          # Same defect as the one D91 documented in the test suite, in the
+          # module that suite borrows its statistics from: check_analytic/3
+          # sizes its band from the chain's own ESS, so it can never be too
+          # tight, and it degrades to nothing on a short chain while still
+          # returning a verdict. assert_posterior!/3 grew a power gate for
+          # exactly this; this is the same gate, here.
+          #
+          # Declining to run beats returning a number: the check is skipped
+          # out loud, with what it would have taken to make it mean something.
+          @analytic_tol * se_v > @max_resolvable * abs(tv) ->
+            require Logger
+
+            Logger.warning(
+              "[Validator] variance check on #{inspect(meta)} arm #{inspect(label)} is " <>
+                "UNDERPOWERED and was SKIPPED: at ESS #{Float.round(n, 1)} it resolves only " <>
+                "#{Float.round(@analytic_tol * se_v / abs(tv) * 100, 1)}% of the true " <>
+                "variance #{Float.round(tv, 4)} (measured #{Float.round(v, 4)}). " <>
+                "Needs roughly #{round(n * :math.pow(@analytic_tol * se_v / (@max_resolvable * abs(tv)), 2))} " <>
+                "effective draws to resolve #{round(@max_resolvable * 100)}%."
+            )
+
+            :ok
 
           abs(v - tv) > @analytic_tol * se_v ->
             {:error,
