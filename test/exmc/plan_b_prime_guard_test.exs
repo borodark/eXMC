@@ -50,12 +50,32 @@ defmodule Exmc.PlanBPrimeGuardTest do
   end
 
   defp non_synth_ir do
-    # Multi-RV with HalfNormal priors, no Custom likelihood, no observations.
-    # ChainShaderCodegen.detect_meta/1 returns :unsupported for this shape
-    # (hierarchical-ish, no synthesised path).
+    # MvNormal, because its parameters need dense linear algebra.
+    #
+    # This used to be a prior-only Normal + HalfNormal pair, described here as
+    # "hierarchical-ish, no synthesised path". That was never true of the
+    # model — it was true of a `cond` in detect_meta/1, which only attempted
+    # synthesis for IRs carrying a Custom or observed likelihood and dropped
+    # everything else to :unsupported. d6f128dee removed that gate (the models
+    # synthesise, and match the host log-density to 1.7e-9), and this fixture
+    # promptly became synthesisable, so three tests below stopped seeing the
+    # guard they exist to check.
+    #
+    # A fixture for "unsynthesisable" has to be something the GLSL emitter
+    # cannot reach on its merits rather than by an accident of routing.
+    # MvNormal qualifies structurally: Exmc.Dist.MvNormal.prepare_params/1
+    # needs a Cholesky factorisation and a matrix inverse, and the emitter
+    # covers elementwise ops, slices, reshapes and reductions — not dense
+    # LinAlg. Measured: detect_meta/1 returns :unsupported.
+    #
+    # Deliberately NOT used here: a hierarchical model with string parameter
+    # refs, which is also :unsupported today but is an open work item and
+    # would silently turn this test into a no-op the day it lands.
     Builder.new_ir()
-    |> Builder.rv("mu", Normal, %{mu: t(0.0), sigma: t(1.0)})
-    |> Builder.rv("sigma", HalfNormal, %{sigma: t(1.0)})
+    |> Builder.rv("z", Exmc.Dist.MvNormal, %{
+      mu: Nx.tensor([0.0, 0.0], type: :f64, backend: Nx.BinaryBackend),
+      cov: Nx.tensor([[1.0, 0.2], [0.2, 1.0]], type: :f64, backend: Nx.BinaryBackend)
+    })
   end
 
   describe "guard fires when (vulkan compiler, non-synth IR)" do
@@ -124,10 +144,25 @@ defmodule Exmc.PlanBPrimeGuardTest do
 
         ir = single_normal_ir()
 
-        # Should NOT raise; chain_meta should be {:normal, mu, sigma}.
+        # Should NOT raise, and chain_meta should be non-nil.
+        #
+        # This asserted {:normal, _, _} — the f32-era family fast path. Under
+        # D88's f64 Vulkano default, detect_meta/1 deliberately routes
+        # single-family models to the synth path instead: the family SPVs are
+        # f32-only and trigger the D87 silent-collapse pathology at f64. So
+        # {:synthesised, ...} is the correct answer here, and the old
+        # expectation was stale rather than the code being wrong.
+        #
+        # It went unnoticed because this file lived only in the applications
+        # tree until d4146a6af, and the assertion needs a Vulkan host to reach.
+        # The point of the test is that the guard does not fire, so it asserts
+        # that: a meta was produced, of either shape.
         result = Compiler.compile_for_sampling(ir)
         chain_meta = elem(result, 5)
-        assert match?({:normal, _, _}, chain_meta)
+
+        assert match?({:normal, _, _}, chain_meta) or
+                 match?({:synthesised, _, _, _, _, _}, chain_meta),
+               "expected a chain meta, got: #{inspect(chain_meta)}"
       end
     end
   end
