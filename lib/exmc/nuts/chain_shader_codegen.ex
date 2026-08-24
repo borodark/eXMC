@@ -44,8 +44,11 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
 
   Phase A + B implementations dispatch on the IR's nodes here.
   """
-  @spec detect_meta(IR.t()) :: {:ok, meta()} | :unsupported | {:unsupported, :push_too_large}
-  def detect_meta(%IR{nodes: nodes} = ir) when map_size(nodes) == 1 do
+  @spec detect_meta(IR.t(), keyword()) ::
+          {:ok, meta()} | :unsupported | {:unsupported, :push_too_large}
+  def detect_meta(ir, opts \\ [])
+
+  def detect_meta(%IR{nodes: nodes} = ir, opts) when map_size(nodes) == 1 do
     # Surface A of PLAN_F64_CHAIN_SHADER (Option B): under D88's f64
     # Vulkano default, route single-family models to the vulkano synth
     # path (Surface 7) instead of the spirit C++ family fused SPVs.
@@ -63,7 +66,7 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
     # (regression seen in bench/nx_0_12_race_results.md at d=8 / d=50).
     with :f64 <- Exmc.JIT.precision(),
          Nx.Vulkan <- Exmc.JIT.detect_compiler(),
-         {:ok, meta} <- try_synthesise(ir) do
+         {:ok, meta} <- try_synthesise(ir, opts) do
       {:ok, meta}
     else
       _ -> detect_family(nodes)
@@ -75,10 +78,25 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
     detect_from_node(node)
   end
 
-  defp try_synthesise(%IR{} = ir) do
+  # Synthesis is best-effort by contract: a model whose Defn graph contains ops
+  # the emitter does not cover returns :unsupported, and the Plan-B' guard turns
+  # that into a loud compile-time refusal rather than a silent 100x slower
+  # per-op fallback.
+  #
+  # `opts` is threaded because synthesise/2 rewrites the IR itself, and
+  # Rewrite.apply/2 drops the non-centred-parameterisation pass on `ncp: false`.
+  # Both arms have to be given the same flag or the shader and the PointMap
+  # describe different coordinate systems — see the comment at its call site.
+  #
+  # ArgumentError is deliberately NOT swallowed. The reference resolver raises
+  # it with the offending id or the cycle path, and turning that into a bare
+  # :unsupported replaces a message naming the problem with the Plan-B' guard's
+  # generic "reshape the model" advice.
+  defp try_synthesise(%IR{} = ir, opts) do
     try do
-      Exmc.NUTS.CustomSynth.synthesise(ir)
+      Exmc.NUTS.CustomSynth.synthesise(ir, opts)
     rescue
+      e in ArgumentError -> reraise e, __STACKTRACE__
       _ -> :unsupported
     catch
       _, _ -> :unsupported
@@ -92,7 +110,7 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
   # when all log_prob/grad expressions emit cleanly, or
   # `:unsupported` when the model's Defn graph contains ops the
   # emitter doesn't yet cover.
-  def detect_meta(%IR{nodes: nodes} = ir) when map_size(nodes) > 1 do
+  def detect_meta(%IR{nodes: nodes} = ir, opts) when map_size(nodes) > 1 do
     cond do
       # Task #153 (Option A, 2026-05-26): MultiRvCustomSpec.compose_logp_defn
       # now applies Transform.apply + log_abs_det_jacobian per-RV (matches
@@ -112,7 +130,7 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
       # the Plan-B' guard raises SynthUnsupportedError (same as any other
       # unsynthesisable model under Vulkan).
       has_custom_likelihood?(nodes) or has_observed_likelihood?(nodes) ->
-        try_synthesise(ir)
+        try_synthesise(ir, opts)
 
       # Prior-only multi-RV, and this clause used to be `:unsupported`.
       #
@@ -138,25 +156,11 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
       # plausible log-density and a silently wrong posterior, which is the
       # shape of the bug that read as "Ampere over-dispersion" for three weeks.
       true ->
-        try_synthesise(ir)
+        try_synthesise(ir, opts)
     end
   end
 
-  # Synthesis is best-effort by contract: a model whose Defn graph contains ops
-  # the emitter does not cover returns :unsupported, and the Plan-B' guard
-  # turns that into a loud compile-time refusal rather than a silent 100x
-  # slower per-op fallback.
-  defp try_synthesise(ir) do
-    try do
-      Exmc.NUTS.CustomSynth.synthesise(ir)
-    rescue
-      _ -> :unsupported
-    catch
-      _, _ -> :unsupported
-    end
-  end
-
-  def detect_meta(%IR{}), do: :unsupported
+  def detect_meta(%IR{}, _opts), do: :unsupported
 
   defp has_custom_likelihood?(nodes) do
     Enum.any?(nodes, fn

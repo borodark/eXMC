@@ -44,7 +44,15 @@ defmodule Exmc.Rewrite.NonCenteredParameterization do
         end
       end)
 
-    %{ir | nodes: new_nodes, ncp_info: ncp_info}
+    # Merge, do not replace.
+    #
+    # This pass now runs twice on a model — once in Compiler.do_compile/2 and
+    # once in CustomSynth.synthesise/2. On the second run should_ncp?/2 returns
+    # :no for every node, because the params it guards on (`is_binary(mu) and
+    # is_binary(sigma)`) are literal tensors by then. A plain replace therefore
+    # wipes the first run's record, and every reference that needed
+    # reconstructing as `mu + sigma * z` loses the sources to reconstruct from.
+    %{ir | nodes: new_nodes, ncp_info: Map.merge(ir.ncp_info || %{}, ncp_info)}
   end
 
   defp should_ncp?(%Node{id: id, op: {:rv, Normal, %{mu: mu, sigma: sigma}}}, observed)

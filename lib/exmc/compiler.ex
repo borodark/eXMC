@@ -54,7 +54,9 @@ defmodule Exmc.Compiler do
     step_fn = build_step_fn(logp_fn, obs_data, jit_opts)
 
     multi_step_fn =
-      if pm.size > 0, do: Exmc.NUTS.BatchedLeapfrog.build(logp_fn, obs_data, pm.size, jit_opts), else: nil
+      if pm.size > 0,
+        do: Exmc.NUTS.BatchedLeapfrog.build(logp_fn, obs_data, pm.size, jit_opts),
+        else: nil
 
     # Phases A+B: detect a fused-leapfrog chain meta from the IR.
     # Single-RV models in 6 supported families (Normal/StudentT/
@@ -62,7 +64,10 @@ defmodule Exmc.Compiler do
     # the corresponding chain shader at dispatch time. Hierarchical
     # models, observed-data models, and unsupported distributions
     # return :unsupported and fall through to multi_step_fn.
-    detect = Exmc.NUTS.ChainShaderCodegen.detect_meta(ir)
+    # `opts`, because detect_meta -> synthesise rewrites the IR itself and must
+    # be told whether the NCP pass applies. Without it the shader is built from
+    # the centred model while `pm` above describes the NCP'd coordinates.
+    detect = Exmc.NUTS.ChainShaderCodegen.detect_meta(ir, opts)
 
     chain_meta =
       case detect do
@@ -196,12 +201,13 @@ defmodule Exmc.Compiler do
   end
 
   defp build_vag_fn(logp_fn, obs_data, jit_opts \\ []) do
-    raw = Exmc.JIT.jit(
-      fn flat, data ->
-        Nx.Defn.value_and_grad(flat, fn f -> logp_fn.(f, data) end)
-      end,
-      jit_opts
-    )
+    raw =
+      Exmc.JIT.jit(
+        fn flat, data ->
+          Nx.Defn.value_and_grad(flat, fn f -> logp_fn.(f, data) end)
+        end,
+        jit_opts
+      )
 
     data = obs_data || @data_sentinel
     fn flat -> raw.(flat, data) end
@@ -230,6 +236,7 @@ defmodule Exmc.Compiler do
       )
 
     data = obs_data || @data_sentinel
+
     fn q, p, grad, epsilon, inv_mass_diag ->
       eps_t = Nx.tensor(epsilon, type: fp, backend: Nx.BinaryBackend)
 
@@ -511,11 +518,13 @@ defmodule Exmc.Compiler do
 
   defp inverse_transform(nil, x), do: x
   defp inverse_transform(:log, x), do: Nx.log(x)
+
   defp inverse_transform(:softplus, x) do
     # Numerically stable: log(expm1(x)) = x + log(1 - exp(-x)).
     # Avoids exp(x) overflow at large x (PATH_TO_FULL_PASS step 2a).
     Nx.add(x, Nx.log1p(Nx.negate(Nx.exp(Nx.negate(x)))))
   end
+
   defp inverse_transform(:logit, x), do: Nx.subtract(Nx.log(x), Nx.log1p(Nx.negate(x)))
   defp inverse_transform(:stick_breaking, x), do: Transform.inverse_stick_breaking(x)
 

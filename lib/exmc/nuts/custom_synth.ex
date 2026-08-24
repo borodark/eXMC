@@ -77,12 +77,8 @@ defmodule Exmc.NUTS.CustomSynth do
 
   @typedoc "Meta returned when synthesis succeeds; consumed by Tree.do_dispatch/10."
   @type synth_meta ::
-          {:synthesised,
-           sha256 :: binary(),
-           layout :: [atom()],
-           push_spec :: map(),
-           spv_path :: Path.t(),
-           obs_bin :: binary()}
+          {:synthesised, sha256 :: binary(), layout :: [atom()], push_spec :: map(),
+           spv_path :: Path.t(), obs_bin :: binary()}
 
   @doc """
   Entry point.  Walks the IR + Custom dist, renders a fused
@@ -103,8 +99,29 @@ defmodule Exmc.NUTS.CustomSynth do
   exercised by `synthesise_with_template_glsl/2` (used by tests
   passing a hand-written shader).
   """
-  @spec synthesise(IR.t()) :: {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
-  def synthesise(%IR{} = ir) do
+  @spec synthesise(IR.t(), keyword()) ::
+          {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
+  def synthesise(%IR{} = ir, opts \\ []) do
+    # Rewrite FIRST, or the shader describes different coordinates than the
+    # sampler does.
+    #
+    # Compiler.compile_for_sampling/2 called detect_meta/1 with the caller's raw
+    # IR, while do_compile/2 rebinds `ir = Rewrite.apply(ir, opts)` locally
+    # before building the PointMap. So for a model with a non-centred
+    # parameterisation, `pm` described the NCP'd coordinates (alpha is the
+    # standardised z) while the synthesised shader was built from the centred
+    # model — two coordinate systems for one q vector, silently.
+    #
+    # `opts` is threaded rather than defaulted because Rewrite.apply/2 drops the
+    # NCP pass entirely on `ncp: false`. Both arms must be handed the same flag
+    # or the mismatch simply reverses.
+    #
+    # Rewriting twice is safe: NonCenteredParameterization merges into
+    # ncp_info rather than replacing it, and the other four passes are
+    # idempotent (AttachDefaultTransforms and NormalizeObs fall through on
+    # 4-tuple ops, PopulateObsMetadata is all Map.put_new).
+    ir = Exmc.Rewrite.apply(ir, opts)
+
     with {:ok, components} <- extract_components(ir),
          {:ok, glsl} <- render_template(components, ir) do
       synthesise_with_template_glsl(components, glsl, ir)
@@ -123,7 +140,8 @@ defmodule Exmc.NUTS.CustomSynth do
 
   Returns `{:ok, {:synthesised, sha, layout, push_spec, spv_path, <<>>}}`.
   """
-  @spec synthesise_batched(IR.t()) :: {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
+  @spec synthesise_batched(IR.t()) ::
+          {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
   def synthesise_batched(%IR{} = ir) do
     with {:ok, components} <- extract_components(ir),
          {:ok, glsl} <- Exmc.NUTS.CustomSynth.MultiRvCustomSpec.render_batched(components) do
@@ -233,8 +251,7 @@ defmodule Exmc.NUTS.CustomSynth do
   #   layout:     ordered list of free-RV names matching the
   #               position vector q's component order
   @spec extract_components(IR.t()) ::
-          {:ok,
-           %{priors: list(), observed: list(), custom: tuple() | nil, layout: [atom()]}}
+          {:ok, %{priors: list(), observed: list(), custom: tuple() | nil, layout: [atom()]}}
           | {:error, atom()}
   def extract_components(%IR{nodes: nodes}) do
     # An RV `rv_id` is *observed* when some node carries
@@ -249,9 +266,23 @@ defmodule Exmc.NUTS.CustomSynth do
       end)
       |> Map.new()
 
+    # Sorted by id, because `layout` IS the q-vector order and it has to agree
+    # with Exmc.PointMap.build/1, which sorts free RVs by id and assigns offsets
+    # in that order.
+    #
+    # This relied on `Map` iteration order, which coincides with sorted order
+    # only while the node map is a :flatmap — under 32 keys. Past that Erlang
+    # switches to a hashmap and the two silently permute, so a model with more
+    # than 32 RVs would have had the shader read q in one order and the sampler
+    # write it in another. No error, just a wrong posterior.
+    #
+    # Note this is NOT dependency order. Reference resolution needs its own
+    # evaluation order, computed separately; reordering `layout` to match it
+    # would be the same bug from the other direction.
     {observed_rvs, latent_rvs} =
       nodes
       |> Enum.filter(&standard_rv_node?/1)
+      |> Enum.sort_by(fn {id, _} -> id end)
       |> Enum.split_with(fn {id, _} -> Map.has_key?(observed_ids, id) end)
 
     priors = latent_rvs
@@ -290,7 +321,8 @@ defmodule Exmc.NUTS.CustomSynth do
             {:error, :no_free_rvs_in_custom_only_model}
 
           true ->
-            {:ok, build_components(priors, observed, {node_id(node), custom_struct, custom_params})}
+            {:ok,
+             build_components(priors, observed, {node_id(node), custom_struct, custom_params})}
         end
 
       [] ->
@@ -351,7 +383,9 @@ defmodule Exmc.NUTS.CustomSynth do
   defp observed_n_obs([]), do: 0
 
   defp observed_n_obs(observed) do
-    observed |> Enum.map(fn {_id, _mod, _params, value, _meta} -> obs_size(value) end) |> Enum.sum()
+    observed
+    |> Enum.map(fn {_id, _mod, _params, value, _meta} -> obs_size(value) end)
+    |> Enum.sum()
   end
 
   # Concatenate every observed RV's obs value as an f64 binary in
