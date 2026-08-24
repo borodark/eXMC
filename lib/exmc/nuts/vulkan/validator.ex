@@ -562,28 +562,63 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   defined: median `loc`, IQR `2 * scale`.
   """
   @spec analytic_moments(tuple()) ::
-          {:moments, %{mean: float(), var: float()}}
+          {:moments, %{optional(:mu4) => float(), mean: float(), var: float()}}
           | {:quantiles, %{median: float(), iqr: float(), f_quartile: float()}}
           | :unknown
+  # `mu4` is the FOURTH CENTRAL moment, and it is here because the gate that
+  # uses it cannot be trusted to estimate it.
+  #
+  # variance_se/2 needs mu4 to size the band on a sample variance, and it takes
+  # it from the sample. On a heavy tail that is circular: at n ~ 800 the tail is
+  # unsampled, so the empirical mu4 is far too small, so the band is far too
+  # narrow, so the check believes it has power it does not have. LogNormal(0,1)
+  # on the fleet: empirical mu4 put the 4-sigma band at 43% of the true
+  # variance; the analytic mu4 is 2485.7 against a var^2 of 21.8, which puts it
+  # at 293%. A factor of seven, in the direction that matters.
+  #
+  # Supplied where the family knows it; callers fall back to the empirical
+  # estimate where it is absent, which is right for Beta and for the custom
+  # families that have no closed form here.
   def analytic_moments({:normal, mu, sigma}),
-    do: {:moments, %{mean: mu * 1.0, var: sigma * sigma * 1.0}}
+    do: {:moments, %{mean: mu * 1.0, var: sigma * sigma * 1.0, mu4: 3.0 * :math.pow(sigma, 4)}}
 
   def analytic_moments({:exponential, lambda}) when lambda > 0,
-    do: {:moments, %{mean: 1.0 / lambda, var: 1.0 / (lambda * lambda)}}
+    do:
+      {:moments,
+       %{mean: 1.0 / lambda, var: 1.0 / (lambda * lambda), mu4: 9.0 / :math.pow(lambda, 4)}}
 
   def analytic_moments({:halfnormal, sigma, _log_const}), do: half_normal_moments(sigma)
   def analytic_moments({:half_normal, sigma}), do: half_normal_moments(sigma)
 
   def analytic_moments({:lognormal, mu, sigma}) do
-    m = :math.exp(mu + sigma * sigma / 2.0)
-    v = (:math.exp(sigma * sigma) - 1.0) * :math.exp(2.0 * mu + sigma * sigma)
-    {:moments, %{mean: m, var: v}}
+    s2 = sigma * sigma
+    m = :math.exp(mu + s2 / 2.0)
+    v = (:math.exp(s2) - 1.0) * :math.exp(2.0 * mu + s2)
+
+    # E[X^k] = exp(k*mu + k^2 s2/2), so
+    # mu4 = E[X^4] - 4m E[X^3] + 6m^2 E[X^2] - 3m^4
+    #     = e^{4mu}(e^{8 s2} - 4 e^{5 s2} + 6 e^{3 s2} - 3 e^{2 s2}).
+    # For LN(0,1) that is 2485.7 — 114x the var^2 of 21.8, which is why the
+    # empirical estimate of it at n ~ 800 is hopeless.
+    mu4 =
+      :math.exp(4.0 * mu) *
+        (:math.exp(8.0 * s2) - 4.0 * :math.exp(5.0 * s2) + 6.0 * :math.exp(3.0 * s2) -
+           3.0 * :math.exp(2.0 * s2))
+
+    {:moments, %{mean: m, var: v, mu4: mu4}}
   end
 
   # Gamma(alpha, beta) in the shape/RATE parameterisation, which is what
   # Exmc.Dist.Gamma uses: mean alpha/beta, var alpha/beta^2.
   def analytic_moments({:gamma, alpha, beta}) when alpha > 0 and beta > 0,
-    do: {:moments, %{mean: alpha / beta, var: alpha / (beta * beta)}}
+    do:
+      {:moments,
+       %{
+         mean: alpha / beta,
+         var: alpha / (beta * beta),
+         # mu4 = 3*alpha*(alpha + 2) / beta^4
+         mu4: 3.0 * alpha * (alpha + 2.0) / :math.pow(beta, 4)
+       }}
 
   def analytic_moments({:beta, a, b}) when a > 0 and b > 0 do
     s = a + b
@@ -602,7 +637,17 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   def analytic_moments({:studentt, _mu, _sigma, nu, _c}) when nu > 2 and nu <= 4, do: :unknown
 
   def analytic_moments({:studentt, mu, sigma, nu, _c}) when nu > 4,
-    do: {:moments, %{mean: mu * 1.0, var: sigma * sigma * nu / (nu - 2.0)}}
+    do:
+      {:moments,
+       %{
+         mean: mu * 1.0,
+         var: sigma * sigma * nu / (nu - 2.0),
+         # mu4 = 3 sigma^4 nu^2 / ((nu-2)(nu-4)); finite only for nu > 4, which
+         # is exactly why the clause above returns :unknown below that.
+         mu4:
+           3.0 * :math.pow(sigma, 4) * nu * nu /
+             ((nu - 2.0) * (nu - 4.0))
+       }}
 
   # `f_quartile` is the density AT the quartiles, and it is what makes a
   # quantile gate a gate rather than a number — see the se_iqr comment in
@@ -626,10 +671,21 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   def analytic_moments(_meta), do: :unknown
 
   defp half_normal_moments(sigma) do
+    two_over_pi = 2.0 / :math.pi()
+    m = sigma * :math.sqrt(two_over_pi)
+
+    # Raw moments of |N(0, sigma)|: E[X^2] = sigma^2, E[X^3] = 2 sigma^3
+    # sqrt(2/pi), E[X^4] = 3 sigma^4. Then
+    # mu4 = E[X^4] - 4m E[X^3] + 6m^2 E[X^2] - 3m^4.
+    ex2 = sigma * sigma
+    ex3 = 2.0 * :math.pow(sigma, 3) * :math.sqrt(two_over_pi)
+    ex4 = 3.0 * :math.pow(sigma, 4)
+
     {:moments,
      %{
-       mean: sigma * :math.sqrt(2.0 / :math.pi()),
-       var: sigma * sigma * (1.0 - 2.0 / :math.pi())
+       mean: m,
+       var: ex2 * (1.0 - two_over_pi),
+       mu4: ex4 - 4.0 * m * ex3 + 6.0 * m * m * ex2 - 3.0 * :math.pow(m, 4)
      }}
   end
 
@@ -654,12 +710,31 @@ defmodule Exmc.NUTS.Vulkan.Validator do
         Logger.info("[Validator] no analytic moments for #{inspect(meta)} — moment check SKIPPED")
         :ok
 
-      {:moments, %{mean: tm, var: tv}} ->
+      {:moments, %{mean: tm, var: tv} = truth} ->
         {m, v} = mean_var(samples)
         n = ess(samples)
 
         se_m = :math.sqrt(max(tv, 1.0e-30) / n)
-        se_v = variance_se(samples, n)
+
+        # Analytic mu4 where the family supplies one, empirical otherwise.
+        #
+        # This is not a refinement, it is the difference between the gate
+        # working and not. variance_se/2 estimates mu4 from the sample, and on
+        # a heavy tail at the sample sizes this harness uses, the tail is
+        # unsampled and the estimate collapses — LogNormal(0,1) measured an
+        # empirical mu4 giving a 4-sigma band of 43% of the true variance where
+        # the analytic mu4 (2485.7, against a var^2 of 21.8) gives 293%. The
+        # check then failed a correct sampler on a variance that was merely
+        # under-resolved, and the power gate below could not see it because it
+        # was reading the same understated number.
+        se_v =
+          case truth do
+            %{mu4: mu4} when is_number(mu4) ->
+              max(:math.sqrt(max(mu4 - tv * tv, 0.0) / max(n, 1.0)), 1.0e-30)
+
+            _ ->
+              variance_se(samples, n)
+          end
 
         cond do
           abs(m - tm) > @analytic_tol * se_m ->
