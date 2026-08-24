@@ -32,13 +32,10 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
   @type meta ::
           {:normal, mu :: number(), sigma :: number()}
           | {:exponential, lambda :: number()}
-          | {:studentt, mu :: number(), sigma :: number(),
-             nu :: number(), logp_const :: number()}
-          | {:cauchy, loc :: number(), scale :: number(),
-             log_pi_scale :: number()}
+          | {:studentt, mu :: number(), sigma :: number(), nu :: number(), logp_const :: number()}
+          | {:cauchy, loc :: number(), scale :: number(), log_pi_scale :: number()}
           | {:halfnormal, sigma :: number(), log_const :: number()}
-          | {:weibull, k :: number(), lambda :: number(),
-             logp_const :: number()}
+          | {:weibull, k :: number(), lambda :: number(), logp_const :: number()}
 
   @doc """
   Inspect an IR. If it's a recognized single-RV-model shape,
@@ -115,16 +112,47 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
       # the Plan-B' guard raises SynthUnsupportedError (same as any other
       # unsynthesisable model under Vulkan).
       has_custom_likelihood?(nodes) or has_observed_likelihood?(nodes) ->
-        try do
-          Exmc.NUTS.CustomSynth.synthesise(ir)
-        rescue
-          _ -> :unsupported
-        catch
-          _, _ -> :unsupported
-        end
+        try_synthesise(ir)
 
+      # Prior-only multi-RV, and this clause used to be `:unsupported`.
+      #
+      # It was a gate, not a capability limit. CustomSynth.synthesise/1 handles
+      # these models — probed directly on a two-Normal IR it returns
+      # {:ok, {:synthesised, ...}} — but detect_meta/1 never called it unless
+      # the model had a Custom or observed likelihood, so every prior-only
+      # multi-RV model raised SynthUnsupportedError on a Vulkan-only host.
+      # That is two of the seven such failures on the FreeBSD fleet, from
+      # models as ordinary as two independent Normals.
+      #
+      # Checked before opening it, because "it emits" and "it is correct" are
+      # different claims and only the second one matters. The composed
+      # log-density was compared against Compiler.compile/1's on the same q,
+      # 200 random draws each:
+      #
+      #     2 independent Normals              worst rel. diff 0.0
+      #     Normal + Exponential               worst rel. diff 0.0
+      #     Normal + HalfCauchy(:log) + Exp    worst rel. diff 1.69e-9
+      #
+      # Exact where no transform is involved, f64 rounding where one is. The
+      # transformed case matters most: a wrong Jacobian would give a finite,
+      # plausible log-density and a silently wrong posterior, which is the
+      # shape of the bug that read as "Ampere over-dispersion" for three weeks.
       true ->
-        :unsupported
+        try_synthesise(ir)
+    end
+  end
+
+  # Synthesis is best-effort by contract: a model whose Defn graph contains ops
+  # the emitter does not cover returns :unsupported, and the Plan-B' guard
+  # turns that into a loud compile-time refusal rather than a silent 100x
+  # slower per-op fallback.
+  defp try_synthesise(ir) do
+    try do
+      Exmc.NUTS.CustomSynth.synthesise(ir)
+    rescue
+      _ -> :unsupported
+    catch
+      _, _ -> :unsupported
     end
   end
 
