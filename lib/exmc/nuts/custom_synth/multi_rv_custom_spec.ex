@@ -357,7 +357,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       # `path` is the descent stack, so this is a real cycle check rather than
       # a visit counter that would also trip on a legitimate diamond.
       id in path ->
-        raise ArgumentError,
+        raise Exmc.SynthReferenceError,
               "reference cycle in the model's hierarchy: " <>
                 Enum.join(Enum.reverse([id | path]), " -> ")
 
@@ -371,7 +371,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
         {order, done} =
           Enum.reduce(deps, {order, done}, fn dep, inner ->
             unless MapSet.member?(ids, dep) do
-              raise ArgumentError,
+              raise Exmc.SynthReferenceError,
                     "non-centered parameterization of #{inspect(id)} refers to " <>
                       "#{inspect(dep)}, which is not a sampled coordinate"
             end
@@ -403,7 +403,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
         name ->
           unless Map.has_key?(q_index, name) or Map.has_key?(q_index, ref) do
-            raise ArgumentError,
+            raise Exmc.SynthReferenceError,
                   "parameter #{inspect(key)} refers to #{inspect(ref)}, which is not a " <>
                     "sampled coordinate (layout: #{inspect(Map.keys(q_index))})"
           end

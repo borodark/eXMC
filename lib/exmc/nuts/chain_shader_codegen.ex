@@ -88,15 +88,21 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
   # Both arms have to be given the same flag or the shader and the PointMap
   # describe different coordinate systems — see the comment at its call site.
   #
-  # ArgumentError is deliberately NOT swallowed. The reference resolver raises
-  # it with the offending id or the cycle path, and turning that into a bare
-  # :unsupported replaces a message naming the problem with the Plan-B' guard's
-  # generic "reshape the model" advice.
+  # Exmc.SynthReferenceError is deliberately NOT swallowed: it names the
+  # offending id or prints the cycle path, and converting that to a bare
+  # :unsupported replaces a message about the actual problem with the Plan-B'
+  # guard's generic "reshape the model" advice.
+  #
+  # It has its own type rather than being an ArgumentError, because rescuing
+  # THAT was too broad — Nx raises ArgumentError too, and normalize_params/1
+  # slicing MvNormal's rank-2 covariance produced one ("invalid start indices
+  # rank for shape of rank 2") that escaped synthesis and broke the Plan-B'
+  # guard for every MvNormal model. Catching a type is not catching a cause.
   defp try_synthesise(%IR{} = ir, opts) do
     try do
       Exmc.NUTS.CustomSynth.synthesise(ir, opts)
     rescue
-      e in ArgumentError -> reraise e, __STACKTRACE__
+      e in Exmc.SynthReferenceError -> reraise e, __STACKTRACE__
       _ -> :unsupported
     catch
       _, _ -> :unsupported

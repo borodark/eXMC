@@ -548,7 +548,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
       rewritten = Exmc.Rewrite.apply(ir, [])
       {:ok, comps} = Exmc.NUTS.CustomSynth.extract_components(rewritten)
 
-      assert_raise ArgumentError, ~r/nonexistent.*not a\s+sampled coordinate/s, fn ->
+      assert_raise Exmc.SynthReferenceError, ~r/nonexistent.*not a\s+sampled coordinate/s, fn ->
         MultiRvCustomSpec.compose_logp_defn(comps)
       end
     end
