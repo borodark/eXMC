@@ -268,14 +268,9 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
         end)
 
       observed_lp =
-        Enum.reduce(observed, Nx.tensor(0.0), fn {_id, mod, params, _value, _meta}, acc ->
+        Enum.reduce(observed, Nx.tensor(0.0), fn {_id, mod, params, value, _meta}, acc ->
           resolved = resolve_params(params, obs, resolved_rvs)
-          # The observation vector is the `obs` argument (binding-2 SSBO).
-          # Nx.sum collapses the obs axis into a scalar log-likelihood; the
-          # emitter rewrites that sum into the per-tid GLSL reduce loop over
-          # pc.n_obs, the same wire the Custom likelihood uses.
-          lp = mod.logpdf(obs, resolved) |> Nx.sum()
-          Nx.add(acc, lp)
+          Nx.add(acc, observed_logp(mod, value, obs, resolved))
         end)
 
       custom_lp = compose_custom_term(custom_info, obs, resolved_rvs)
@@ -294,6 +289,45 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     resolved = resolve_params(params_map, obs, resolved_rvs)
     logpdf_fn.(Nx.tensor(0.0), resolved)
   end
+
+  # A SCALAR observation is inlined as a constant; only a vector one reads the
+  # shared obs buffer.
+  #
+  # Two reasons, and the second is the one that bites. The buffer is a single
+  # concatenated vector every reader sees in full, so `mod.logpdf(obs, ...)`
+  # for one scalar observation folds in every OTHER observation too — the
+  # defect the per-node spans exist to correct.
+  #
+  # But spans are positional: marker i is observed node i. Two observed nodes
+  # with identical params produce structurally identical expressions, Nx merges
+  # them, and the emitter then sees fewer markers than there are nodes. The
+  # 5-parameter hierarchical model does exactly that — y1 and y2 are both
+  # `N(alpha, sigma_obs)` — and synthesis failed with
+  #
+  #     2 REDUCE_SUM marker(s) for 3 observed node(s)
+  #
+  # Inlining makes each scalar term carry its own distinct constant, so nothing
+  # merges, no marker is emitted for it, and obs_spans/1 stops counting it.
+  # Mirrors the host's eager_obs_term/3.
+  defp observed_logp(mod, %Nx.Tensor{shape: {}} = value, _obs, resolved) do
+    mod.logpdf(Nx.backend_copy(value, Nx.BinaryBackend), resolved)
+  end
+
+  defp observed_logp(mod, value, _obs, resolved) when is_number(value) do
+    mod.logpdf(Nx.tensor(value, backend: Nx.BinaryBackend), resolved)
+  end
+
+  defp observed_logp(mod, _value, obs, resolved) do
+    # The observation vector is the `obs` argument (binding-2 SSBO). Nx.sum
+    # collapses the obs axis into a scalar log-likelihood; the emitter rewrites
+    # that sum into the per-tid GLSL reduce loop, the same wire the Custom
+    # likelihood uses.
+    mod.logpdf(obs, resolved) |> Nx.sum()
+  end
+
+  defp scalar_obs?(%Nx.Tensor{shape: {}}), do: true
+  defp scalar_obs?(v) when is_number(v), do: true
+  defp scalar_obs?(_), do: false
 
   # --- Reference resolution ------------------------------------------------
   #
@@ -928,16 +962,32 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
   defp obs_spans(components) do
     observed = Map.get(components, :observed, [])
+    vectors = Enum.reject(observed, fn {_id, _m, _p, value, _meta} -> scalar_obs?(value) end)
 
-    if length(observed) < 2 do
-      :full
-    else
-      observed
-      |> Enum.map_reduce(0, fn {_id, _mod, _params, value, _meta}, off ->
-        cnt = obs_count(value)
-        {{off, cnt}, off + cnt}
-      end)
-      |> elem(0)
+    cond do
+      # Every observation is inlined as a constant, so no REDUCE_SUM marker is
+      # emitted and there is nothing to attribute.
+      vectors == [] ->
+        []
+
+      # A single observed node keeps the runtime bound, so it compiles to the
+      # GLSL it always did and stays reusable across dataset sizes.
+      length(observed) < 2 ->
+        :full
+
+      true ->
+        # Offsets are computed over ALL observed nodes, because that is the
+        # order pack_input_buffer/2 lays the buffer out in — but spans are
+        # emitted only for the vector ones, which are the only nodes that
+        # produce a marker.
+        observed
+        |> Enum.map_reduce(0, fn {_id, _mod, _params, value, _meta}, off ->
+          cnt = obs_count(value)
+          {{value, off, cnt}, off + cnt}
+        end)
+        |> elem(0)
+        |> Enum.reject(fn {value, _off, _cnt} -> scalar_obs?(value) end)
+        |> Enum.map(fn {_value, off, cnt} -> {off, cnt} end)
     end
   end
 

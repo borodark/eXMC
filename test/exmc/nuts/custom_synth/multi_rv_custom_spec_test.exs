@@ -469,7 +469,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         end
 
       fun = MultiRvCustomSpec.compose_logp_defn(Map.put(comps, :ncp_info, ncp))
-      obs = Nx.tensor([3.0], type: :f64)
+      obs = Nx.tensor([4.0, 5.0, 8.0], type: :f64)
       names = Enum.map(pm.entries, & &1.id)
       :rand.seed(:exsss, {9, 9, 9})
 
@@ -551,6 +551,41 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
       assert_raise Exmc.SynthReferenceError, ~r/nonexistent.*not a\s+sampled coordinate/s, fn ->
         MultiRvCustomSpec.compose_logp_defn(comps)
       end
+    end
+
+    test "several scalar observations sharing a parent match the host" do
+      # The 5-parameter hierarchical shape from integration_test. y1 and y2 have
+      # IDENTICAL params — both N(alpha, sigma_obs) — so their expressions are
+      # structurally identical, Nx merges them, and the emitter produced 2
+      # REDUCE_SUM markers for 3 observed nodes. Positional span attribution
+      # then refused the model:
+      #
+      #     2 REDUCE_SUM marker(s) for 3 observed node(s)
+      #
+      # Scalar observations are inlined as distinct constants now, so nothing
+      # merges and no marker is emitted for them.
+      ir =
+        Exmc.Builder.new_ir()
+        |> Exmc.Builder.rv("mu_global", Exmc.Dist.Normal, %{mu: t64(0.0), sigma: t64(10.0)})
+        |> Exmc.Builder.rv("sigma_global", Exmc.Dist.Exponential, %{lambda: t64(1.0)})
+        |> Exmc.Builder.rv("alpha", Exmc.Dist.Normal, %{mu: "mu_global", sigma: "sigma_global"})
+        |> Exmc.Builder.rv("beta", Exmc.Dist.Normal, %{mu: "mu_global", sigma: "sigma_global"})
+        |> Exmc.Builder.rv("sigma_obs", Exmc.Dist.Exponential, %{lambda: t64(2.0)})
+        |> Exmc.Builder.rv("y1", Exmc.Dist.Normal, %{mu: "alpha", sigma: "sigma_obs"})
+        |> Exmc.Builder.obs("y1_obs", "y1", t64(4.0))
+        |> Exmc.Builder.rv("y2", Exmc.Dist.Normal, %{mu: "alpha", sigma: "sigma_obs"})
+        |> Exmc.Builder.obs("y2_obs", "y2", t64(5.0))
+        |> Exmc.Builder.rv("y3", Exmc.Dist.Normal, %{mu: "beta", sigma: "sigma_obs"})
+        |> Exmc.Builder.obs("y3_obs", "y3", t64(8.0))
+
+      assert worst_gap(ir, 100) < 1.0e-12
+      assert {:ok, _glsl} = render_components(ir)
+    end
+
+    defp render_components(ir) do
+      rewritten = Exmc.Rewrite.apply(ir, [])
+      {:ok, comps} = Exmc.NUTS.CustomSynth.extract_components(rewritten)
+      MultiRvCustomSpec.render(Map.put(comps, :ncp_info, rewritten.ncp_info || %{}))
     end
 
     test "layout stays in PointMap order past the 32-key flatmap threshold" do
