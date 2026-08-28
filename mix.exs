@@ -14,7 +14,7 @@ defmodule Exmc.MixProject do
       deps: deps(),
       description:
         "Probabilistic programming for the BEAM. NUTS/HMC, ADVI, SMC, Pathfinder. " <>
-        "Inspired by PyMC. Beats PyMC on 4 of 7 benchmarks.",
+          "Inspired by PyMC. Beats PyMC on 4 of 7 benchmarks.",
       package: package(),
       docs: docs(),
       source_url: @source_url,
@@ -139,34 +139,42 @@ defmodule Exmc.MixProject do
     nx_vulkan_dep(System.get_env("NX_VULKAN_PATH"))
   end
 
-  # LOCAL git server, pinned to a commit — not `branch: "main"`, and not the
-  # public GitHub mirror, which lags it. A branch ref means every `deps.get`
-  # can pull a different backend; a pinned ref makes the dependency a fact and
-  # puts any bump in the diff. Override with NX_VULKAN_GIT/NX_VULKAN_REF.
+  # LOCAL git server, following `main` — not the public GitHub mirror, which
+  # lags it. 192.168.0.249 rather than localhost so the same mix.exs resolves
+  # from the FreeBSD Keplers and the Jetson, which reach the server over the
+  # network.
   #
-  # 192.168.0.249 rather than localhost so the same mix.exs resolves from the
-  # FreeBSD Keplers, which reach the server over the network.
-  # The ref MUST be a sha that exists on the server above — not merely one that
-  # exists in someone's local nx_vulkan checkout. Pinning an unpushed commit
-  # breaks `mix deps.get` for every other host, and the Keplers are the ones
-  # that would find out.
+  # This tracked a pinned sha until 2026-08-28. The argument for the pin was
+  # that a branch lets every `deps.get` pull a different backend — but that is
+  # what `mix.lock` is for. With a branch, the lock still records one concrete
+  # sha, `deps.get` still resolves to it, and only `mix deps.update nx_vulkan`
+  # moves it. What actually changed is where a bump shows up: mix.lock alone,
+  # rather than mix.exs and mix.lock together. Read the lock, not this file,
+  # to learn which backend a given checkout builds against.
   #
-  # This attribute was previously declared with no value, so `ref:` below
-  # resolved to `nil` and the pinning this comment describes was not actually
-  # happening — mix fell back to the lockfile, and a fresh resolve would have
-  # taken whatever the default branch pointed at. The compiler had been saying
-  # so ("undefined module attribute @nx_vulkan_ref") in every build.
+  # To bump: push nx_vulkan to its origin first, then run
+  # `mix deps.update nx_vulkan` here and commit the mix.lock change. The sha
+  # the lock lands on MUST exist on the server above — a lock pointing at an
+  # unpushed commit breaks `mix deps.get` for every other host, and the
+  # Keplers are the ones that would find out.
   #
-  # To bump: push nx_vulkan to origin first, then set this to the new sha and
-  # run `mix deps.update nx_vulkan` so mix.lock moves with it.
+  # NX_VULKAN_REF still overrides, for bisecting a backend regression without
+  # editing this file:
+  #
+  #     NX_VULKAN_REF=<sha> mix deps.get
   @nx_vulkan_git "git@192.168.0.249:/home/git/repos/nx_vulkan.git"
-  @nx_vulkan_ref "a25432f07efe66f9df2f17c1ed2cf2fd5b8bbebc"
+  @nx_vulkan_branch "main"
 
   defp nx_vulkan_dep(nil) do
-    {:nx_vulkan,
-     git: System.get_env("NX_VULKAN_GIT", @nx_vulkan_git),
-     ref: System.get_env("NX_VULKAN_REF", @nx_vulkan_ref),
-     optional: true}
+    base = [git: System.get_env("NX_VULKAN_GIT", @nx_vulkan_git), optional: true]
+
+    pin =
+      case System.get_env("NX_VULKAN_REF") do
+        nil -> [branch: @nx_vulkan_branch]
+        ref -> [ref: ref]
+      end
+
+    {:nx_vulkan, base ++ pin}
   end
 
   defp nx_vulkan_dep(path),
