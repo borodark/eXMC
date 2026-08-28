@@ -1,19 +1,19 @@
 defmodule Exmc.NUTS.Vulkan.ServerTest do
   use ExUnit.Case, async: false
 
+  import Exmc.TestHelper, only: [put_env_scoped: 2]
+
   alias Exmc.{Builder, Dist, NUTS.Sampler}
 
   @moduletag :vulkan
 
   setup_all do
-    Application.put_env(:exmc, :compiler, :vulkan)
-    on_exit(fn -> Application.delete_env(:exmc, :compiler) end)
+    put_env_scoped(:compiler, :vulkan)
     :ok
   end
 
   setup do
-    Application.put_env(:exmc, :gpu_node, false)
-    on_exit(fn -> Application.delete_env(:exmc, :gpu_node) end)
+    put_env_scoped(:gpu_node, false)
 
     case Process.whereis(Nx.Vulkan.Node) do
       nil -> :ok
@@ -41,12 +41,12 @@ defmodule Exmc.NUTS.Vulkan.ServerTest do
 
     Process.put(:fused_leapfrog_meta, {:normal, 0.0, 1.0})
 
-    Application.put_env(:exmc, :gpu_node, false)
+    put_env_scoped(:gpu_node, false)
     {trace_direct, _} = Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 200, seed: 42)
     xs_direct = trace_direct["x"] |> Nx.to_flat_list()
 
     {:ok, _pid} = Nx.Vulkan.Node.start_link()
-    Application.put_env(:exmc, :gpu_node, true)
+    put_env_scoped(:gpu_node, true)
     {trace_server, _} = Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 200, seed: 42)
     xs_server = trace_server["x"] |> Nx.to_flat_list()
 
@@ -71,7 +71,7 @@ defmodule Exmc.NUTS.Vulkan.ServerTest do
 
   test "GenServer dispatches Exponential, StudentT, HalfNormal, Weibull (smoke)" do
     {:ok, _pid} = Nx.Vulkan.Node.start_link()
-    Application.put_env(:exmc, :gpu_node, true)
+    put_env_scoped(:gpu_node, true)
 
     cases = [
       {Builder.new_ir() |> Builder.rv("x", Dist.Exponential, %{lambda: Nx.tensor(2.0)}),

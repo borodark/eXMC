@@ -5,21 +5,23 @@ defmodule Exmc.NUTS.Vulkan.BulkheadTest do
 
   use ExUnit.Case, async: false
 
+  import Exmc.TestHelper,
+    only: [put_env_scoped: 2, put_env_scoped: 3, delete_env_scoped: 1]
+
   alias Exmc.{Builder, Dist, NUTS.Sampler}
 
   @moduletag :vulkan
 
   setup do
-    Application.put_env(:exmc, :compiler, :vulkan)
-    on_exit(fn -> Application.delete_env(:exmc, :compiler) end)
+    put_env_scoped(:compiler, :vulkan)
 
     case Process.whereis(Nx.Vulkan.Node) do
       nil -> :ok
       pid -> GenServer.stop(pid, :normal)
     end
 
-    Application.delete_env(:exmc, :gpu_node)
-    Application.delete_env(:exmc, :gpu_node_timeout_ms)
+    delete_env_scoped(:gpu_node)
+    delete_env_scoped(:gpu_node_timeout_ms)
     :ok
   end
 
@@ -29,7 +31,7 @@ defmodule Exmc.NUTS.Vulkan.BulkheadTest do
       _ -> :ok
     end
 
-    Application.put_env(:nx_vulkan, :node_timeout_ms, 1)
+    put_env_scoped(:nx_vulkan, :node_timeout_ms, 1)
 
     result =
       Nx.Vulkan.Node.with_node(fn ->
@@ -38,8 +40,6 @@ defmodule Exmc.NUTS.Vulkan.BulkheadTest do
       end)
 
     assert result == {:error, :node_timeout}
-  after
-    Application.delete_env(:nx_vulkan, :node_timeout_ms)
   end
 
   test "node dead returns {:error, :node_dead}" do
@@ -58,8 +58,8 @@ defmodule Exmc.NUTS.Vulkan.BulkheadTest do
       _ -> :ok
     end
 
-    Application.put_env(:exmc, :gpu_node, true)
-    Application.put_env(:exmc, :gpu_node_timeout_ms, 1)
+    put_env_scoped(:gpu_node, true)
+    put_env_scoped(:gpu_node_timeout_ms, 1)
 
     ir =
       Builder.new_ir()

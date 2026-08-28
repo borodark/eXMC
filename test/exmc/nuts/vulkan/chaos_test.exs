@@ -18,6 +18,8 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
 
   use ExUnit.Case, async: false
 
+  import Exmc.TestHelper, only: [put_env_scoped: 2, put_env_scoped: 3]
+
   alias Exmc.{Builder, Dist, NUTS.Sampler}
   alias Exmc.NUTS.Vulkan.SuspectTracker
 
@@ -25,13 +27,9 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
   @moduletag :requires_vulkan
 
   setup do
-    Application.put_env(:exmc, :compiler, :vulkan)
+    put_env_scoped(:compiler, :vulkan)
 
     on_exit(fn ->
-      Application.delete_env(:exmc, :compiler)
-      Application.delete_env(:exmc, :gpu_node)
-      Application.delete_env(:nx_vulkan, :node_timeout_ms)
-
       for name <- [Nx.Vulkan.Node, SuspectTracker] do
         case Process.whereis(name) do
           nil -> :ok
@@ -151,8 +149,8 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
   describe "tree.ex route_chain integration" do
     @tag :skip
     test "after a timeout-storm, route_chain falls back to EXLA without calling Nx.Vulkan.Node" do
-      Application.put_env(:exmc, :gpu_node, true)
-      Application.put_env(:nx_vulkan, :node_timeout_ms, 1)
+      put_env_scoped(:gpu_node, true)
+      put_env_scoped(:nx_vulkan, :node_timeout_ms, 1)
 
       meta = {:normal, 0.0, 1.0}
 
