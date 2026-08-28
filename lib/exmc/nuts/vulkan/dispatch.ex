@@ -197,6 +197,14 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
 
   One `vkQueueSubmit` call regardless of N — that's the entire point of
   batching. Dispatch overhead amortizes across N independent inferences.
+
+  ## Requires an f64 batch NIF that does not exist yet
+
+  This function needs `Nx.Vulkan.NativeV.leapfrog_chain_synth_batch_f64/6`
+  and raises without it — see `ensure_batch_nif!/0`. Every caller must
+  therefore be prepared for a raise; `BatchCoordinator` converts it to
+  `{:fallback, {:dispatch_raise, _}}` so sampling continues, unbatched,
+  down the single-instance path.
   """
   def chain_batch(
         {:synthesised, _sha, _layout, push_spec, spv_path, _empty_obs},
@@ -206,6 +214,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
         epsilon \\ nil
       )
       when is_list(instances) and length(instances) > 0 do
+    ensure_batch_nif!()
     record_dispatch!()
     n_instances = length(instances)
     [{q0, _, _, _} | _] = instances
@@ -248,15 +257,19 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
         {qa <> q_b, pa <> p_b, ea <> obs_b <> inv_mass_b}
       end)
 
+    # `apply/3` rather than a direct call: the function does not exist, so a
+    # literal call is a compile-time warning that has been ignored on every
+    # build, and dialyzer reports it as a call to a missing function. This
+    # form starts working the day the NIF lands, with no edit here.
     {:ok, {q_chain_bin, p_chain_bin, grad_chain_bin, logp_chain_bin}} =
-      Nx.Vulkan.NativeV.leapfrog_chain_synth_batch_f64(
+      apply(Nx.Vulkan.NativeV, :leapfrog_chain_synth_batch_f64, [
         q_bin,
         p_bin,
         extras_bin,
         push,
         k,
         spv_path
-      )
+      ])
 
     # Unpack per-instance slices
     chain_bytes_per_instance = k * d * 8
@@ -273,6 +286,42 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
         binary_part(logp_chain_bin, i * logp_bytes_per_instance, logp_bytes_per_instance)
 
       bins_to_chain_tensors({q_slice, p_slice, grad_slice, logp_slice}, k, d, :f64)
+    end
+  end
+
+  # `leapfrog_chain_synth_batch_f64/6` has never existed. Not at the pinned
+  # ref in mix.lock, and not at nx_vulkan HEAD — checked 2026-08-28, 78
+  # commits ahead of the pin. The dep exports exactly three chain NIFs:
+  #
+  #     leapfrog_chain_synth/6        f32, single instance
+  #     leapfrog_chain_synth_f64/6    f64, single instance — the live path
+  #     leapfrog_chain_synth_batch/6  f32, batched
+  #
+  # The f32 batch NIF is not a substitute. It writes f32 chains
+  # (`n_instances * K * d * 4` bytes) while everything in `chain_batch` packs
+  # and slices f64 at 8 bytes per element, so routing to it would return
+  # numerically plausible garbage — the one outcome worse than this raise.
+  #
+  # Until then `chain_batch/5` cannot run, and says so here rather than
+  # surfacing as a bare UndefinedFunctionError inside a rescue that reports
+  # it as a generic dispatch failure.
+  defp ensure_batch_nif! do
+    mod = Nx.Vulkan.NativeV
+
+    unless Code.ensure_loaded?(mod) and
+             function_exported?(mod, :leapfrog_chain_synth_batch_f64, 6) do
+      raise """
+      Batched chain dispatch is unavailable: \
+      Nx.Vulkan.NativeV.leapfrog_chain_synth_batch_f64/6 is not exported.
+
+      nx_vulkan provides an f32 batch NIF (leapfrog_chain_synth_batch/6) and \
+      an f64 single-instance NIF (leapfrog_chain_synth_f64/6), but no f64 \
+      batched variant. The f32 one is not interchangeable — chain_batch/5 \
+      packs and unpacks f64.
+
+      Sampling is unaffected: callers fall back to single-instance dispatch, \
+      which loses the one-vkQueueSubmit-per-batch win but not correctness.
+      """
     end
   end
 
