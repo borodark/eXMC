@@ -328,11 +328,25 @@ defmodule Exmc.NUTS.Sampler do
 
   # Run sampling with pre-computed tuning (no warmup).
   defp sample_from_compiled_tuned(compiled, tuning, init_values, opts) do
-    {vag_fn, step_fn, pm, ncp_info, multi_step_fn} =
+    # chain_meta was DROPPED here until 2026-08-30. Tree reads it from
+    # `Process.get(:exmc_chain_meta)` (tree.ex:699) and falls back to per-op
+    # dispatch when it is absent, so this path never reached the fused chain
+    # shader. Its only callers are distributed.ex:189 (run_chain_local) and
+    # :198 (run_chain_remote) -- so the shader was disabled precisely on the
+    # gpu_node workers it exists for, and on the coordinator's fallback.
+    #
+    # Measured on super-io under Vulkan, same model, same 400 draws:
+    #
+    #   sample_compiled         249 ms,   508 chain dispatches
+    #   sample_compiled_tuned  3209 ms,     0 chain dispatches
+    #
+    # 12.9x, and unlike the vectorized case (237c0c3f8) there is no
+    # shared-warmup difference to account for any of it -- identical work.
+    {vag_fn, step_fn, pm, ncp_info, multi_step_fn, chain_meta} =
       case compiled do
-        {v, s, p, n, m, _chain_meta} -> {v, s, p, n, m}
-        {v, s, p, n, m} -> {v, s, p, n, m}
-        {v, s, p, n} -> {v, s, p, n, nil}
+        {v, s, p, n, m, cm} -> {v, s, p, n, m, cm}
+        {v, s, p, n, m} -> {v, s, p, n, m, nil}
+        {v, s, p, n} -> {v, s, p, n, nil, nil}
       end
 
     opts = Keyword.merge(@default_opts, opts)
@@ -358,50 +372,59 @@ defmodule Exmc.NUTS.Sampler do
 
       {empty_trace, stats}
     else
-      rng = :rand.seed_s(:exsss, seed)
-      d = pm.size
-      use_dense = chol_cov != nil
+      # try/after, not the delete-on-success that sample_from_compiled/3 uses:
+      # a raise mid-sampling there leaves the key set for whatever the process
+      # runs next. On a gpu_node worker that process is reused across chains.
+      if chain_meta, do: Process.put(:exmc_chain_meta, chain_meta)
 
-      {q, rng} = init_position(pm, init_values, d, rng, ncp_info)
-      {logp, grad} = vag_fn.(q)
-      logp = Nx.backend_copy(logp, Nx.BinaryBackend)
-      grad = Nx.backend_copy(grad, Nx.BinaryBackend)
+      try do
+        rng = :rand.seed_s(:exsss, seed)
+        d = pm.size
+        use_dense = chol_cov != nil
 
-      active_step_fn = if use_dense, do: build_generic_step_fn(vag_fn), else: step_fn
-      active_multi = if use_dense, do: nil, else: multi_step_fn
+        {q, rng} = init_position(pm, init_values, d, rng, ncp_info)
+        {logp, grad} = vag_fn.(q)
+        logp = Nx.backend_copy(logp, Nx.BinaryBackend)
+        grad = Nx.backend_copy(grad, Nx.BinaryBackend)
 
-      state = %{q: q, logp: logp, grad: grad, rng: rng, divergences: 0}
+        active_step_fn = if use_dense, do: build_generic_step_fn(vag_fn), else: step_fn
+        active_multi = if use_dense, do: nil, else: multi_step_fn
 
-      {draws, sample_stats, state} =
-        run_sampling(
-          active_step_fn,
-          state,
-          epsilon,
-          inv_mass,
-          num_samples,
-          max_tree_depth,
-          chol_cov,
-          active_multi
-        )
+        state = %{q: q, logp: logp, grad: grad, rng: rng, divergences: 0}
 
-      trace = build_trace(draws, pm, ncp_info)
+        {draws, sample_stats, state} =
+          run_sampling(
+            active_step_fn,
+            state,
+            epsilon,
+            inv_mass,
+            num_samples,
+            max_tree_depth,
+            chol_cov,
+            active_multi
+          )
 
-      inv_mass_diag_out =
-        case Nx.rank(inv_mass) do
-          1 -> inv_mass
-          2 -> Nx.take_diagonal(inv_mass)
-        end
+        trace = build_trace(draws, pm, ncp_info)
 
-      stats = %{
-        step_size: epsilon,
-        inv_mass_diag: inv_mass_diag_out,
-        divergences: state.divergences,
-        num_warmup: 0,
-        num_samples: num_samples,
-        sample_stats: sample_stats
-      }
+        inv_mass_diag_out =
+          case Nx.rank(inv_mass) do
+            1 -> inv_mass
+            2 -> Nx.take_diagonal(inv_mass)
+          end
 
-      {trace, stats}
+        stats = %{
+          step_size: epsilon,
+          inv_mass_diag: inv_mass_diag_out,
+          divergences: state.divergences,
+          num_warmup: 0,
+          num_samples: num_samples,
+          sample_stats: sample_stats
+        }
+
+        {trace, stats}
+      after
+        Process.delete(:exmc_chain_meta)
+      end
     end
   end
 
@@ -1330,29 +1353,46 @@ defmodule Exmc.NUTS.Sampler do
     stream_from_compiled(compiled, receiver_pid, init_values, opts)
   end
 
+  # Until 2026-08-30 this dropped BOTH multi_step_fn and chain_meta at the
+  # clause head, so `sample_stream/4` ran every leapfrog step per-op: no
+  # K-step multi-step function, and no fused chain shader, because Tree reads
+  # the meta from `Process.get(:exmc_chain_meta)` (tree.ex:699).
+  #
+  # It also had 5-tuple and 4-tuple clauses that could not be reached --
+  # `sample_stream/4` is the only caller and always passes what
+  # `Compiler.compile_for_sampling/2` returns, which is a 6-tuple. The
+  # compiler had been warning "this clause of defp stream_from_compiled/4 is
+  # never used" about both. Removed rather than carried.
   defp stream_from_compiled(
-         {vag_fn, step_fn, pm, ncp_info, _multi_step_fn, _chain_meta},
+         {vag_fn, step_fn, pm, ncp_info, multi_step_fn, chain_meta},
          receiver_pid,
          init_values,
          opts
        ) do
-    stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts)
+    stream_from_compiled_impl(
+      vag_fn,
+      step_fn,
+      pm,
+      ncp_info,
+      multi_step_fn,
+      chain_meta,
+      receiver_pid,
+      init_values,
+      opts
+    )
   end
 
-  defp stream_from_compiled(
-         {vag_fn, step_fn, pm, ncp_info, _multi_step_fn},
+  defp stream_from_compiled_impl(
+         vag_fn,
+         step_fn,
+         pm,
+         ncp_info,
+         multi_step_fn,
+         chain_meta,
          receiver_pid,
          init_values,
          opts
        ) do
-    stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts)
-  end
-
-  defp stream_from_compiled({vag_fn, step_fn, pm, ncp_info}, receiver_pid, init_values, opts) do
-    stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts)
-  end
-
-  defp stream_from_compiled_impl(vag_fn, step_fn, pm, ncp_info, receiver_pid, init_values, opts) do
     opts = Keyword.merge(@default_opts, opts)
     num_warmup = opts[:num_warmup]
     num_samples = opts[:num_samples]
@@ -1374,6 +1414,9 @@ defmodule Exmc.NUTS.Sampler do
       grad = Nx.backend_copy(grad, Nx.BinaryBackend)
       inv_mass_diag = Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
       active_step_fn = if use_dense, do: build_generic_step_fn(vag_fn), else: step_fn
+      active_multi = if use_dense, do: nil, else: multi_step_fn
+
+      if chain_meta, do: Process.put(:exmc_chain_meta, chain_meta)
 
       {epsilon, rng} =
         find_reasonable_epsilon_with_rng(active_step_fn, q, logp, grad, inv_mass_diag, rng)
@@ -1398,13 +1441,30 @@ defmodule Exmc.NUTS.Sampler do
           max_tree_depth,
           target_accept,
           use_dense,
-          nil
+          active_multi
         )
+
+      # Same inv_mass flat-list cache run_sampling/8 keeps, for momentum
+      # sampling and U-turn checks.
+      inv_mass_list =
+        case Nx.rank(inv_mass) do
+          1 -> Nx.to_flat_list(inv_mass)
+          2 -> nil
+        end
 
       # Sampling phase: send each sample to receiver
       Enum.reduce(1..num_samples, state, fn i, state ->
         {state, accept_stat, step_info} =
-          nuts_step_with_stats(active_step_fn, state, epsilon, inv_mass, chol_cov, max_tree_depth)
+          nuts_step_with_stats(
+            active_step_fn,
+            state,
+            epsilon,
+            inv_mass,
+            chol_cov,
+            max_tree_depth,
+            inv_mass_list,
+            active_multi
+          )
 
         # Build constrained point map for this step
         unconstrained = PointMap.unpack(state.q, pm)
@@ -1427,6 +1487,10 @@ defmodule Exmc.NUTS.Sampler do
       send(receiver_pid, {:exmc_done, num_samples})
       :ok
     end
+  after
+    # The put above is process-global; a streaming run must not leave it set
+    # for whatever this process does next.
+    Process.delete(:exmc_chain_meta)
   end
 
   # --- Trace building ---
