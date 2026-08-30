@@ -120,4 +120,63 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinatorTest do
       assert Process.alive?(coord)
     end
   end
+
+  describe "request_chain/8 — the older dispatch site" do
+    # Regression for D3. There are TWO dispatch sites: do_chain_flush_group
+    # (covered above) rescued, do_flush_group did not. A raise there killed
+    # the coordinator and every other caller blocked on it, turning a draw
+    # that should have degraded to unbatched into an exit in the sampler.
+    #
+    # This path dispatches with the meta given to start_link, not a
+    # per-request one, so the coord is started with @dispatchable_meta to get
+    # past the prior walk and reach the missing-NIF raise.
+    setup do
+      {:ok, coord} = BatchCoordinator.start_link(@dispatchable_meta, 4, flush_ms: 50)
+      on_exit(fn -> if Process.alive?(coord), do: GenServer.stop(coord) end)
+      %{coord: coord}
+    end
+
+    test "a raising dispatch replies :fallback and leaves the coord alive", %{coord: coord} do
+      q = Nx.tensor([0.0, 0.0], type: :f32, backend: Nx.BinaryBackend)
+      p = Nx.tensor([0.1, -0.1], type: :f32, backend: Nx.BinaryBackend)
+      im = Nx.tensor([1.0, 1.0], type: :f32, backend: Nx.BinaryBackend)
+      obs = Nx.tensor([0.0, 0.0, 0.0, 0.0], type: :f32, backend: Nx.BinaryBackend)
+
+      # One request, under batch_size — flushed by the 50 ms timer.
+      result = BatchCoordinator.request_chain(coord, q, p, im, obs, 0.05, 4)
+
+      assert {:fallback, {:dispatch_raise, msg}} = result
+      assert msg =~ "leapfrog_chain_synth_batch_f64/6"
+      assert Process.alive?(coord)
+    end
+
+    test "every caller in a flushed batch is replied to, not just the first", %{coord: coord} do
+      # The pre-fix code zipped queue against results with no length check.
+      # Even with the rescue in place, a short result list would truncate the
+      # zip and leave the unmatched callers blocked until their call timeout
+      # — a hang, not an error. Four concurrent requests fill batch_size and
+      # flush immediately; all four must come back.
+      q = Nx.tensor([0.0, 0.0], type: :f32, backend: Nx.BinaryBackend)
+      p = Nx.tensor([0.1, -0.1], type: :f32, backend: Nx.BinaryBackend)
+      im = Nx.tensor([1.0, 1.0], type: :f32, backend: Nx.BinaryBackend)
+      obs = Nx.tensor([0.0, 0.0, 0.0, 0.0], type: :f32, backend: Nx.BinaryBackend)
+
+      results =
+        1..4
+        |> Task.async_stream(
+          fn _ -> BatchCoordinator.request_chain(coord, q, p, im, obs, 0.05, 4, 5_000) end,
+          max_concurrency: 4,
+          timeout: 10_000
+        )
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      assert length(results) == 4
+
+      Enum.each(results, fn r ->
+        assert {:fallback, {:dispatch_raise, _}} = r
+      end)
+
+      assert Process.alive?(coord)
+    end
+  end
 end

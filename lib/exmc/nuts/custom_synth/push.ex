@@ -157,54 +157,67 @@ defmodule Exmc.NUTS.CustomSynth.Push do
     """
   end
 
-  # Extract scalar parameter floats per distribution module.
-  defp prior_param_floats({_id, Exmc.Dist.Normal, params}) do
+  @doc """
+  Extract the scalar parameter floats a prior contributes to the push block.
+
+  Public because the batched path (`Exmc.NUTS.Vulkan.Dispatch.chain_batch/5`)
+  builds its own push header and must encode priors identically. It kept a
+  private copy until 2026-08-29; the copy had 5 of these 12 clauses and a
+  `scalar/2` that handled only numbers and scalar tensors, so a model that
+  sampled fine unbatched raised the moment batching turned on. One encoder,
+  or the two layouts drift again.
+
+  Raises for a distribution with no clause — a missing encoder must not
+  silently pack a short push block.
+  """
+  @spec prior_param_floats(prior()) :: [float()]
+  def prior_param_floats({_id, Exmc.Dist.Normal, params}) do
     [scalar(params, :mu), scalar(params, :sigma)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.HalfCauchy, params}) do
+  def prior_param_floats({_id, Exmc.Dist.HalfCauchy, params}) do
     [scalar(params, :scale)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.HalfNormal, params}) do
+  def prior_param_floats({_id, Exmc.Dist.HalfNormal, params}) do
     [scalar(params, :sigma)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.Exponential, params}) do
+  def prior_param_floats({_id, Exmc.Dist.Exponential, params}) do
     [scalar(params, :lambda)]
   end
 
   # Surface A: single-family models routed through synth under f64
   # default now include the three that were spirit-only pre-Option-B.
-  defp prior_param_floats({_id, Exmc.Dist.StudentT, params}) do
+  def prior_param_floats({_id, Exmc.Dist.StudentT, params}) do
     [scalar(params, :df), scalar(params, :loc), scalar(params, :scale)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.Cauchy, params}) do
+  def prior_param_floats({_id, Exmc.Dist.Cauchy, params}) do
     [scalar(params, :loc), scalar(params, :scale)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.Weibull, params}) do
+  def prior_param_floats({_id, Exmc.Dist.Weibull, params}) do
     [scalar(params, :k), scalar(params, :lambda)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.Lognormal, params}) do
+  def prior_param_floats({_id, Exmc.Dist.Lognormal, params}) do
     [scalar(params, :mu), scalar(params, :sigma)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.TruncatedNormal, params}) do
+  def prior_param_floats({_id, Exmc.Dist.TruncatedNormal, params}) do
     [scalar(params, :mu), scalar(params, :sigma), scalar(params, :lower), scalar(params, :upper)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.Gamma, params}) do
+  def prior_param_floats({_id, Exmc.Dist.Gamma, params}) do
     [scalar(params, :alpha), scalar(params, :beta)]
   end
 
-  defp prior_param_floats({_id, Exmc.Dist.Beta, params}) do
+  def prior_param_floats({_id, Exmc.Dist.Beta, params}) do
     [scalar(params, :alpha), scalar(params, :beta)]
   end
 
-  defp prior_param_floats({id, mod, _params}) do
+  def prior_param_floats({id, mod, _params}) do
     raise "Push.prior_param_floats/1 has no encoder for prior #{id} (#{inspect(mod)}). " <>
             "Add a clause matching the distribution + the scalar fields it requires."
   end

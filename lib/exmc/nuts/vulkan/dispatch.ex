@@ -32,6 +32,8 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   and the spirit (C++) backend have been removed.
   """
 
+  alias Exmc.NUTS.CustomSynth.Push
+
   @dispatch_count_key :exmc_chain_dispatches
 
   @doc """
@@ -239,7 +241,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
 
     prior_bin =
       push_spec.priors
-      |> Enum.flat_map(&prior_param_floats/1)
+      |> Enum.flat_map(&Push.prior_param_floats/1)
       |> Enum.reduce(<<>>, fn f, acc ->
         acc <> <<f * 1.0::little-float-64>>
       end)
@@ -322,30 +324,6 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
       Sampling is unaffected: callers fall back to single-instance dispatch, \
       which loses the one-vkQueueSubmit-per-batch win but not correctness.
       """
-    end
-  end
-
-  # Mirrors Push.prior_param_floats/1 (kept private there). Walking
-  # priors here keeps chain_batch self-contained.
-  defp prior_param_floats({_id, Exmc.Dist.Normal, params}),
-    do: [scalar(params, :mu), scalar(params, :sigma)]
-
-  defp prior_param_floats({_id, Exmc.Dist.HalfCauchy, params}),
-    do: [scalar(params, :scale)]
-
-  defp prior_param_floats({_id, Exmc.Dist.HalfNormal, params}),
-    do: [scalar(params, :sigma)]
-
-  defp prior_param_floats({_id, Exmc.Dist.Exponential, params}),
-    do: [scalar(params, :lambda)]
-
-  defp prior_param_floats({id, mod, _}),
-    do: raise("chain_batch: no prior_param_floats clause for #{id} (#{inspect(mod)})")
-
-  defp scalar(params, key) do
-    case Map.fetch!(params, key) do
-      v when is_number(v) -> v * 1.0
-      %Nx.Tensor{} = t -> Nx.to_number(t) * 1.0
     end
   end
 

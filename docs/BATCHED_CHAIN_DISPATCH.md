@@ -96,7 +96,7 @@ Recommendation: Option 1 now, Option 2 recorded as the real fix.
 
 These are `exmc`'s in both options, and three of them are silent.
 
-### D1 — a second push encoder, with fewer distributions
+### D1 — a second push encoder, with fewer distributions — FIXED 2026-08-29
 
 `Push.prior_param_floats/1` has **12** clauses. `dispatch.ex` hand-rolls a
 private copy with **5**, and raises for anything else:
@@ -109,6 +109,23 @@ path. A model that samples fine unbatched raises the moment batching turns on.
 
 Fix: make `Push.prior_param_floats/1` public and delete the copy. One source of
 truth for the push layout.
+
+**Done.** `Push.prior_param_floats/1` is public with a `@spec`; `dispatch.ex`
+aliases `Push` and calls it; the 5-clause copy and its private `scalar/2` are
+gone.
+
+The gap was wider than the clause count suggested. The copy's `scalar/2`
+handled only `is_number` and `%Nx.Tensor{}`-via-`Nx.to_number`, while
+`Push.scalar/2` also handles:
+
+  * a **hierarchical** parameter, where the value is the NAME of another RV
+    (an atom or binary) rather than a constant — the copy raised
+    `CaseClauseError` on these;
+  * a **vectorized** prior param of shape `{d}` — the copy handed it to
+    `Nx.to_number/1`, which raises for a non-scalar tensor.
+
+So batching did not merely support fewer distributions; it also broke on
+hierarchical and vectorized models that the unbatched path packs correctly.
 
 ### D2 — the batched push has no 128-byte cap
 
@@ -125,7 +142,7 @@ check and the pack are different code paths.
 Fix: route the batched push through `Push.pack/1` too, or give it the same
 guard and error.
 
-### D3 — one dispatch site rescues, the other does not
+### D3 — one dispatch site rescues, the other does not — FIXED 2026-08-29
 
 `batch_coordinator.ex:428` (`request_synth_chain`, the path `tree.ex` uses)
 wraps `Dispatch.chain_batch` in `try/rescue` and replies `{:fallback, reason}`.
@@ -134,6 +151,31 @@ does not. A raise there kills the coordinator GenServer, and every caller
 waiting on it, instead of falling back.
 
 Fix: same `try/rescue` at both sites.
+
+**Done.** `do_flush_group` now mirrors `do_chain_flush_group` exactly: the
+dispatch runs under `try/rescue`, a raise replies `{:fallback,
+{:dispatch_raise, msg}}` to every queued caller and returns `:crashed`, and the
+result is then matched three ways.
+
+The third clause fixes a second, quieter defect found while mirroring: the old
+code piped `queue |> Enum.zip(results)`, and `Enum.zip/2` truncates to the
+shorter list. A short result list would have left the unmatched callers with no
+reply at all — blocked until their `GenServer.call` timeout. That is a hang
+rather than an error, and it would have been read as a slow GPU. Both sites now
+reply `{:fallback, {:bad_result_shape, other}}` instead.
+
+Covered by `BatchCoordinatorTest`, describe block "request_chain/8 — the older
+dispatch site": one test for the rescue, one that fires four concurrent
+requests and asserts all four are replied to. Both were run against the
+pre-fix file first and fail there with `** (EXIT from ...)`, so they are
+known to detect the defect rather than merely to pass.
+
+**Still open at both sites:** `rescue` catches exceptions, not exits. An
+`exit` out of the GPU scheduler kills the coordinator exactly as before.
+`do_chain_flush_group` has always had this gap; D3 mirrors it rather than
+silently changing it. Closing it means `catch :exit, reason ->` at both
+sites, and is a separate decision — an exiting scheduler task may be a
+condition the coord *should* die on.
 
 ### D4 — activation was never wired
 
@@ -170,9 +212,11 @@ proves nothing on its own.
 
 ## Order
 
-1. D3 and D1 — small, independent of the NIF, and D1 removes a silent
-   capability gap. Do these first regardless of what happens with batching.
-2. D2 — same, slightly more thought.
+1. ~~D3 and D1~~ — **done 2026-08-29.**
+2. D2 — next. Still open, and note that routing the prior floats through
+   `Push.prior_param_floats/1` did NOT bring the 128-byte cap with it:
+   `chain_batch` builds its own header and never calls `Push.pack/1`, so an
+   oversized block still reaches the NIF as a bare `MatchError`.
 3. nx_vulkan NIF (Option 1), pushed to its origin, then `mix deps.update
    nx_vulkan` here.
 4. Verification 1–4 locally, then D4 (the activation decision), then 5–6.

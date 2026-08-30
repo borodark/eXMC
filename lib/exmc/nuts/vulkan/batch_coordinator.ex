@@ -317,40 +317,80 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
     t0 = :erlang.monotonic_time(:microsecond)
 
     results =
-      if state.use_gpu_scheduler do
-        scheduler().run(fn _device -> dispatch.() end)
-      else
-        dispatch.()
+      try do
+        if state.use_gpu_scheduler do
+          scheduler().run(fn _device -> dispatch.() end)
+        else
+          dispatch.()
+        end
+      rescue
+        e ->
+          # Dispatch crashed — reply :fallback to every caller so they
+          # retry unbatched. The coord process itself survives.
+          #
+          # Without this the raise propagated out of the flush — reached
+          # from handle_call on a size flush and handle_info on a timer
+          # flush — and killed the coordinator, taking every other
+          # in-flight caller's reply with it: a GenServer.call that should
+          # have degraded to a slower unbatched draw became an exit in the
+          # sampler instead.
+          #
+          # `rescue` catches exceptions only. An `exit` out of the GPU
+          # scheduler still kills the coord; do_chain_flush_group has the
+          # same gap, and closing it is a separate decision at both sites.
+          reason = {:dispatch_raise, Exception.message(e)}
+
+          Enum.each(queue, fn {from, _, _, _, _, _, _} ->
+            GenServer.reply(from, {:fallback, reason})
+          end)
+
+          :crashed
       end
 
     dispatch_us = :erlang.monotonic_time(:microsecond) - t0
 
-    # USDT probe — dispatch latency. Quantizable in DTrace for
-    # per-instance and tail-latency views.
-    Exmc.Dyntrace.p(
-      n_instances,
-      k0,
-      dispatch_us,
-      0,
-      "vk_dispatch",
-      "",
-      "",
-      ""
-    )
+    case results do
+      :crashed ->
+        state
 
-    queue
-    |> Enum.zip(results)
-    |> Enum.each(fn {{from, _, _, _, _, _, _}, result} ->
-      GenServer.reply(from, result)
-    end)
+      results when is_list(results) and length(results) == n_instances ->
+        # USDT probe — dispatch latency. Quantizable in DTrace for
+        # per-instance and tail-latency views.
+        Exmc.Dyntrace.p(
+          n_instances,
+          k0,
+          dispatch_us,
+          0,
+          "vk_dispatch",
+          "",
+          "",
+          ""
+        )
 
-    %{
-      state
-      | stats: %{
-          batches_fired: state.stats.batches_fired + 1,
-          requests_served: state.stats.requests_served + n_instances
+        queue
+        |> Enum.zip(results)
+        |> Enum.each(fn {{from, _, _, _, _, _, _}, result} ->
+          GenServer.reply(from, result)
+        end)
+
+        %{
+          state
+          | stats: %{
+              batches_fired: state.stats.batches_fired + 1,
+              requests_served: state.stats.requests_served + n_instances
+            }
         }
-    }
+
+      other ->
+        # Unexpected return shape — reply :fallback to every caller rather
+        # than let Enum.zip/2 truncate silently and leave the unmatched
+        # callers blocked until their call timeout.
+        Enum.each(queue, fn {from, _, _, _, _, _, _} ->
+          GenServer.reply(from, {:fallback, {:bad_result_shape, other}})
+        end)
+
+        state
+    end
   end
 
   # ===== Task #171 Step 2: chain-shader dispatch path =====
