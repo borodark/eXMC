@@ -246,7 +246,11 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
         acc <> <<f * 1.0::little-float-64>>
       end)
 
-    push = header <> prior_bin
+    # D2: the batched header is not Push.pack/1's, so the 128-byte cap has to
+    # be applied explicitly. Raising is what the coordinator's try/rescue turns
+    # into {:fallback, _}; without it an oversized block reached the NIF and
+    # came back as a MatchError on {:error, :bad_input} naming nothing.
+    push = Push.ensure_fits!(header <> prior_bin, "chain_batch/5")
 
     # Pack inputs: instance-contiguous layout (f64)
     {q_bin, p_bin, extras_bin} =

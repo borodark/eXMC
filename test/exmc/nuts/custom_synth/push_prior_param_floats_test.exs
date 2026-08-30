@@ -89,4 +89,54 @@ defmodule Exmc.NUTS.CustomSynth.PushPriorParamFloatsTest do
       assert Push.prior_param_floats({"x", Exmc.Dist.HalfNormal, %{sigma: t}}) == [1.5]
     end
   end
+
+  describe "ensure_fits!/2 — the batched path's 128-byte cap (D2)" do
+    # chain_batch/5 builds its own header so it cannot go through pack/1, and
+    # had no size check at all: an oversized block reached the NIF, came back
+    # {:error, :bad_input}, and failed the {:ok, {...}} = match as a MatchError
+    # naming nothing.
+    #
+    # Tested here rather than through chain_batch/5 because that function calls
+    # ensure_batch_nif!/0 first, and the f64 batch NIF does not exist -- the
+    # pack is unreachable through it. Same reason as prior_param_floats above.
+
+    test "a block at the budget passes through unchanged" do
+      bin = :binary.copy(<<0>>, Push.max_bytes())
+      assert Push.ensure_fits!(bin, "test") == bin
+    end
+
+    test "one byte over the budget raises, naming the overflow" do
+      bin = :binary.copy(<<0>>, Push.max_bytes() + 1)
+
+      assert_raise RuntimeError, ~r/129 B, budget is 128 B \(over by 1 B\)/, fn ->
+        Push.ensure_fits!(bin, "test")
+      end
+    end
+
+    test "the message names the caller it was given" do
+      bin = :binary.copy(<<0>>, Push.max_bytes() + 8)
+
+      assert_raise RuntimeError, ~r/chain_batch\/5/, fn ->
+        Push.ensure_fits!(bin, "chain_batch/5")
+      end
+    end
+
+    test "the budget matches the one pack/1 enforces" do
+      # Two encoders, one number. A 16-prior model overflows f64 at 8 B each
+      # plus a 16 B header, and pack/1 must agree that it does.
+      priors = for i <- 1..16, do: {"p#{i}", Exmc.Dist.HalfNormal, %{sigma: 1.0}}
+
+      assert {:error, :push_too_large} =
+               Push.pack(%{K: 8, n_obs: 4, d: 16, eps: 0.1, priors: priors})
+
+      floats = Enum.flat_map(priors, &Push.prior_param_floats/1)
+      oversized = <<0::128>> <> for f <- floats, into: <<>>, do: <<f::little-float-64>>
+
+      assert byte_size(oversized) > Push.max_bytes()
+
+      assert_raise RuntimeError, ~r/budget is #{Push.max_bytes()} B/, fn ->
+        Push.ensure_fits!(oversized, "chain_batch/5")
+      end
+    end
+  end
 end

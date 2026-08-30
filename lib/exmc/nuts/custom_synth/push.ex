@@ -158,6 +158,52 @@ defmodule Exmc.NUTS.CustomSynth.Push do
   end
 
   @doc """
+  The push-constants budget, in bytes.
+
+  Public so the batched dispatch path can enforce the same number rather than
+  hard-code a second copy of it. Vulkan guarantees at least 128 bytes of push
+  constants; this is that floor, not a tunable.
+  """
+  @spec max_bytes() :: pos_integer()
+  def max_bytes, do: @max_bytes
+
+  @doc """
+  Raise unless `bin` fits the push-constants budget.
+
+  `pack/1` returns `{:error, :push_too_large}` because its callers degrade to
+  per-op sampling. `chain_batch/5` has no such branch -- it builds its own
+  header (`n_instances` in the pad slot, signed eps) so it cannot go through
+  `pack/1`, and until 2026-08-30 it did no size check at all: an oversized
+  block went to the NIF, came back `{:error, :bad_input}`, and failed the
+  `{:ok, {...}} =` match as a `MatchError` naming nothing. Raising here is
+  what the batch coordinator's `try/rescue` turns into `{:fallback, ...}`, so
+  the draw degrades to unbatched instead of dying.
+
+  `context` names the caller in the message; the numbers are only knowable
+  here.
+  """
+  @spec ensure_fits!(binary(), String.t()) :: binary()
+  def ensure_fits!(bin, context) when is_binary(bin) do
+    n = byte_size(bin)
+
+    if n <= @max_bytes do
+      bin
+    else
+      raise """
+      #{context}: push block is #{n} B, budget is #{@max_bytes} B (over by #{n - @max_bytes} B).
+
+      The block holds a fixed header plus 8 B per prior parameter float, so a
+      model overflows it by having too many prior parameters, not by having
+      large ones. Reshape the model, or route it through the per-op path.
+
+      Note this is a DIFFERENT check from the one CustomSynth.synthesise_batched/1
+      runs at synth time: that one packs placeholder K and eps values, not the
+      ones dispatch actually sends. The two can disagree.
+      """
+    end
+  end
+
+  @doc """
   Extract the scalar parameter floats a prior contributes to the push block.
 
   Public because the batched path (`Exmc.NUTS.Vulkan.Dispatch.chain_batch/5`)

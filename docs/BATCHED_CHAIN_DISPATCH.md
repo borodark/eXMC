@@ -127,7 +127,7 @@ handled only `is_number` and `%Nx.Tensor{}`-via-`Nx.to_number`, while
 So batching did not merely support fewer distributions; it also broke on
 hierarchical and vectorized models that the unbatched path packs correctly.
 
-### D2 — the batched push has no 128-byte cap
+### D2 — the batched push has no 128-byte cap — FIXED 2026-08-30
 
 `chain_batch` builds `push = header <> prior_bin` with no length check.
 `Push.pack/1` returns `{:error, :push_too_large}` above 128 bytes; this path
@@ -141,6 +141,21 @@ check and the pack are different code paths.
 
 Fix: route the batched push through `Push.pack/1` too, or give it the same
 guard and error.
+
+**Done — the second of those.** `pack/1` cannot be reused: `chain_batch/5`
+builds a different header (`n_instances` in the pad slot, signed eps). So the
+budget and the check moved into `Push` as `max_bytes/0` and `ensure_fits!/2`,
+and `chain_batch/5` calls the latter. One number, two encoders.
+
+It raises rather than returning `{:error, _}` because `pack/1`'s callers have
+a degrade-to-per-op branch and `chain_batch/5` does not — and a raise is what
+the coordinator's `try/rescue` (D3) turns into `{:fallback, _}`, so the draw
+degrades to unbatched instead of dying.
+
+Tested against `ensure_fits!/2` directly, not through `chain_batch/5`:
+`ensure_batch_nif!/0` runs first and the f64 batch NIF does not exist, so the
+pack is unreachable through that function. One of the four tests asserts the
+two encoders agree on the same 16-prior model, so the budgets cannot drift.
 
 ### D3 — one dispatch site rescues, the other does not — FIXED 2026-08-29
 
@@ -213,10 +228,7 @@ proves nothing on its own.
 ## Order
 
 1. ~~D3 and D1~~ — **done 2026-08-29.**
-2. D2 — next. Still open, and note that routing the prior floats through
-   `Push.prior_param_floats/1` did NOT bring the 128-byte cap with it:
-   `chain_batch` builds its own header and never calls `Push.pack/1`, so an
-   oversized block still reaches the NIF as a bare `MatchError`.
+2. ~~D2~~ — **done 2026-08-30.**
 3. nx_vulkan NIF (Option 1), pushed to its origin, then `mix deps.update
    nx_vulkan` here.
 4. Verification 1–4 locally, then D4 (the activation decision), then 5–6.
