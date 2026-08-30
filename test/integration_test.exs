@@ -810,9 +810,33 @@ defmodule Exmc.IntegrationTest do
     assert loo_result.n_obs == 3
   end
 
-  # ── 24. Parallel chains: faster than sequential ─────────────────
+  # ── 24. Vectorized chains: shared warmup beats running them one by one ──
 
-  test "vectorized chains: faster than old parallel for 4 chains" do
+  # This used to assert `t_vec < t_par` against the 4-way CONCURRENT path and
+  # failed on every host and every backend. Two separate things were wrong.
+  #
+  # The real one: sample_chains_vectorized_compiled/3 dropped chain_meta while
+  # destructuring the compiled tuple, so Tree never saw :exmc_chain_meta and
+  # the whole vectorized path ran per-op instead of through the fused chain
+  # shader. Measured on super-io under Vulkan, same process, both sequential:
+  # 7791 ms and ZERO chain dispatches, against 2405 ms and 1099 for
+  # `vectorized: false, parallel: false`. Fixed 2026-08-30.
+  #
+  # The other: the assertion itself. `vectorized` runs 1 shared warmup + N
+  # sample runs SEQUENTIALLY in one process (1000 leapfrog steps here);
+  # `parallel` runs N independent chains CONCURRENTLY (1600 steps). Which
+  # wall-clock wins is a property of how much concurrency the host affords,
+  # not of the sampler. Post-fix, warm, three runs on super-io/Vulkan:
+  # vec 619/1156/1127 against par 668/827/799 -- vectorized won once. It is a
+  # coin flip, so asserting it is a flake generator.
+  #
+  # What the design actually promises is the shared warmup: the same N chains
+  # cost 1 warmup instead of N. The sequential baseline is what isolates that,
+  # and it is not close -- vec beat seq 2294/2319/2233 every time. That is the
+  # assertion below. The concurrent path is still measured and reported,
+  # because the ratio is what would show the chain_meta regression coming
+  # back, but it is bounded rather than ordered.
+  test "vectorized chains: shared warmup beats sampling them one by one" do
     ir =
       Builder.new_ir()
       |> Builder.rv("mu", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(5.0)})
@@ -821,22 +845,36 @@ defmodule Exmc.IntegrationTest do
 
     shared_opts = [num_warmup: 200, num_samples: 200, seed: 42]
 
-    # Old parallel path (independent warmup per chain, Task.async_stream)
-    t0 = System.monotonic_time(:millisecond)
-    {traces_par, _} = Sampler.sample_chains(ir, 4, [vectorized: false] ++ shared_opts)
-    t_par = System.monotonic_time(:millisecond) - t0
+    time = fn kw ->
+      t0 = System.monotonic_time(:millisecond)
+      {traces, _} = Sampler.sample_chains(ir, 4, kw ++ shared_opts)
+      {System.monotonic_time(:millisecond) - t0, traces}
+    end
 
-    # Vectorized path (shared warmup, sequential in one process)
-    t0 = System.monotonic_time(:millisecond)
-    {traces_vec, _} = Sampler.sample_chains(ir, 4, [vectorized: true] ++ shared_opts)
-    t_vec = System.monotonic_time(:millisecond) - t0
+    # Warm the shader/JIT caches once so the first arm measured does not pay
+    # compilation the others skip. Without this the ordering of the arms in
+    # this function silently biases the result.
+    time.(vectorized: true)
 
-    # Both should produce 4 chains
-    assert length(traces_par) == 4
+    {t_seq, traces_seq} = time.(vectorized: false, parallel: false)
+    {t_vec, traces_vec} = time.(vectorized: true)
+    {t_par, traces_par} = time.(vectorized: false)
+
+    assert length(traces_seq) == 4
     assert length(traces_vec) == 4
+    assert length(traces_par) == 4
 
-    # Vectorized should be faster (shared warmup + no XLA contention)
-    assert t_vec < t_par, "vectorized=#{t_vec}ms should be < parallel=#{t_par}ms"
+    # The guarantee: one shared warmup instead of four.
+    assert t_vec < t_seq,
+           "vectorized=#{t_vec}ms should beat one-by-one=#{t_seq}ms " <>
+             "(shared warmup is the whole point)"
+
+    # Not an ordering, a bound. Pre-fix this ratio was 11.5x on this host
+    # because the vectorized path had silently lost the chain shader; a
+    # regression there would blow through 4x long before it got near 11x.
+    assert t_vec < t_par * 4,
+           "vectorized=#{t_vec}ms is more than 4x the concurrent path " <>
+             "(#{t_par}ms) -- suspect chain_meta is not reaching Tree again"
   end
 
   # ── 25. Parallel chains with init_values ────────────────────────

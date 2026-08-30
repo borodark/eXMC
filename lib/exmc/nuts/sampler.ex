@@ -1134,11 +1134,26 @@ defmodule Exmc.NUTS.Sampler do
   """
   def sample_chains_vectorized_compiled(compiled, num_chains, opts \\ []) when num_chains >= 1 do
     # Accept 4/5/6-tuple (legacy → with multi_step_fn → with chain_meta).
-    {vag_fn, step_fn, pm, ncp_info, multi_step_fn} =
+    #
+    # chain_meta was DROPPED here until 2026-08-30, which silently disabled
+    # the fused chain shader for every vectorized run: Tree reads it from
+    # `Process.get(:exmc_chain_meta)` (tree.ex:699) and falls back to per-op
+    # dispatch when it is absent. Measured on super-io, same process, both
+    # paths sequential, 4 chains of 200 warmup + 200 samples:
+    #
+    #   vectorized: true                    7791 ms,    0 chain dispatches
+    #   vectorized: false, parallel: false  2405 ms, 1099 chain dispatches
+    #
+    # The vectorized path does strictly LESS work -- one shared warmup instead
+    # of four -- and was still 3.2x slower. `vectorized` defaults to true for
+    # num_chains > 1, so this was the default multi-chain path, and the
+    # "vectorized chains: faster than old parallel" test had been failing on
+    # every host and every backend because of it.
+    {vag_fn, step_fn, pm, ncp_info, multi_step_fn, chain_meta} =
       case compiled do
-        {v, s, p, n, m, _chain_meta} -> {v, s, p, n, m}
-        {v, s, p, n, m} -> {v, s, p, n, m}
-        {v, s, p, n} -> {v, s, p, n, nil}
+        {v, s, p, n, m, cm} -> {v, s, p, n, m, cm}
+        {v, s, p, n, m} -> {v, s, p, n, m, nil}
+        {v, s, p, n} -> {v, s, p, n, nil, nil}
       end
 
     opts = Keyword.merge(@default_opts, opts)
@@ -1163,91 +1178,101 @@ defmodule Exmc.NUTS.Sampler do
 
       {List.duplicate(empty_trace, num_chains), List.duplicate(empty_stats, num_chains)}
     else
-      d = pm.size
-      use_dense = Keyword.get(opts, :dense_mass, false)
+      # Same process-dictionary handshake sample_from_compiled/3 uses, but in
+      # a try/after because that one has none: it deletes the key on the
+      # success path only, so a raise mid-sampling leaves it set for whatever
+      # the process runs next.
+      if chain_meta, do: Process.put(:exmc_chain_meta, chain_meta)
 
-      # --- Phase 1: Warmup on chain 0 only ---
-      warmup_seed = base_seed
-      rng0 = :rand.seed_s(:exsss, warmup_seed)
-      {q0, rng0} = init_position(pm, init_values, d, rng0, ncp_info)
-      {logp0, grad0} = vag_fn.(q0)
-      logp0 = Nx.backend_copy(logp0, Nx.BinaryBackend)
-      grad0 = Nx.backend_copy(grad0, Nx.BinaryBackend)
-      inv_mass_diag = Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
-      active_step_fn = if use_dense, do: build_generic_step_fn(vag_fn), else: step_fn
+      try do
+        d = pm.size
+        use_dense = Keyword.get(opts, :dense_mass, false)
 
-      {epsilon, rng0} =
-        find_reasonable_epsilon_with_rng(active_step_fn, q0, logp0, grad0, inv_mass_diag, rng0)
+        # --- Phase 1: Warmup on chain 0 only ---
+        warmup_seed = base_seed
+        rng0 = :rand.seed_s(:exsss, warmup_seed)
+        {q0, rng0} = init_position(pm, init_values, d, rng0, ncp_info)
+        {logp0, grad0} = vag_fn.(q0)
+        logp0 = Nx.backend_copy(logp0, Nx.BinaryBackend)
+        grad0 = Nx.backend_copy(grad0, Nx.BinaryBackend)
+        inv_mass_diag = Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
+        active_step_fn = if use_dense, do: build_generic_step_fn(vag_fn), else: step_fn
 
-      warmup_state = %{q: q0, logp: logp0, grad: grad0, rng: rng0, divergences: 0}
+        {epsilon, rng0} =
+          find_reasonable_epsilon_with_rng(active_step_fn, q0, logp0, grad0, inv_mass_diag, rng0)
 
-      {_warmup_state, epsilon_final, inv_mass, chol_cov} =
-        run_warmup(
-          active_step_fn,
-          warmup_state,
-          epsilon,
-          inv_mass_diag,
-          d,
-          num_warmup,
-          max_tree_depth,
-          target_accept,
-          use_dense,
-          nil
-        )
+        warmup_state = %{q: q0, logp: logp0, grad: grad0, rng: rng0, divergences: 0}
 
-      # --- Phase 2: Initialize N chains with different seeds ---
-      chain_seeds = Enum.map(0..(num_chains - 1), fn i -> base_seed + i * 7919 end)
+        {_warmup_state, epsilon_final, inv_mass, chol_cov} =
+          run_warmup(
+            active_step_fn,
+            warmup_state,
+            epsilon,
+            inv_mass_diag,
+            d,
+            num_warmup,
+            max_tree_depth,
+            target_accept,
+            use_dense,
+            nil
+          )
 
-      chain_states =
-        Enum.map(chain_seeds, fn seed ->
-          rng = :rand.seed_s(:exsss, seed)
-          {q, rng} = init_position(pm, init_values, d, rng, ncp_info)
-          {logp, grad} = vag_fn.(q)
-          logp = Nx.backend_copy(logp, Nx.BinaryBackend)
-          grad = Nx.backend_copy(grad, Nx.BinaryBackend)
-          %{q: q, logp: logp, grad: grad, rng: rng, divergences: 0}
-        end)
+        # --- Phase 2: Initialize N chains with different seeds ---
+        chain_seeds = Enum.map(0..(num_chains - 1), fn i -> base_seed + i * 7919 end)
 
-      # --- Phase 3: Sample all chains sequentially (no XLA contention) ---
-      inv_mass_diag_out =
-        case Nx.rank(inv_mass) do
-          1 -> inv_mass
-          2 -> Nx.take_diagonal(inv_mass)
-        end
+        chain_states =
+          Enum.map(chain_seeds, fn seed ->
+            rng = :rand.seed_s(:exsss, seed)
+            {q, rng} = init_position(pm, init_values, d, rng, ncp_info)
+            {logp, grad} = vag_fn.(q)
+            logp = Nx.backend_copy(logp, Nx.BinaryBackend)
+            grad = Nx.backend_copy(grad, Nx.BinaryBackend)
+            %{q: q, logp: logp, grad: grad, rng: rng, divergences: 0}
+          end)
 
-      active_multi = if use_dense, do: nil, else: multi_step_fn
+        # --- Phase 3: Sample all chains sequentially (no XLA contention) ---
+        inv_mass_diag_out =
+          case Nx.rank(inv_mass) do
+            1 -> inv_mass
+            2 -> Nx.take_diagonal(inv_mass)
+          end
 
-      results =
-        Enum.map(chain_states, fn state ->
-          {draws, sample_stats, final_state} =
-            run_sampling(
-              active_step_fn,
-              state,
-              epsilon_final,
-              inv_mass,
-              num_samples,
-              max_tree_depth,
-              chol_cov,
-              active_multi
-            )
+        active_multi = if use_dense, do: nil, else: multi_step_fn
 
-          trace = build_trace(draws, pm, ncp_info)
+        results =
+          Enum.map(chain_states, fn state ->
+            {draws, sample_stats, final_state} =
+              run_sampling(
+                active_step_fn,
+                state,
+                epsilon_final,
+                inv_mass,
+                num_samples,
+                max_tree_depth,
+                chol_cov,
+                active_multi
+              )
 
-          stats = %{
-            step_size: epsilon_final,
-            inv_mass_diag: inv_mass_diag_out,
-            divergences: final_state.divergences,
-            num_warmup: num_warmup,
-            num_samples: num_samples,
-            sample_stats: sample_stats
-          }
+            trace = build_trace(draws, pm, ncp_info)
 
-          {trace, stats}
-        end)
+            stats = %{
+              step_size: epsilon_final,
+              inv_mass_diag: inv_mass_diag_out,
+              divergences: final_state.divergences,
+              num_warmup: num_warmup,
+              num_samples: num_samples,
+              sample_stats: sample_stats
+            }
 
-      traces = Enum.map(results, fn {trace, _} -> trace end)
-      stats = Enum.map(results, fn {_, stats} -> stats end)
-      {traces, stats}
+            {trace, stats}
+          end)
+
+        traces = Enum.map(results, fn {trace, _} -> trace end)
+        stats = Enum.map(results, fn {_, stats} -> stats end)
+        {traces, stats}
+      after
+        Process.delete(:exmc_chain_meta)
+      end
     end
   end
 
