@@ -7,8 +7,9 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   with the same random seed. Compares the resulting posterior samples via
   three layered tests:
 
-  The reference is `:exla` where EXLA is loadable and `:none` (pure-CPU
-  `Nx.BinaryBackend`) otherwise — see `reference/0`. It is never the
+  The reference is `:exla` where EXLA is USABLE — modules present and the
+  application starts, `Exmc.JIT.usable?/1` — and `:none` (pure-CPU
+  `Nx.BinaryBackend`) otherwise; see `reference/0`. It is never the
   candidate backend. It used to be: the arm was selected by clearing
   `:exmc, :compiler` and letting auto-detection run, which resolves to
   `Nx.Vulkan` on any host without EXLA. On the FreeBSD fleet, where EXLA
@@ -88,7 +89,7 @@ defmodule Exmc.NUTS.Vulkan.Validator do
 
   @doc """
   Validate a candidate Vulkan shader against an independent reference path
-  (`reference/0` — `:exla`, or `:none` where EXLA is absent).
+  (`reference/0` — `:exla`, or `:none` where EXLA is absent or unusable).
 
   `ir` is a single-RV `Exmc.IR` (built with `Exmc.Builder.new_ir/0` +
   `Exmc.Builder.rv/4`). `vulkan_meta` is the tagged-tuple consumed by
@@ -167,17 +168,22 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   @doc """
   The compiler this harness uses for the REFERENCE arm on this host.
 
-  `:exla` where EXLA is loadable, `:none` (pure-CPU `Nx.BinaryBackend`)
-  otherwise. Never `:vulkan` — see the comment in `run_reference/2`.
+  `:exla` where EXLA is usable (`Exmc.JIT.usable?/1` — present AND its
+  application starts), `:none` (pure-CPU `Nx.BinaryBackend`) otherwise. Never
+  `:vulkan` — see the comment in `run_reference/2`.
 
   Report this alongside any validation result: a verdict is only as good as
   the thing it was compared against.
   """
   @spec reference() :: :exla | :none
   def reference do
-    if Code.ensure_loaded?(EXLA) and function_exported?(EXLA, :__info__, 1),
-      do: :exla,
-      else: :none
+    # `Exmc.JIT.usable?/1`, not `Code.ensure_loaded?/1`. The two disagree in
+    # exactly the case that matters: a CUDA `exla` whose NIF cannot resolve
+    # `libnvshmem_host.so.3` ships every module, so `Code.ensure_loaded?/1`
+    # says yes, and then `JIT.detect_compiler/0` raises on `:exla` because the
+    # application will not start. Picking `:exla` on the weak check meant
+    # run_reference/2 pinned a reference arm that could not run.
+    if Exmc.JIT.usable?(EXLA), do: :exla, else: :none
   end
 
   defp run_reference(ir, opts) do
@@ -207,36 +213,46 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     prev_norm_meta = Application.get_env(:exmc, :fused_leapfrog_normal_meta)
     prev_force_prec = Application.get_env(:exmc, :force_precision)
 
-    Application.put_env(:exmc, :compiler, ref)
-    Application.delete_env(:exmc, :fused_leapfrog_meta)
-    Application.delete_env(:exmc, :fused_leapfrog_normal_meta)
-
-    # Belt and braces. If a future change to detect_compiler/0 ever routes the
-    # reference back onto the candidate, fail loudly rather than return a
-    # comparison that cannot fail.
-    if Code.ensure_loaded?(Nx.Vulkan) and Exmc.JIT.detect_compiler() == Nx.Vulkan do
-      restore(:compiler, prev_compiler)
-
-      raise """
-      Validator reference arm resolved to Nx.Vulkan — the backend under test.
-      Comparing a backend against itself passes unconditionally and validates
-      nothing. Reference requested: #{inspect(ref)}.
-      """
-    end
-
-    # When the caller passes `precision: :f32`, force the EXLA path
-    # to f32 so it matches the chain shader's working precision.
-    # Without this, the validator compares f32 Vulkan against f64
-    # EXLA — a precision gap that masks shader correctness for
-    # fat-tailed distributions (Cauchy especially). See
-    # WORKSTREAM_W7 Stage 2 notes for the full diagnosis.
-    case Keyword.get(opts, :precision) do
-      :f32 -> Application.put_env(:exmc, :force_precision, :f32)
-      :f64 -> Application.put_env(:exmc, :force_precision, :f64)
-      _ -> :ok
-    end
-
+    # EVERY env write below is inside the try, and the `after` is the only
+    # thing that restores. This used to open with three writes and a `raise`
+    # ahead of the try: `detect_compiler/0` raises for a `:compiler` naming an
+    # unusable backend, so on a host whose EXLA modules load but whose NIF does
+    # not, the raise escaped with `:compiler` left at `:exla` and two keys
+    # deleted. `Application.put_env/3` is VM-global and async tests run
+    # concurrently, so one raise here re-pointed the backend under every test
+    # that followed: 632/3 became 632/104, and reverting unrelated work changed
+    # nothing, which is what made it read as a code regression.
+    #
+    # `reference/0` picking `:exla` on a weak probe was the other half; both
+    # are fixed, and either alone would have been enough.
     try do
+      Application.put_env(:exmc, :compiler, ref)
+      Application.delete_env(:exmc, :fused_leapfrog_meta)
+      Application.delete_env(:exmc, :fused_leapfrog_normal_meta)
+
+      # Belt and braces. If a future change to detect_compiler/0 ever routes
+      # the reference back onto the candidate, fail loudly rather than return
+      # a comparison that cannot fail.
+      if Code.ensure_loaded?(Nx.Vulkan) and Exmc.JIT.detect_compiler() == Nx.Vulkan do
+        raise """
+        Validator reference arm resolved to Nx.Vulkan — the backend under test.
+        Comparing a backend against itself passes unconditionally and validates
+        nothing. Reference requested: #{inspect(ref)}.
+        """
+      end
+
+      # When the caller passes `precision: :f32`, force the EXLA path
+      # to f32 so it matches the chain shader's working precision.
+      # Without this, the validator compares f32 Vulkan against f64
+      # EXLA — a precision gap that masks shader correctness for
+      # fat-tailed distributions (Cauchy especially). See
+      # WORKSTREAM_W7 Stage 2 notes for the full diagnosis.
+      case Keyword.get(opts, :precision) do
+        :f32 -> Application.put_env(:exmc, :force_precision, :f32)
+        :f64 -> Application.put_env(:exmc, :force_precision, :f64)
+        _ -> :ok
+      end
+
       sample_to_list(ir, opts)
     after
       restore(:compiler, prev_compiler)
@@ -251,10 +267,14 @@ defmodule Exmc.NUTS.Vulkan.Validator do
       prev_compiler = Application.get_env(:exmc, :compiler)
       prev_meta = Application.get_env(:exmc, :fused_leapfrog_meta)
 
-      Application.put_env(:exmc, :compiler, :vulkan)
-      Application.put_env(:exmc, :fused_leapfrog_meta, meta)
-
+      # Inside the try for the same reason as run_reference/2 above. Nothing
+      # between these writes and the old try could raise, so this half was
+      # latent rather than live — but the shape is the defect, not the
+      # distance.
       try do
+        Application.put_env(:exmc, :compiler, :vulkan)
+        Application.put_env(:exmc, :fused_leapfrog_meta, meta)
+
         {:ok, sample_to_list(ir, opts)}
       after
         restore(:compiler, prev_compiler)

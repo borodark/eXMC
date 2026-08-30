@@ -75,6 +75,24 @@ defmodule Exmc.JIT do
     end
   end
 
+  @doc """
+  Is `mod` actually usable on this host?
+
+  "Usable" means the modules are present AND the application starts — the
+  same predicate `auto_detect/0` and `demand/2` use, memoised alongside them.
+  Public because callers outside this module were reaching for
+  `Code.ensure_loaded?/1` instead, which is the weaker check and disagrees
+  exactly when it matters: a CUDA `exla` whose NIF cannot find
+  `libnvshmem_host.so.3` ships every module and answers `true`, then raises on
+  first use.
+
+  `Exmc.NUTS.Vulkan.Validator.reference/0` was one such caller. It picked
+  `:exla` on the weak check and then leaked `:compiler` when the strong one
+  raised — see the comment in `run_reference/2`.
+  """
+  @spec usable?(module()) :: boolean()
+  def usable?(mod), do: loaded?(mod)
+
   # A named backend is a demand, not a preference.
   #
   # These clauses used to be `if loaded?(mod), do: mod, else: auto_detect()`:

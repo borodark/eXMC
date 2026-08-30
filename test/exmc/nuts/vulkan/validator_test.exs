@@ -4,7 +4,12 @@ defmodule Exmc.NUTS.Vulkan.ValidatorTest do
 
   The *positive* cases run `Exmc.NUTS.Vulkan.Validator.validate/3`
   against the reference arm (`Validator.reference/0` — `:exla` where
-  EXLA is loadable, `:none` otherwise). All route through the **f64
+  EXLA is USABLE (`Exmc.JIT.usable?/1`: present AND its application
+  starts), `:none` otherwise). The arm is reported in every failure
+  payload as `:reference`, and it matters: Cauchy's KS check passes
+  against `:exla` and fails marginally against `:none` on super-io
+  (d 0.0999 vs crit 0.0975), which is the Linux-NVIDIA over-dispersion
+  noted below seen through a slightly different lens, not a new bug. All route through the **f64
   synth** path; see the `Exmc.NUTS.Vulkan.Dispatch` moduledoc. All six
   — **Normal**, **StudentT**, **Weibull**, **Exponential**,
   **HalfNormal**, and **Cauchy** (median + IQR, since it has no defined
