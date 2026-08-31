@@ -8,6 +8,129 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-08-31, before the reboot
+
+Written against `gate1/reconcile-core` @ `a178a0833`, **pushed to `origin`**.
+Working tree clean. Nothing is in flight and nothing is half-applied — the
+reboot can happen without losing state.
+
+The session ran `nx_vulkan` `501fa08 -> 2617e5e` and then closed six defects.
+Five were silent. The sixth had been on this file's own known-failures list
+since 2026-08-16 as "item 4, the wall-clock one", carried for two weeks as a
+scheduling artifact. It was not one.
+
+| commit | what |
+|---|---|
+| `7d40ce49c` | `nx_vulkan` `501fa08 -> 2617e5e` |
+| `0ff2d866c` | D3 + D1 — coordinator died on a raise; batched path packed 5 of 12 priors |
+| `3e58fb70f` | Validator pinned an `:exla` reference arm it could not run, and leaked it |
+| `237c0c3f8` | Vectorized (DEFAULT) multi-chain path never reached the chain shader |
+| `edbeb2713` | D2 — batched push had no 128-byte cap |
+| `a178a0833` | Distributed and streaming paths dropped `chain_meta` too |
+
+### Verification as it actually stands
+
+| run | result |
+|---|---|
+| `mix test` (EXLA), @ `a178a0833` | 652 tests, **0 failures**, 449s |
+| `EXMC_COMPILER=vulkan mix test`, @ `a178a0833` | 652 tests, **2 failures**, 1217s |
+| mac-247, @ `3e58fb70f` | 640 tests, **4 failures** |
+| mac-248, @ `3e58fb70f` | 640 tests, **5 failures** |
+| the Jetson, @ `ad464bce5` | 632 tests, **9 failures** — 7 of them ExUnit timeouts |
+
+**The EXLA arm is fully green for the first time.** The Vulkan arm's two are
+Poker and LevelSet, both 300s `ExUnit.TimeoutError` on this host, both
+confirmed pre-existing: Poker was re-run alone against HEAD with the session's
+changes reverted and timed out identically at 300.4s.
+
+**No host has been verified at `a178a0833`.** Both Keplers were launched and
+then killed partway when another session started
+`examples/unified_vs_discrete_race.exs` on mac-247 — a GPU suite would have
+corrupted a timing benchmark in both directions. The partial logs were
+discarded rather than read. Both boxes are already ON `a178a0833`, clean, so
+relaunching is just the suite. The race began at 22:08, two minutes after the
+suite died at 22:05:56, so **that benchmark is not contaminated** — checked,
+not assumed.
+
+### Do this first
+
+1. **Fleet-verify `a178a0833` on mac-247/248, once the race is done.**
+   Expect 646 tests (six added) and the wall-clock failure gone — 4 -> 3 on
+   247. If it does not drop, `237c0c3f8` did not do on FreeBSD/MoltenVK what it
+   did on Linux/NVIDIA, and that is the next thing to chase. This is also the
+   first run of the new dispatch-count guards on Vulkan-ONLY hosts; super-io
+   auto-detects EXLA, so its Vulkan arm is a forced override.
+2. **The Jetson has not been verified since `ad464bce5`.** Three commits behind
+   the Keplers. It needs `PATH=/home/io/.asdf/shims:/home/io/.cargo/bin:/home/io/.local/bin`
+   and `CXX=g++-13 CC=gcc-13`, and takes ~1.8h.
+
+### What is open
+
+* **D4 — the batched chain path still cannot run.** Nothing sets
+  `:exmc_chain_coord`; `synthesise_batched/1` has no callers; the f64 batch NIF
+  does not exist in `nx_vulkan`. D1/D2/D3 are closed, so this is the last of the
+  four in `docs/BATCHED_CHAIN_DISPATCH.md`, and it is a decision — wire it or
+  retire it — not a fix. See that file's Option 1 vs Option 2.
+* **Poker on super-io is borderline.** Passes sometimes, times out at 300s
+  otherwise, times out on the Jetson, and fails FAST with
+  `SynthUnsupportedError` on both Keplers. That last difference is unexplained
+  and is the interesting part. It is the only thing between this branch and a
+  clean Vulkan arm here.
+* **`lib/exmc/nuts/sampler.ex` is not `mix format`-clean at HEAD** (~60 lines).
+  Every edit to it this session was hand-formatted to avoid churning unrelated
+  lines into a behavioural diff. Wants its own commit.
+* **`sample_from_compiled/3` deletes `:exmc_chain_meta` on the success path
+  only** — a raise mid-sampling leaks it into the process. The three sites
+  fixed this session all use `try/after`; this one was deliberately not
+  changed, only not copied.
+* **`Chain 0 on :worker_1_45511@... failed (:erpc, :noconnection), retrying on
+  coordinator`** appears in every fleet log and predates all of this work.
+  Nobody has looked at it.
+* **`PlanBPrimeGuardTest` does run here** — an earlier note in this session
+  claimed it never executes anywhere. It does, 6 tests. The claim was wrong.
+
+### Two host facts that cost an hour each, so they are written down
+
+**EXLA on super-io needs `LD_LIBRARY_PATH`.** `libexla.so` is a CUDA 12 build
+needing `libnvshmem_host.so.3` and `libnvrtc-builtins.so.12.9`, and the wheels
+are under **python3.12** site-packages — not the python3.10 tree that holds the
+other `nvidia/*` wheels, so searching 3.10 finds nothing and it looks like the
+libraries are absent:
+
+    NV=/home/io/.local/lib/python3.12/site-packages/nvidia
+    export LD_LIBRARY_PATH=$NV/nvshmem/lib:$NV/cuda_nvrtc/lib
+
+Interactive shells inherit it; **agent, `nohup` and cron shells do not**, so a
+suite launched that way silently runs a different backend. `jit.ex:84` has
+documented this failure mode since 2026-08-23 without recording the path.
+Without it the run is not merely EXLA-less — until `3e58fb70f` the Validator
+turned it into ~100 failures across 12 unrelated modules.
+
+**Fetch-by-sha now works.** `uploadpack.allowReachableSHA1InWant` is enabled on
+`nx_vulkan.git` at 192.168.0.249, so `mix deps.get` no longer needs a per-host
+seeding fetch after a bump. First unattended bump confirmed it: `GET_EXIT=0` on
+both Keplers.
+
+### The methodological point, since it is the reusable part
+
+Three separate entry points — the default multi-chain path, the distributed
+path, and the streaming path — each destructured `_chain_meta` and threw it
+away, disabling the fused chain shader everywhere except single-chain
+`Sampler.sample/3`. Measured: **12.9x**, **5.8x**, **2.6x**.
+
+All three survived because the only test watching was a wall-clock inequality
+against a concurrent path, which is host-dependent, so its failure was
+dismissed as noise for two weeks. **A test that fails for a reason nobody
+believes is worse than no test.** The replacements in
+`test/exmc/nuts/vulkan/chain_meta_routing_test.exs` count dispatches: exact,
+host-independent, and each was run against its own reverted fix to confirm it
+fails saying `0 chain dispatches` rather than passing vacuously.
+
+Keep doing that. Every fix this session has a negative control, and two of them
+changed conclusions that code-reading alone had gotten wrong.
+
+---
+
 ## Status — 2026-08-18, after the reboot
 
 **All seven §2 items are closed.**
