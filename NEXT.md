@@ -8,11 +8,10 @@ stands rather than as the mission planned it.
 
 ---
 
-## Status — 2026-08-31, before the reboot
+## Status — 2026-08-31, six defects closed and fleet-verified
 
 Written against `gate1/reconcile-core` @ `a178a0833`, **pushed to `origin`**.
-Working tree clean. Nothing is in flight and nothing is half-applied — the
-reboot can happen without losing state.
+Both Keplers verified at that commit after the reboot; the Jetson is not.
 
 The session ran `nx_vulkan` `501fa08 -> 2617e5e` and then closed six defects.
 Five were silent. The sixth had been on this file's own known-failures list
@@ -34,8 +33,8 @@ scheduling artifact. It was not one.
 |---|---|
 | `mix test` (EXLA), @ `a178a0833` | 652 tests, **0 failures**, 449s |
 | `EXMC_COMPILER=vulkan mix test`, @ `a178a0833` | 652 tests, **2 failures**, 1217s |
-| mac-247, @ `3e58fb70f` | 640 tests, **4 failures** |
-| mac-248, @ `3e58fb70f` | 640 tests, **5 failures** |
+| mac-247, @ `a178a0833` | 652 tests, **4 failures**, 883s |
+| mac-248, @ `a178a0833` | 652 tests, **3 failures**, 521s |
 | the Jetson, @ `ad464bce5` | 632 tests, **9 failures** — 7 of them ExUnit timeouts |
 
 **The EXLA arm is fully green for the first time.** The Vulkan arm's two are
@@ -43,23 +42,64 @@ Poker and LevelSet, both 300s `ExUnit.TimeoutError` on this host, both
 confirmed pre-existing: Poker was re-run alone against HEAD with the session's
 changes reverted and timed out identically at 300.4s.
 
-**No host has been verified at `a178a0833`.** Both Keplers were launched and
-then killed partway when another session started
-`examples/unified_vs_discrete_race.exs` on mac-247 — a GPU suite would have
-corrupted a timing benchmark in both directions. The partial logs were
-discarded rather than read. Both boxes are already ON `a178a0833`, clean, so
-relaunching is just the suite. The race began at 22:08, two minutes after the
-suite died at 22:05:56, so **that benchmark is not contaminated** — checked,
-not assumed.
+**Both Keplers verified at `a178a0833` on 2026-08-31 21:15–21:34 UTC**, after
+the vulkan race was terminated. Logs: `~/fleet_a178a0833.log` on each; the
+`3e58fb70f` baselines they are compared against are `/tmp/fleet3e5.log`.
+
+### What changed on the fleet, test by test
+
+Counts alone would mislead on mac-247 — 4 failures before, 4 after — so the
+comparison is by name.
+
+| test | 247 @ `3e58fb70f` | 247 @ `a178a0833` | 248 @ `3e58fb70f` | 248 @ `a178a0833` |
+|---|---|---|---|---|
+| `IntegrationTest` vectorized-chains wall-clock | FAIL | **gone** | FAIL | **gone** |
+| `ChaosTest` eviction policy | pass | FAIL (flake) | FAIL (flake) | pass |
+| `PokerTest` parameter recovery | FAIL | FAIL | FAIL | FAIL |
+| `CustomDistTest` NUTS sampling | FAIL | FAIL | FAIL | FAIL |
+| `LevelSetIntegrationTest` 6x6 grid | FAIL | FAIL | FAIL | FAIL |
+
+**The wall-clock failure is gone on both**, so `237c0c3f8` does on the Keplers
+what it did here. Its replacement was re-run on its own on mac-247 together
+with the other new guards: `chain_meta_routing_test.exs` +
+`sample_stream_test.exs`, **8 tests, 0 failures, 3.0s**. `:requires_vulkan` is
+not in the Keplers' exclusion list, so these are the first runs of the
+dispatch-count guards on a **Vulkan-only** host — super-io's Vulkan arm is a
+forced override of an EXLA auto-detect, so it could not have shown this.
+
+**`ChaosTest` swapped hosts, and that is the point.** It is one flake, not a
+regression: identical signature both times — `on_exit` calls
+`GenServer.stop(pid, :normal, :infinity)` on a process that has already died,
+`(EXIT) no process` — but a *different test within the module* each time
+(`different metas track independently` on 248 at baseline, `a successful
+dispatch resets the counter` on 247 now). It failed at `3e58fb70f` too, so it
+predates this session. The teardown wants to tolerate a dead pid; it is a test
+defect, not a product one.
+
+**Poker, CustomDist and LevelSet all fail identically on both Keplers** with
+`Exmc.SynthUnsupportedError` — not a timeout, unlike super-io. So the "fails
+FAST on the Keplers" note below now has its reason: these hosts have no EXLA to
+fall back to, so a non-synthesisable IR raises at compile rather than crawling.
+Three models the Vulkan-only arm cannot run. Unchanged by this session.
+
+Suite time fell despite twelve more tests — 949s -> 883s on 247, 554s -> 521s
+on 248, about 6-7% on both. Consistent with the `chain_meta` fixes, though the
+suite is dominated by work those paths do not touch, so this is corroboration
+and not a measurement.
+
+`mix deps.get` returned `GET_EXIT=0` on both with no seeding fetch — second
+unattended confirmation of `allowReachableSHA1InWant`.
 
 ### Do this first
 
-1. **Fleet-verify `a178a0833` on mac-247/248, once the race is done.**
-   Expect 646 tests (six added) and the wall-clock failure gone — 4 -> 3 on
-   247. If it does not drop, `237c0c3f8` did not do on FreeBSD/MoltenVK what it
-   did on Linux/NVIDIA, and that is the next thing to chase. This is also the
-   first run of the new dispatch-count guards on Vulkan-ONLY hosts; super-io
-   auto-detects EXLA, so its Vulkan arm is a forced override.
+1. ~~Fleet-verify `a178a0833` on mac-247/248.~~ **Done, 2026-08-31** — see the
+   table above. The prediction written here beforehand said "expect 646 tests
+   and 4 -> 3 on 247"; the real numbers were **652** and **4 -> 4**, and both
+   misses were informative rather than cosmetic. The count was wrong because
+   twelve tests were added, not six. The failure count on 247 held flat because
+   the wall-clock test going green was masked by a pre-existing `ChaosTest`
+   teardown flake landing on that host this time. **Compare failures by name,
+   not by count.**
 2. **The Jetson has not been verified since `ad464bce5`.** Three commits behind
    the Keplers. It needs `PATH=/home/io/.asdf/shims:/home/io/.cargo/bin:/home/io/.local/bin`
    and `CXX=g++-13 CC=gcc-13`, and takes ~1.8h.
@@ -72,10 +112,16 @@ not assumed.
   four in `docs/BATCHED_CHAIN_DISPATCH.md`, and it is a decision — wire it or
   retire it — not a fix. See that file's Option 1 vs Option 2.
 * **Poker on super-io is borderline.** Passes sometimes, times out at 300s
-  otherwise, times out on the Jetson, and fails FAST with
-  `SynthUnsupportedError` on both Keplers. That last difference is unexplained
-  and is the interesting part. It is the only thing between this branch and a
-  clean Vulkan arm here.
+  otherwise, and times out on the Jetson. It is the only thing between this
+  branch and a clean Vulkan arm here. The Keplers' *fast*
+  `SynthUnsupportedError` is no longer the mystery it was listed as: those
+  hosts have no EXLA, so a non-synthesisable IR raises at compile time instead
+  of falling back. Whether Poker's IR *should* be synthesisable is the open
+  question, and it is the same question on all three hosts.
+* **`ChaosTest`'s teardown races.** `on_exit` stops a coordinator that has
+  sometimes already exited, so the test fails with `(EXIT) no process` after
+  its assertions have passed. Seen on 248 @ `3e58fb70f` and on 247 @
+  `a178a0833`, different test each time. Predates this session; small fix.
 * **`lib/exmc/nuts/sampler.ex` is not `mix format`-clean at HEAD** (~60 lines).
   Every edit to it this session was hand-formatted to avoid churning unrelated
   lines into a behavioural diff. Wants its own commit.
