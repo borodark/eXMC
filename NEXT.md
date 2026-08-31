@@ -28,7 +28,7 @@ The probe splits the fleet, and the NIF prints its verdict at init:
 | super-io | `unified memory: false (staging path: ON)` |
 | mac-247 | `unified memory: false (staging path: ON)` |
 | mac-248 | `unified memory: false (staging path: ON)` |
-| the Jetson | unified — takes the OFF branch |
+| the Jetson | `device: NVIDIA Tegra X1 (nvgpu) (IntegratedGpu)`, `unified memory: true (staging path: OFF)` |
 
 ### Results at `4d1c4800d`
 
@@ -52,6 +52,58 @@ bump fixing anything. Poker is recorded below as borderline on this host —
 passes sometimes, times out at 300s otherwise — and one green run is exactly
 what "borderline" predicts. LevelSet still times out at 300s.
 
+### The Jetson: a bare `mix test` there tests the WRONG ARM
+
+Worth reading before anyone runs the Jetson again, because the result looks
+green and is not comparable.
+
+`Exmc.JIT.detect_compiler/0` resolves EXLA > Vulkan > Evaluator, and **the
+Jetson has EXLA**. So a bare `mix test` there selects the EXLA arm, exactly as
+it does on super-io — unlike the Keplers, where bare `mix test` is the Vulkan
+arm because there is nothing else. Every historical Jetson number in this file
+is a `EXMC_COMPILER=vulkan` run.
+
+It does not merely swap the backend. `test/test_helper.exs:148` flips the
+exclusion set with it:
+
+| arm | excludes |
+|---|---|
+| `Nx.Vulkan` | `:diag, :slow, :vulkan_known_failure` — 5 excluded, 2 skipped |
+| anything else | `:diag, :slow, :requires_vulkan` — **31 excluded** |
+
+So the unforced run drops the Vulkan-only tests entirely. On the first attempt
+at `4d1c4800d` this showed as **652 tests / 6 failures** against a baseline of
+640/8 — and four of the "fixed" failures (`PokerTest`,
+`LevelSetIntegrationTest`, and both `IntegrationTest` cases) **were excluded,
+not fixed**. Same trap as the mac-247 count, one layer deeper: there the
+composition changed under a constant count; here the population itself changed.
+Check the `exmc: compiler=` line the suite prints before comparing anything.
+
+The unforced arm did establish two things worth keeping:
+
+* The probe is right on the unified host —
+  `[nx_vulkan_vulkano] device: NVIDIA Tegra X1 (nvgpu) (IntegratedGpu)` then
+  `unified memory: true (staging path: OFF)`. The fleet splits 3-1 across the
+  gate exactly as designed.
+* Its 6 failures are **all `ExUnit.TimeoutError` at 60s**, none an assertion
+  failure or a Vulkan error. Four (`NewDistTest` Lognormal mean, both
+  `MCLMCTest`, `NUTSTest` Leapfrog 4) time out on the Vulkan arm too, in every
+  Jetson log going back to `ad464bce5`. Two — `StepSizeBoundsTest:91` and
+  `HalfNormalTransformTest:83` — are EXLA-path timeouts with **no EXLA-path
+  baseline on this host**, so whether they are new is unknown, not benign.
+
+Corrected baselines, from the logs actually on the box (neither records its own
+commit, so attribution is by filename and count match, not by content):
+
+| log | commit | result |
+|---|---|---|
+| `/tmp/jetson501.log` | `ad464bce5` | 632 tests, 9 failures, 6607s |
+| `/tmp/jetson3e5.log` | `3e58fb70f` | **640 tests, 8 failures**, 6581s |
+
+The 632/9 figure carried above was one commit stale. The Vulkan arm at
+`4d1c4800d` is running now, forced, and 640/8 is what it should be read
+against.
+
 ### The one thing worth chasing: the staging path may cost ~10% on the Keplers
 
 Suite time rose on both Vulkan-only hosts while super-io stayed flat:
@@ -69,11 +121,25 @@ A narrower probe agrees in direction. `chain_meta_routing_test.exs` +
 **Treat the magnitude as unestablished.** The `3.0s` baseline is a single
 reading; only the new numbers were repeated. What is solid is the direction and
 that it appears on both Keplers and not on super-io, which is what a
-host-boundary copy would look like on older PCIe. The upstream log says the
-staging change was A/B'd and "below the cliff it gained nothing" — exmc's f64
-chain dispatch may be below that cliff, in which case this is cost with no
-benefit on precisely the hosts that have no EXLA fallback. To settle it: rebuild
-`nx_vulkan` at `2617e5e` on 247, re-run those 8 tests n=5, and compare.
+host-boundary copy would look like on older PCIe.
+
+**Do not spend a run on this yet.** The `nx_vulkan` session has since read its
+own code and expects its *next* commit (`d7b5f08`) to make this path worse
+again, with a named mechanism: `leapfrog_chain_synth_f64` calls
+`upload_buffer` three times (`q_init`, `p_init`, `extras`), and where each was
+once a plain host write, each becomes a device-local alloc + staging buffer +
+copy + `submit_and_wait` — three extra submit-and-fence pairs per chain
+dispatch, ~0.076 ms each on Ampere and worse on Kepler submission. Our f64
+chain dispatch is precisely the caller that pays it. Their intended fix is to
+record those copies into the synth NIF's own command buffer ahead of the
+dispatch it already submits, so they cost nothing extra.
+
+They are running a controlled A/B on super-io first, because it is the only
+box in the fleet where GPU clock can be recorded — FreeBSD reports `[N/A]` for
+`clocks.sm` on the Keplers, and unrecorded clock state alone swung one of their
+super-io measurements 2.6x. **The Kepler re-measure is worth doing after that
+A/B lands, not before.** If a future measurement here comes back slower, the
+default explanation is the input path, not anything in exmc.
 
 ---
 
