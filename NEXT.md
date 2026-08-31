@@ -8,6 +8,75 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-08-31 (later), nx_vulkan 6b38aee — the staging-buffer bump
+
+`gate1/reconcile-core` @ **`4d1c4800d`**, pushed. `nx_vulkan` `2617e5e ->
+6b38aee`.
+
+Not a routine dep roll. `native/nx_vulkan_vulkano/src/lib.rs` gained ~299 lines
+that change the buffer memory model: compute buffers were `PREFER_DEVICE |
+HOST_RANDOM_ACCESS` and are now **`PREFER_DEVICE` alone**, with every host read
+or write going through a new `staging_read`/`staging_write` copy via a
+`PREFER_HOST` buffer. It is gated at runtime on a unified-memory probe.
+`download_buffer` is on that path, which is how exmc reads every chain-dispatch
+result back — so this can change results, not only speed.
+
+The probe splits the fleet, and the NIF prints its verdict at init:
+
+| host | probe line |
+|---|---|
+| super-io | `unified memory: false (staging path: ON)` |
+| mac-247 | `unified memory: false (staging path: ON)` |
+| mac-248 | `unified memory: false (staging path: ON)` |
+| the Jetson | unified — takes the OFF branch |
+
+### Results at `4d1c4800d`
+
+| run | @ `a178a0833` | @ `4d1c4800d` |
+|---|---|---|
+| super-io EXLA | 652 / **0**, 449s | 652 / **0**, 566s |
+| super-io Vulkan | 652 / **2**, 1217s | 652 / **1**, 1223s |
+| mac-247 | 652 / **4**, 883s | 652 / **4**, 960s |
+| mac-248 | 652 / **3**, 521s | 652 / **3**, 576s |
+
+**No regression from the bump.** Failure composition on the Keplers is
+identical by name: Poker, CustomDist and LevelSet (all
+`SynthUnsupportedError`), plus the roaming `ChaosTest` teardown flake, which
+landed on 247 this time as `different metas track independently` — the exact
+test that failed on **248** at `3e58fb70f`. Third sighting, third
+host/test combination, same `on_exit` `GenServer.stop` on a dead pid. It is one
+flake, and it moves.
+
+super-io's Vulkan arm went 2 -> 1: **Poker passed.** Do not read that as the
+bump fixing anything. Poker is recorded below as borderline on this host —
+passes sometimes, times out at 300s otherwise — and one green run is exactly
+what "borderline" predicts. LevelSet still times out at 300s.
+
+### The one thing worth chasing: the staging path may cost ~10% on the Keplers
+
+Suite time rose on both Vulkan-only hosts while super-io stayed flat:
+
+| host | @ `a178a0833` | @ `4d1c4800d` | delta |
+|---|---|---|---|
+| mac-247 | 883s | 960s | **+8.8%** |
+| mac-248 | 521s | 576s | **+10.4%** |
+| super-io Vulkan | 1217s | 1223s | +0.5% |
+
+A narrower probe agrees in direction. `chain_meta_routing_test.exs` +
+`sample_stream_test.exs` on 247 — 8 tests, pure chain-dispatch — ran **4.0,
+4.1, 4.1s** at `4d1c4800d` against **3.0s** at `a178a0833`.
+
+**Treat the magnitude as unestablished.** The `3.0s` baseline is a single
+reading; only the new numbers were repeated. What is solid is the direction and
+that it appears on both Keplers and not on super-io, which is what a
+host-boundary copy would look like on older PCIe. The upstream log says the
+staging change was A/B'd and "below the cliff it gained nothing" — exmc's f64
+chain dispatch may be below that cliff, in which case this is cost with no
+benefit on precisely the hosts that have no EXLA fallback. To settle it: rebuild
+`nx_vulkan` at `2617e5e` on 247, re-run those 8 tests n=5, and compare.
+
+---
+
 ## Status — 2026-08-31, six defects closed and fleet-verified
 
 Written against `gate1/reconcile-core` @ `a178a0833`, **pushed to `origin`**.
