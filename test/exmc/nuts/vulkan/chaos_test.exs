@@ -30,16 +30,50 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
     put_env_scoped(:compiler, :vulkan)
 
     on_exit(fn ->
-      for name <- [Nx.Vulkan.Node, SuspectTracker] do
-        case Process.whereis(name) do
-          nil -> :ok
-          pid -> GenServer.stop(pid, :normal)
-        end
-      end
+      Enum.each([Nx.Vulkan.Node, SuspectTracker], &stop_quietly/1)
     end)
 
     {:ok, _node} = Nx.Vulkan.Node.start_link()
     {:ok, _tracker} = SuspectTracker.start_link()
+
+    :ok
+  end
+
+  # Stop a process by name or pid, tolerating one that has already exited.
+  #
+  # Teardown here must not care whether the process is still there. This module
+  # tests a suicide/eviction mechanism, so a coordinator that has already died
+  # is frequently the *correct* outcome of a test rather than an anomaly. On
+  # top of that, ExUnit exits the test process with `:shutdown` once the test
+  # body returns, which reaps everything `start_link`ed from `setup` — and
+  # `on_exit` callbacks run after that, from a different process. So
+  # `Process.whereis/1` can hand back a pid that is dead by the time
+  # `GenServer.stop/3` reaches it. The window is microseconds wide, which is
+  # why this surfaced as a *roaming* flake, attaching itself to whichever test
+  # happened to be running, and why it got worse on hosts with more schedulers.
+  #
+  # The previous teardown was `for name <- names, do: GenServer.stop(...)`, and
+  # a single-generator comprehension compiles to `Enum.map/2` — so the first
+  # dead pid did not just fail the test for a reason unrelated to anything it
+  # asserts, it also aborted the cleanup of every name after it, leaking the
+  # processes the callback existed to reap.
+  #
+  # Hence both halves: `alive?/1` narrows the window, and the `catch` covers
+  # the part of it that cannot be closed. Cleanup that can itself raise is not
+  # cleanup.
+  defp stop_quietly(name_or_pid, reason \\ :normal) do
+    pid = if is_pid(name_or_pid), do: name_or_pid, else: Process.whereis(name_or_pid)
+
+    if is_pid(pid) and Process.alive?(pid) do
+      try do
+        GenServer.stop(pid, reason, :infinity)
+      catch
+        # :noproc — lost the race above; anything else — it died on its own
+        # while stopping. Either way the process is gone, which is what we
+        # asked for.
+        :exit, _ -> :ok
+      end
+    end
 
     :ok
   end
@@ -114,6 +148,10 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
           window_ms: 60_000
         )
 
+      # As `on_exit`, not a trailing call: a failing assertion below would skip
+      # a trailing stop and leak the tracker under its registered name.
+      on_exit(fn -> stop_quietly(t) end)
+
       for i <- 1..5 do
         SuspectTracker.record_timeout({:meta, i}, :test_tracker_window)
       end
@@ -121,8 +159,6 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
       status = SuspectTracker.status(:test_tracker_window)
       assert status.window_size == 5
       assert status.emergency_brake == true
-
-      GenServer.stop(t, :normal)
     end
 
     test "old timeouts age out of the window" do
@@ -133,6 +169,8 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
           window_ms: 50
         )
 
+      on_exit(fn -> stop_quietly(t) end)
+
       SuspectTracker.record_timeout({:meta, 1}, :test_tracker_age)
       SuspectTracker.record_timeout({:meta, 2}, :test_tracker_age)
       Process.sleep(80)
@@ -141,8 +179,6 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
       # First two timeouts should have aged out; window has only 1 entry.
       status = SuspectTracker.status(:test_tracker_age)
       assert status.window_size == 1
-
-      GenServer.stop(t, :normal)
     end
   end
 
