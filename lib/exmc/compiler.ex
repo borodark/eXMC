@@ -91,13 +91,21 @@ defmodule Exmc.Compiler do
     # instead of raising. Default OFF.
     if Exmc.JIT.detect_compiler() == Nx.Vulkan and is_nil(chain_meta) do
       case detect do
-        {:unsupported, :push_too_large} ->
+        {:unsupported, reason} when reason in [:d_exceeds_tile, :push_too_large] ->
           require Logger
 
+          # :d_exceeds_tile — more than 256 free RVs, so the model does not fit
+          # the shader's single-workgroup thread tile. This is the only width
+          # bound on the fused path.
+          #
+          # :push_too_large is retained for compatibility with any caller still
+          # producing it; `Push.pack/1` no longer can. It used to fire at ~6
+          # free Normal RVs because the block carried prior floats that nothing
+          # read — see Exmc.NUTS.CustomSynth.Push.
           Logger.warning(
-            "[Compiler] push-constants overflow (>128 B at f64) — falling back to " <>
-              "per-op vulkan sampling for this IR (slower but correct). Reduce the " <>
-              "free-RV count or reshape to fit the fused f64 chain shader."
+            "[Compiler] model too wide for the fused f64 chain shader (#{reason}) — " <>
+              "falling back to per-op vulkan sampling for this IR (slower but " <>
+              "correct). The bound is 256 free RVs, the shader's thread tile."
           )
 
         _ ->

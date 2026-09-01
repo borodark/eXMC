@@ -117,14 +117,30 @@ defmodule Exmc.NUTS.P0CorrectnessTest do
   end
 
   # ------------------------------------------------------------------
-  # The documented push-constants cap must be the real one
+  # The push block does NOT cap model width
   # ------------------------------------------------------------------
 
-  describe "chain shader: the push block caps model width at 13 prior floats" do
-    # The moduledoc used to claim 28 prior floats, and eleven dispatch guards
-    # read `d <= 256`, so the cap was reasoned about as 256 free RVs. The real
-    # number is 20x smaller and it changes what the synthesis path is FOR.
-    # Pinned here so nobody has to re-derive it from a byte count again.
+  describe "chain shader: the push block is a fixed header and caps nothing" do
+    # This describe block used to be called "the push block caps model width at
+    # 13 prior floats", and it asserted d <= 13 for one-parameter priors, 6 for
+    # Normal, 4 for StudentT, 3 for TruncatedNormal, with a comment saying the
+    # number "changes what the synthesis path is FOR".
+    #
+    # Every one of those numbers was real arithmetic on a quantity that did not
+    # matter. `pack/1` appended one f64 per prior parameter; the NIF forwards
+    # only the 24-byte header and drops the rest; and `MultiRvCustomSpec` bakes
+    # prior parameters into the GLSL as literals, so the shader never read them
+    # either. The tail's only effect was to be counted against the NIF's
+    # `push.len() > 128` check — a budget it never spent.
+    #
+    # So these four tests were not measuring a limit. They were pinning a
+    # defect, and pinning it with a table precise enough to look authoritative.
+    # An 8-RV model was being pushed onto per-op sampling for no reason: 0 chain
+    # dispatches and 160.9 s, against 2564 and 12.3 s once the tail was removed.
+    #
+    # Kept as a regression: if anyone reinstates the tail, these fail.
+    # See `test/exmc/nuts/custom_synth/push_width_test.exs` for the end-to-end
+    # dispatch and posterior checks.
 
     test "the fixed header is 24 bytes, not 16" do
       {:ok, bin, n} = pack(Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}, 0)
@@ -132,45 +148,48 @@ defmodule Exmc.NUTS.P0CorrectnessTest do
       assert n == 24
     end
 
-    test "one-parameter priors cap at d = 13" do
-      assert max_d(Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(1.0)}) == 13
-      assert max_d(Exmc.Dist.Exponential, %{lambda: Nx.tensor(1.0)}) == 13
+    test "the block is 24 bytes at every width, for every prior arity" do
+      cases = [
+        {Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(1.0)}},
+        {Exmc.Dist.Exponential, %{lambda: Nx.tensor(1.0)}},
+        {Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}},
+        {Exmc.Dist.TruncatedNormal,
+         %{
+           mu: Nx.tensor(0.0),
+           sigma: Nx.tensor(1.0),
+           lower: Nx.tensor(0.0),
+           upper: Nx.tensor(1.0)
+         }}
+      ]
+
+      for {mod, params} <- cases, d <- [1, 7, 14, 40] do
+        assert {:ok, bin, 24} = pack(mod, params, d),
+               "#{inspect(mod)} at d=#{d} must still pack to a 24-byte header"
+
+        assert byte_size(bin) == 24
+      end
     end
 
-    test "Normal caps at d = 6" do
-      assert max_d(Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}) == 6
-    end
+    test "the widths this used to refuse now pack fine" do
+      # The exact boundaries the old cap enforced: 7 Normals (was 6 max),
+      # 14 one-parameter priors (was 13), 4 TruncatedNormals (was 3).
+      assert {:ok, _, 24} = pack(Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}, 7)
+      assert {:ok, _, 24} = pack(Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(1.0)}, 14)
 
-    test "TruncatedNormal caps at d = 3" do
-      params = %{
+      tn = %{
         mu: Nx.tensor(0.0),
         sigma: Nx.tensor(1.0),
         lower: Nx.tensor(0.0),
         upper: Nx.tensor(1.0)
       }
 
-      assert max_d(Exmc.Dist.TruncatedNormal, params) == 3
-    end
-
-    test "one RV past the cap is refused, not truncated" do
-      params = %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}
-      assert {:ok, _, _} = pack(Exmc.Dist.Normal, params, 6)
-      assert {:error, :push_too_large} = pack(Exmc.Dist.Normal, params, 7)
+      assert {:ok, _, 24} = pack(Exmc.Dist.TruncatedNormal, tn, 4)
     end
   end
 
   defp pack(mod, params, d) do
     priors = for i <- 1..d//1, do: {"x#{i}", mod, params}
     Exmc.NUTS.CustomSynth.Push.pack(%{K: 32, n_obs: 0, d: d, eps: 0.1, priors: priors})
-  end
-
-  defp max_d(mod, params) do
-    Enum.reduce_while(1..40, 0, fn d, _acc ->
-      case pack(mod, params, d) do
-        {:ok, _, _} -> {:cont, d}
-        {:error, :push_too_large} -> {:halt, d - 1}
-      end
-    end)
   end
 
   # ------------------------------------------------------------------

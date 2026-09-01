@@ -76,20 +76,16 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   # `Exmc.NUTS.CustomSynth.synthesise/1`. All models route through
   # the f64 synth path — the legacy f32 family SPVs are removed.
   #
-  # On the `d <= 256` guard below: 256 is the SHADER's limit. The chain
+  # On the `d <= 256` guard below: 256 is the SHADER's limit — the chain
   # templates declare `local_size_x = 256` with `shared double q_shared[256]`,
-  # one thread per free RV. It is a real bound and it is almost never the one
-  # that bites.
+  # one thread per free RV — and it is now the binding one.
   #
-  # The binding cap is the 128-byte push-constants block, which after a 24-byte
-  # header leaves room for 13 f64 of prior parameters — so 13 RVs with
-  # one-parameter priors, 6 with two. `Exmc.NUTS.CustomSynth.Push.pack/1` is
-  # authoritative and rejects at synth time with `:push_too_large`; this guard
-  # only catches a model that somehow got past it.
-  #
-  # Stating 256 alone (as this guard and two doc sites used to) is wrong twice
-  # over: wrong number, and wrong variable — the limit is on prior parameter
-  # floats, not on RV count.
+  # It used to be described here as "almost never the one that bites", with
+  # the 128-byte push block called authoritative at 13 prior floats. That was
+  # backwards. `Push.pack/1` emits the header alone; the prior floats it once
+  # appended were baked into the shader as literals and read by nothing, while
+  # still counting against the NIF's `push.len() > 128` check. Removing them
+  # took an 8-RV model from 0 chain dispatches to 2564.
   defp do_chain(
          {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin} = meta,
          d,

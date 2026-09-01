@@ -22,31 +22,38 @@ defmodule Exmc.NUTS.CustomSynth.Push do
                               // distribution and is encoded by
                               // `prior_param_floats/2`
 
-  ## The real cap: 13 prior floats, not 256 free RVs
+  ## There is no prior-float cap. The binding limit is `d <= 256`.
 
-  Maximum is 128 bytes per Vulkan spec.  The header above is **24**
-  bytes (`4*4` for K/n_obs/d/_pad plus 8 for the f64 `eps`), which
-  leaves 104 bytes = **13 f64 prior floats**.
+  `pack/1` emits the 24-byte header and nothing else, so the block is a
+  fixed size regardless of model width. **The binding constraint on the
+  synthesised chain path is the shader's thread tile — `local_size_x = 256`
+  with a `q_shared[256]` tile, i.e. `d <= 256`.**
 
-  This moduledoc previously said "16 bytes of fixed header leaves
-  room for 28 prior-param floats", which was wrong twice: the header
-  is 24 bytes, not 16, and 104 bytes holds 13 f64 values, not 28
-  (that count was for f32).  Measured with `pack/1`:
+  This moduledoc used to say the opposite, at length: that the 128-byte
+  push block held 13 f64 prior floats and was "the binding one", capping
+  models at `d <= 13` for one-parameter priors, 6 for Normal, 3 for
+  TruncatedNormal, while dismissing `d <= 256` as "never the binding one".
+  Both halves were backwards, and the error was load-bearing — it is why
+  `chain_batch/5`, `tree.ex` and `compiler.ex` all repeated it.
 
-      1 float per RV  (HalfNormal, Exponential, HalfCauchy)  d <= 13
-      2 floats per RV (Normal, Cauchy, Weibull, Lognormal,
-                       Gamma, Beta)                          d <=  6
-      3 floats per RV (StudentT)                             d <=  4
-      4 floats per RV (TruncatedNormal)                      d <=  3
+  What was actually happening: `pack/1` appended prior floats that
+  **nothing consumed**. `MultiRvCustomSpec` bakes prior parameters into the
+  GLSL as literals at synthesis time, and `leapfrog_chain_synth_f64`
+  forwards only `sizeof(PushBlockF64) = 24` bytes. But the NIF rejects
+  `push.len() > 128` before dispatching, so the unread tail was counted
+  against a budget it never spent, and models past ~6 free Normal RVs were
+  pushed onto the per-op fallback for no reason.
 
-  Treat this as a design statement rather than a number to look up.
-  The guards elsewhere in the codebase that read `d <= 256` are the
-  *thread-tile* limit (`local_size_x = 256` with a `q_shared[256]`
-  tile) — a real constraint, but never the binding one. The binding
-  one is this block, and it caps model complexity an order of
-  magnitude below the width at which GPU compute begins to beat an
-  interpreter at all. Anything wider is refused here with
-  `{:error, :push_too_large}` and degrades to per-op sampling.
+  Measured on an 8-RV conjugate model: **0 chain dispatches / 160.9 s**
+  with the tail, **2564 dispatches / 12.3 s** without — 13.1x, posterior
+  unchanged and correct against the closed-form conjugate on both arms.
+
+  `prior_param_floats/1` is retained: `chain_batch/5` still packs a tail for
+  the batched f32 path, and `ensure_fits!/2` still guards that against the
+  same 128-byte NIF limit. That path is not currently reachable (see
+  `docs/BATCHED_CHAIN_DISPATCH.md`, D4) and its shader bakes priors too, so
+  the tail there is likely just as dead — but it has not been measured, so
+  it stays.
 
   A model that needs to grow past these counts needs its prior params
   moved into an SSBO; there is no headroom to tune.
@@ -91,10 +98,12 @@ defmodule Exmc.NUTS.CustomSynth.Push do
   @doc """
   Pack a spec into the binary push block the shader expects.
 
-  Returns `{:ok, binary, n_bytes}` on success, or
-  `{:error, :push_too_large}` if the total exceeds 128 bytes.
+  Returns `{:ok, binary, n_bytes}`. Always succeeds: the block is the fixed 24-byte header, well inside the
+  NIF's 128-byte limit, so there is no width at which this can fail. It used
+  to return `{:error, :push_too_large}` for wide models; see the comment in
+  the body for why that cap was measuring the wrong thing.
   """
-  @spec pack(spec()) :: {:ok, binary(), non_neg_integer()} | {:error, atom()}
+  @spec pack(spec()) :: {:ok, binary(), non_neg_integer()}
   def pack(%{K: k, n_obs: n_obs, d: d, eps: eps, priors: priors}) do
     header =
       <<
@@ -105,35 +114,37 @@ defmodule Exmc.NUTS.CustomSynth.Push do
         eps::little-float-64
       >>
 
-    prior_floats =
-      priors
-      |> Enum.flat_map(&prior_param_floats/1)
+    # Header only. The prior parameters are NOT sent through push constants.
+    #
+    # This block used to be `header <> prior_bin`, and that tail was inert in
+    # every direction except one, where it was actively harmful:
+    #
+    #   * The synthesised shader never read it. `MultiRvCustomSpec` bakes prior
+    #     parameters into the GLSL as literals at synthesis time — verified by
+    #     disassembling a cached SPV for a `Normal(0.0, 7.3125)` prior, which
+    #     contains `OpConstant %double 7.3125` and its precomputed
+    #     normalisation term, and whose push struct is
+    #     `OpTypeStruct %uint %uint %uint %uint %double` — these five members
+    #     and nothing else.
+    #   * The NIF never forwarded it. `leapfrog_chain_synth_f64` pushes
+    #     `sizeof(PushBlockF64) = 24` bytes; anything beyond that is dropped.
+    #   * But the NIF DOES reject `push.len() > 128` before dispatching. So the
+    #     tail's only effect was to be counted against a limit it never
+    #     consumed, and it was the sole cause of the free-RV width cap.
+    #
+    # Measured on the 8-RV conjugate model in
+    # `test/exmc/nuts/custom_synth/push_width_test.exs`: with the tail, 0 chain
+    # dispatches and 160.9 s via per-op fallback; without it, 2564 dispatches
+    # and 12.3 s, posterior unchanged and correct against the closed-form
+    # conjugate on both arms. 13.1x.
+    #
+    # `priors` stays in the spec because synthesis needs it to bake the
+    # literals and because it feeds the content-addressed shader hash — a
+    # different prior must produce a different shader. It just does not travel
+    # through this block.
+    _ = priors
 
-    prior_bin = for f <- prior_floats, into: <<>>, do: <<f::little-float-64>>
-
-    bin = header <> prior_bin
-    n = byte_size(bin)
-
-    if n <= @max_bytes do
-      {:ok, bin, n}
-    else
-      # The tuple stays two-wide — CustomSynth matches on it in two places and
-      # degrades to per-op sampling. But "too large" on its own tells nobody by
-      # how much or against what budget, and those numbers are only knowable
-      # here. A silent downgrade to a 100x-slower path is the kind of thing that
-      # gets diagnosed as a hardware problem three weeks later.
-      require Logger
-
-      Logger.warning(
-        "[Push] push block #{n} B > #{@max_bytes} B: #{length(prior_floats)} prior " <>
-          "parameter floats, budget is #{div(@max_bytes - byte_size(header), 8)} " <>
-          "(#{@max_bytes} B block less a #{byte_size(header)} B header). This is the " <>
-          "real width cap on the synthesised chain path — not d <= 256, which is the " <>
-          "shader's workgroup width and never binds first."
-      )
-
-      {:error, :push_too_large}
-    end
+    {:ok, header, byte_size(header)}
   end
 
   @doc """

@@ -121,14 +121,28 @@ defmodule Exmc.NUTS.CustomSynth.PushPriorParamFloatsTest do
       end
     end
 
-    test "the budget matches the one pack/1 enforces" do
-      # Two encoders, one number. A 16-prior model overflows f64 at 8 B each
-      # plus a 16 B header, and pack/1 must agree that it does.
+    test "the budget binds the batched path only — pack/1 no longer has one" do
+      # This test used to assert "two encoders, one number": that a 16-prior
+      # model overflowed BOTH `ensure_fits!/2` and `pack/1`. That is no longer
+      # true and the change is deliberate.
+      #
+      # `pack/1` emits the 24-byte header alone. The prior floats it used to
+      # append were baked into the synthesised GLSL as literals and read by
+      # nothing, while still counting against the NIF's `push.len() > 128`
+      # check — so the cap rejected models the shader could have run. Removing
+      # the tail took an 8-RV model from 0 chain dispatches to 2564. See
+      # `push_width_test.exs`.
+      #
+      # `ensure_fits!/2` still guards `chain_batch/5`, which builds its own
+      # header-plus-tail for the batched f32 path and does not go through
+      # `pack/1`. That path is unreachable today (D4) but its encoder is real,
+      # so the budget it checks is real.
       priors = for i <- 1..16, do: {"p#{i}", Exmc.Dist.HalfNormal, %{sigma: 1.0}}
 
-      assert {:error, :push_too_large} =
-               Push.pack(%{K: 8, n_obs: 4, d: 16, eps: 0.1, priors: priors})
+      # pack/1: no budget, no width at which it fails.
+      assert {:ok, _bin, 24} = Push.pack(%{K: 8, n_obs: 4, d: 16, eps: 0.1, priors: priors})
 
+      # ensure_fits!/2: still enforces 128 B, on a block the batched path builds.
       floats = Enum.flat_map(priors, &Push.prior_param_floats/1)
       oversized = <<0::128>> <> for f <- floats, into: <<>>, do: <<f::little-float-64>>
 
