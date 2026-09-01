@@ -138,15 +138,41 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
       ""
     )
 
+    # Retry-on-error rather than stat-before-dispatch: checking File.exists?/1
+    # on every call would cost a syscall on the hot path (~2600 dispatches in
+    # a 60-sample run) to guard against a condition that is rare. The recovery
+    # path costs nothing when the artifact is present.
     {:ok, {q_chain_bin, p_chain_bin, grad_chain_bin, logp_chain_bin}} =
-      Nx.Vulkan.NativeV.leapfrog_chain_synth_f64(
-        q_bin,
-        p_bin,
-        extras_bin,
-        push,
-        k,
-        spv_path
-      )
+      case leapfrog_f64(q_bin, p_bin, extras_bin, push, k, spv_path) do
+        {:error, :dispatch_failed, msg} = err ->
+          if is_binary(msg) and msg =~ "read spv" do
+            case Exmc.NUTS.CustomSynth.Compile.ensure!(spv_path) do
+              :ok ->
+                leapfrog_f64(q_bin, p_bin, extras_bin, push, k, spv_path)
+
+              {:error, reason} ->
+                raise """
+                chain dispatch failed: the compiled shader at
+
+                    #{spv_path}
+
+                could not be read and could not be rebuilt (#{inspect(reason)}).
+
+                The artifact is content-addressed, so it is normally rebuilt
+                from remembered GLSL. Recovery fails when synthesis happened in
+                a different VM, so nothing in this one remembers the source.
+
+                Re-run to re-synthesise. If it recurs, something is deleting
+                #{Path.dirname(spv_path)} while the suite runs.
+                """
+            end
+          else
+            err
+          end
+
+        other ->
+          other
+      end
 
     Exmc.Dyntrace.p(
       :erlang.phash2(q_chain_bin),
@@ -165,6 +191,10 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
       d,
       :f64
     )
+  end
+
+  defp leapfrog_f64(q_bin, p_bin, extras_bin, push, k, spv_path) do
+    Nx.Vulkan.NativeV.leapfrog_chain_synth_f64(q_bin, p_bin, extras_bin, push, k, spv_path)
   end
 
   defp bins_to_chain_tensors({q_b, p_b, grad_b, logp_b}, k, d, _wire_type) do

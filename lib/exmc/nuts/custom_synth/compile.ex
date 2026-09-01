@@ -26,11 +26,70 @@ defmodule Exmc.NUTS.CustomSynth.Compile do
     hash = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
     spv_path = Path.join(@cache_dir, "synth_#{hash}.spv")
 
+    # Remember the source against its hash so `ensure!/1` can rebuild the
+    # artifact if it disappears later. Cheap: synthesis is content-addressed,
+    # so this runs once per distinct shader, not once per dispatch.
+    :persistent_term.put({__MODULE__, :glsl, hash}, glsl)
+
     if File.exists?(spv_path) do
       {:ok, spv_path}
     else
       File.mkdir_p!(@cache_dir)
       compile_fresh(glsl, spv_path)
+    end
+  end
+
+  @doc """
+  Rebuild `spv_path` from remembered source if the file has gone missing.
+
+  Returns `:ok` if the artifact is present (or was successfully rebuilt) and
+  `{:error, reason}` otherwise.
+
+  ## Why this exists
+
+  A cached artifact can vanish between synthesis and dispatch, and when it
+  does the NIF returns `{:error, :dispatch_failed, "read spv: No such file or
+  directory"}` — which surfaces as a `MatchError` several frames deep inside
+  `Tree.do_build`, in whatever test happened to be running. Nothing about that
+  says "your shader file is gone".
+
+  It has happened for at least two unrelated reasons. One was this module's
+  own shared temp paths, fixed by the per-caller naming in `compile_fresh/2`.
+  The other was `Nx.Vulkan.Synthesis.clear_cache/0` doing `File.rm_rf` on this
+  exact directory — the two projects shared it until nx_vulkan moved its
+  caches under `~/.nx_vulkan/`. Eviction, a partial write, an operator `rm`
+  and a restored-from-backup home directory all produce the same state.
+
+  Rebuilding is always available and always correct: the GLSL is deterministic
+  from the spec, and the hash IS the filename, so recompiling reproduces the
+  same bytes under the same name. That makes recovery preferable to a better
+  error message — this removes the class rather than one cause of it.
+  """
+  @spec ensure!(Path.t()) :: :ok | {:error, term()}
+  def ensure!(spv_path) when is_binary(spv_path) do
+    if File.exists?(spv_path) do
+      :ok
+    else
+      with {:ok, hash} <- hash_from_path(spv_path),
+           glsl when is_binary(glsl) <-
+             :persistent_term.get({__MODULE__, :glsl, hash}, nil) do
+        File.mkdir_p!(@cache_dir)
+
+        case compile_fresh(glsl, spv_path) do
+          {:ok, ^spv_path} -> :ok
+          {:error, reason} -> {:error, {:recompile_failed, reason}}
+        end
+      else
+        nil -> {:error, {:no_remembered_source, spv_path}}
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  defp hash_from_path(spv_path) do
+    case Path.basename(spv_path) do
+      "synth_" <> rest -> {:ok, Path.rootname(rest)}
+      other -> {:error, {:unrecognised_spv_name, other}}
     end
   end
 
