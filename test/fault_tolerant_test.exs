@@ -430,35 +430,189 @@ defmodule Exmc.FaultTolerantTest do
   # =============================================
 
   describe "Overhead" do
+    # What supervision costs, measured in BEAM reductions rather than wall clock.
+    #
+    # The old form of this test timed one unsupervised run against one
+    # supervised run and asserted `(t_sup - t_unsup) / t_unsup < 10%`. That
+    # assertion is on a ratio whose denominator is the useful work, and the
+    # useful work is the part that hardware makes faster. Supervision cost is
+    # not: `with_supervision/6` is a try/rescue plus a process-dictionary read
+    # per subtree build, a fixed BEAM cost per operation. Speed the box up and
+    # the denominator shrinks faster than the numerator, so the ratio rises —
+    # the test got HARDER to pass on better hardware. It failed on a Jetson
+    # Nano at 10.7% only after that box moved from nvpmodel 5W (2 cores, 918
+    # MHz) to MAXN (4 cores, 1479 MHz). It passed on the slow configuration.
+    #
+    # The threshold was also below the measurement noise, which means the old
+    # test never measured what it claimed on any host. Seven alternating pairs
+    # of the exact runs it timed, on one idle-ish 88-core box, 2026-09-01:
+    #
+    #     pairwise overhead: -5.7%, -1.5%, +19.3%, -11.8%, +21.6%, +3.4%, +0.3%
+    #
+    # A 10% gate against a ±20% instrument is a coin flip. Its passing
+    # everywhere else was not evidence that supervision is cheap.
+    #
+    # Reductions are the BEAM's own count of work done. They do not change when
+    # the host gets faster, which removes the defect above, and the same seeded
+    # run does the same work on every machine. Same seven pairs:
+    #
+    #     reduction overhead: 0.08%, 0.30%, 0.32%, 0.82%, 0.27%, 0.32%, 0.18%
+    #
+    # — an instrument two orders of magnitude tighter than the wall clock, on
+    # the same runs.
+    #
+    # The `:task` arm is a control, and it is what makes the threshold a
+    # measurement instead of a guess. `supervised: :task` is a real supervision
+    # implementation in this codebase (tree.ex:1273) that spawns a process per
+    # subtree — precisely the regression `supervised: true` must not become. It
+    # is measured in the same run, so the gate can be expressed as a fraction of
+    # it rather than as an absolute percentage:
+    #
+    #     (reductions added by `true`) / (reductions added by `:task`) < 1/3
+    #
+    # Both quantities are per-subtree costs, so the total-work denominator
+    # cancels and the gate does not move with the backend. It has to not move:
+    # under `EXMC_COMPILER=none` the same run costs 168M reductions instead of
+    # 8.5M, and `:task` shows up as +1.1% rather than +10%. A fixed 5% gate
+    # would have been unfalsifiable there — it could not even resolve a
+    # process-per-subtree regression — while this ratio reads 0.03 on EXLA and
+    # -0.1 on `:none`, i.e. two orders of magnitude clear of the gate on both.
+    #
+    # Four things are asserted, in descending order of strength:
+    #
+    #   1. Supervision changes no work at all: the per-sample `n_steps` lists
+    #      are equal element-for-element across all three modes. Exact, integer,
+    #      host-independent, and it fails naming the cause. (The trace equality
+    #      that goes with it is the "No-failure parity" test above.)
+    #   2. Non-vacuity: the `:task` control must cost measurably more than
+    #      nothing, or the ratio below is a quotient of two noise figures.
+    #   3. The ratio gate above, plus a coarse absolute gate at 5% of total
+    #      reductions for the case where the control is somehow inflated.
+    #   4. A wall-clock backstop at 2x, for the one regression class reductions
+    #      cannot see: one that blocks rather than computes (a sleep, a remote
+    #      call, lock contention). 2x is ten times the worst noise observed
+    #      above; it will not catch a small blocking regression, and nothing
+    #      measurable on a shared host would.
+    #
+    # Sensitivity, measured 2026-09-01 on EXLA by loading a patched copy of Tree
+    # into the VM with extra work injected into the `true ->` branch only. This
+    # run makes roughly 1400 supervised subtree builds, so:
+    #
+    #   +290 reductions/build  → +4.9% reductions, ratio 0.48 → FAILS
+    #   +190 reductions/build  → +4.3% reductions, ratio 0.44 → FAILS
+    #    +60 reductions/build  → +1.5% reductions, ratio 0.14 → passes
+    #   Process.sleep(1)/build → +1.4% to +4.9% reductions (gate 3 is borderline
+    #                            on it) and +268% to +418% wall → FAILS on gate 4
+    #
+    # So the floor is somewhere near +100 reductions per subtree build, about
+    # 3% of the run: a regression that makes supervision cost a third of what
+    # spawning a process per subtree costs. `supervised: true` today sits at
+    # 0.0-0.5% of the run and ratio 0.00-0.07 — five to a hundred times inside
+    # the gate. What this test can no longer do is resolve a 10% change in
+    # *wall clock*; nothing on a shared host could, which is the whole point.
     @tag :benchmark
     @tag timeout: 300_000
-    test "supervised=true overhead < 10% with no faults" do
+    test "supervision adds no work: identical steps, a fraction of :task's cost" do
       ir = standard_normal_ir()
 
-      # Warmup JIT cache
+      # With the full-tree NIF on, the unsupervised arm runs the Rust whole-tree
+      # path and the supervised arm cannot (tree.ex:88 disables it under
+      # supervision), so the comparison would measure NIF-vs-Elixir and not
+      # supervision. The real default is false; pin it so this does not depend
+      # on that staying true.
+      put_env_scoped(:full_tree_nif, false)
+
+      opts = [num_warmup: 200, num_samples: 500, seed: 42]
+
+      run = fn mode ->
+        :erlang.statistics(:reductions)
+
+        {micros, {_trace, stats}} =
+          :timer.tc(fn -> Sampler.sample(ir, %{}, [supervised: mode] ++ opts) end)
+
+        {_total, reductions} = :erlang.statistics(:reductions)
+
+        %{
+          micros: micros,
+          reductions: reductions,
+          steps: Enum.map(stats.sample_stats, & &1.n_steps),
+          recoveries: Map.get(stats, :recoveries, 0)
+        }
+      end
+
+      # Warm the JIT/executable caches. Discarded.
       Sampler.sample(ir, %{}, num_warmup: 50, num_samples: 50, seed: 0, supervised: false)
 
-      # Unsupervised timing
-      {time_unsup, _} =
-        :timer.tc(fn ->
-          Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 500, seed: 42, supervised: false)
-        end)
+      # Three rounds, each round running the arms adjacently. The noise on this
+      # measurement drifts on a scale of seconds, so adjacent pairs cancel most
+      # of it; the median of the three then discards a single bad round.
+      rounds =
+        for _ <- 1..3 do
+          %{off: run.(false), sup: run.(true), task: run.(:task)}
+        end
 
-      # Supervised timing
-      {time_sup, _} =
-        :timer.tc(fn ->
-          Sampler.sample(ir, %{}, num_warmup: 200, num_samples: 500, seed: 42, supervised: true)
-        end)
+      median = fn xs -> xs |> Enum.sort() |> Enum.at(1) end
+      ratio = fn rounds, arm, field -> Enum.map(rounds, &(&1[arm][field] / &1.off[field])) end
 
-      overhead = (time_sup - time_unsup) / time_unsup * 100
+      red_sup = median.(ratio.(rounds, :sup, :reductions))
+      red_task = median.(ratio.(rounds, :task, :reductions))
+      wall_sup = median.(ratio.(rounds, :sup, :micros))
 
-      IO.puts("\n  Unsupervised: #{div(time_unsup, 1000)}ms")
-      IO.puts("  Supervised:   #{div(time_sup, 1000)}ms")
-      IO.puts("  Overhead:     #{Float.round(overhead, 1)}%")
+      pct = fn r -> Float.round((r - 1.0) * 100, 2) end
 
-      # Allow 10% overhead (try/rescue is free on BEAM when no exception)
-      assert overhead < 10.0,
-             "Supervised overhead #{Float.round(overhead, 1)}% exceeds 10% threshold"
+      # Supervision's cost as a fraction of the process-per-subtree control's.
+      # Both are per-subtree costs over the same denominator, which therefore
+      # cancels — see the header.
+      cost_vs_task = (red_sup - 1.0) / (red_task - 1.0)
+
+      IO.puts("\n  reductions: unsupervised #{hd(rounds).off.reductions}")
+      IO.puts("  supervised=true  #{pct.(red_sup)}% reductions, #{pct.(wall_sup)}% wall")
+      IO.puts("  supervised=:task #{pct.(red_task)}% reductions (control)")
+      IO.puts("  true costs #{Float.round(cost_vs_task, 3)}x what :task costs (gate: 0.333)")
+
+      # 1. No mode changed the work. Exact integer equality, per sample.
+      first = hd(rounds)
+
+      assert first.sup.steps == first.off.steps,
+             "supervised=true did not take the same trajectory as unsupervised: " <>
+               "#{length(Enum.reject(Enum.zip(first.sup.steps, first.off.steps), fn {a, b} -> a == b end))} " <>
+               "of #{length(first.off.steps)} samples used a different number of leapfrog steps"
+
+      assert first.task.steps == first.off.steps,
+             "supervised=:task did not take the same trajectory as unsupervised"
+
+      assert first.sup.recoveries == 0 and first.task.recoveries == 0,
+             "no fault was injected, so nothing should have been recovered"
+
+      assert Enum.sum(first.off.steps) > 0, "vacuous: the sampler took no leapfrog steps"
+
+      # 2. Non-vacuity: the control must cost something the counter can resolve,
+      #    or the ratio below is one noise figure divided by another. 0.5% of
+      #    total reductions is comfortably above the pairwise noise measured on
+      #    both backends (worst case 0.82%, typically 0.3%) — but note that if
+      #    the run-to-run noise on some future host exceeds this, the ratio gate
+      #    goes soft rather than wrong, and this assertion is what will say so.
+      assert red_task > 1.005,
+             "the process-per-subtree supervision path (:task) added only " <>
+               "#{pct.(red_task)}% reductions — the control is not resolvable on " <>
+               "this host, so the ratio below is noise over noise"
+
+      # 3. The claim. Ratio first (backend-independent), absolute second.
+      assert cost_vs_task < 1 / 3,
+             "supervised=true costs #{Float.round(cost_vs_task, 3)}x what " <>
+               "supervised=:task costs (gate: 0.333). true is a try/rescue and a " <>
+               "process-dictionary read per subtree; :task spawns a process per " <>
+               "subtree. In reductions: #{pct.(red_sup)}% against #{pct.(red_task)}%."
+
+      assert red_sup < 1.05,
+             "supervised=true costs #{pct.(red_sup)}% extra BEAM reductions " <>
+               "(absolute gate: 5%; :task, one process per subtree, costs " <>
+               "#{pct.(red_task)}%)"
+
+      # 4. Blocking backstop. Coarse on purpose — see the header.
+      assert wall_sup < 2.0,
+             "supervised=true took #{pct.(wall_sup)}% longer in wall clock while adding " <>
+               "only #{pct.(red_sup)}% reductions — supervision is blocking, not computing"
     end
   end
 end
