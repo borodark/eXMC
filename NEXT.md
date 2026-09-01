@@ -8,6 +8,101 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-08-31 (latest), nx_vulkan ab2e779 — and a retracted measurement
+
+`gate1/reconcile-core` @ **`f680412a3`**. `nx_vulkan` `6b38aee -> ab2e779`.
+
+### Fleet at `f680412a3`
+
+| host | @ `4d1c4800d` (6b38aee) | @ `f680412a3` (ab2e779) |
+|---|---|---|
+| mac-247 | 652 / **4**, 960s | 652 / **4**, 932s |
+| mac-248 | 652 / **3**, 576s | 652 / **3**, 529s |
+
+Composition identical by name on both: Poker, LevelSet, CustomDist
+(`SynthUnsupportedError`), plus the roaming `ChaosTest` teardown flake on 247 —
+**fourth sighting, fourth test name** (`cross-shader suicide window old timeouts
+age out of the window`). It has now appeared on both hosts under four different
+test names with one signature. Fix the `on_exit`; stop reading it as signal.
+
+Suite time improved on both, 960 -> 932 and 576 -> 529.
+
+### The chain-dispatch measurement is withdrawn
+
+Do not cite any per-dispatch number this branch has produced, including the ones
+already sent upstream.
+
+Matched conditions (both arms run immediately after a full suite, same box):
+
+| | probe, 8 tests |
+|---|---|
+| `6b38aee` | 4.0 4.1 4.1 |
+| `ab2e779` | 4.4 4.5 4.4 4.5 4.5 |
+
+The warm/cold confound was real but small — the post-rebuild spread (4.4-5.0,
+median 4.6) collapses to 4.5 once machine state is matched — and a ~0.4s gap
+survives it. That is not the null the code predicted, and there is a candidate
+explanation: `ab2e779` is not a no-op relative to `6b38aee` on the **upload**
+side. At `6b38aee` `upload_buffer` was still a plain host-visible write with no
+submission; at `ab2e779` it is a device-local alloc + staging buffer + recorded
+copy. The fences are gone, the staging allocation is not. Our uploads are
+`2*d*8` bytes with d <= 13 — about 200 bytes — so there is no VRAM-residency win
+to offset it.
+
+**But the instrument cannot support that conclusion, and here is why.** The
+probe drives **~520** chain dispatches, not the ~4500 previously claimed:
+
+| workload | dispatches |
+|---|---|
+| vectorized, 4 chains, 50+50 | 64 |
+| sequential, 4 chains, 50+50 | 64 |
+| `sample_compiled`, 100 samples | 126 |
+| `sample_compiled_tuned`, 100 samples | 132 |
+| `sample_stream`, 50+50 | 89 |
+
+The ~4500 figure came from the `chain_meta` fix-verification runs, which used
+500-sample workloads; the probe tests use 50 and 100. It was quoted from memory
+after being flagged as load-bearing, and it was passed upstream, where it was
+used to size their proposed mechanism. Corrected, their ~2.9s prediction becomes
+~0.33s against ~1.0s observed — the discrepancy inverts from 3x under to 3x
+over.
+
+The real problem: ~520 dispatches inside a ~4s measurement means the probe is
+dominated by BEAM boot, compilation, GLSL synthesis and backend init, not by
+dispatch. A sub-millisecond per-dispatch effect cannot be resolved in it. The
+`amplify` advice was given, and accepted, and not actually followed.
+
+**To measure this properly**, a standalone microbenchmark driving the f64 chain
+NIF in a loop: tens of thousands of dispatches, startup excluded, warmup
+discarded, n replicates with arm order rotated. Offered upstream; build it
+before their four-downloads-into-one-fence change lands, so the instrument
+exists before the change does.
+
+### The download mechanism, verified in source
+
+The `2617e5e -> 6b38aee` regression is **downloads, not uploads** — an earlier
+attribution in this file was wrong and is retracted. Verified by `git show` on
+both revisions:
+
+* `2617e5e` `download_buffer` is `buf.read()` in place; `grep -c "fn
+  staging_read"` returns **0** — the function does not exist at that revision.
+* `6b38aee` `download_buffer` delegates to `staging_read`, which does
+  `copy_buffer` + `submit_and_wait`.
+* `6b38aee` `upload_buffer` still carries `PREFER_DEVICE |
+  HOST_SEQUENTIAL_WRITE` and no submission — so uploads contributed **zero** to
+  that interval.
+* The chain NIF makes **four** `download_buffer` calls per dispatch —
+  `q_chain`, `p_chain`, `grad_chain`, `logp_chain`.
+* `git diff 6b38aee..ab2e779` touches neither `download_buffer` nor
+  `staging_read`.
+
+So the chain path went 0 -> 4 fences per dispatch on readback and is still at 4.
+Our own design note is why it lands hardest here: `3*K*d*8` down against
+`2*d*8` up. The upstream fix (four staging reads into one command buffer, 4
+fences -> 1) is the one that will matter for us.
+
+---
+
 ## Status — 2026-08-31 (later), nx_vulkan 6b38aee — the staging-buffer bump
 
 `gate1/reconcile-core` @ **`4d1c4800d`**, pushed. `nx_vulkan` `2617e5e ->
