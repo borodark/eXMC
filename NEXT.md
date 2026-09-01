@@ -118,6 +118,92 @@ Also: `glslangValidator` lives in `~/.local/bin` on the Jetson. Omit it from
 `:unsupported` — which reads as "this model cannot be synthesised" rather than
 "the compiler binary is missing".
 
+### Where the time actually goes: the GPU is ~29% busy, and that is the story
+
+The MAXN suite nearly halving (6054 -> 3802 s) prompted the right question — a
+GPU-bound workload should not care much about doubling CPU cores. Measured, on
+a sustained `Sampler.sample` loop with the gate confirmed open first:
+
+    GR3D_FREQ:  34 34 34 33 25 30 33 27 28 0 27 41 25 27 34 27 33 34 27   mean ~29%
+    18550 dispatches in 76.1 s   ->  4.1 ms of wall per dispatch
+    isolated bench               ->  2.2 ms inside Dispatch.chain
+
+Decomposing one dispatch:
+
+| | per dispatch | share |
+|---|---|---|
+| GPU actually executing | ~1.2 ms | ~29% |
+| CPU **inside** the NIF call — marshalling, alloc, submit, fence | ~1.0 ms | ~25% |
+| CPU **outside** it — NUTS tree logic, scalar Nx, BEAM | ~1.9 ms | ~46% |
+
+**About 70% of a sampling run is CPU**, and the suite figure is lower still
+because many tests never sample. That is why more cores and more clock nearly
+halved it. The GPU is not being bypassed — it is being starved.
+
+The `nx_vulkan` session measured the same thing from the other end, on a 32-step
+f64 Normal leapfrog at d=13:
+
+    fused chain shader    0.469 ms     1 dispatch
+    per-op via Nx        76.658 ms   ~224 dispatches      163x
+                                      ~342 us per dispatch
+
+At d=13 the real GPU work per op is nanoseconds inside ~342 us of host and
+driver overhead, so utilisation averages toward zero while the card waits to be
+fed. **The fix for the per-op path is fusion or batching, not widening a gate.**
+
+**Consequence for optimisation effort:** the readback batching (`8cce91c`,
+4 fences -> 1) attacks the ~1.0 ms CPU-inside-the-call half, not the ~1.2 ms of
+GPU compute. That is the right half to attack. But neither Kepler has had those
+two halves separated — the 365 us on mac-248 and the 2225 us here presumably
+decompose the same way, and the split has only been measured on the Jetson.
+
+### The per-op path does NOT host-fall-back — and how I nearly got that backwards
+
+Confirmed from both sides. A real `Sampler.sample` on the chain path reports
+**53 dispatches, 0 host fallbacks**. So "Vulkan arm" on this box really is
+Vulkan; the earlier worry that Jetson Vulkan numbers contained an unknown
+quantity of CPU-via-fallback is dead. They contain a lot of CPU, but it is BEAM
+and marshalling, not silent backend fallback.
+
+Getting there took a retraction. I ran the census, got 0, ran a "positive
+control" that also returned 0, and concluded `Nx.Vulkan.Fallback.count/1` was
+inert — one message away from telling the upstream session their instrument was
+broken and their own 0-fallback result needed rechecking.
+
+**Both zeros were mine.** I had set `Application.put_env(:exmc, :compiler,
+:vulkan)` — exmc's compiler selection — and not `Nx.default_backend/1`. Every
+tensor was built on `BinaryBackend`. Nothing was ever on the GPU, so nothing
+could fall back, and the counter was correctly answering a question I had not
+meant to ask.
+
+With the backend actually set, on the Jetson at `096d7bd`:
+
+| op | result backend | counter |
+|---|---|---|
+| `pow(t, 2.0)` | **BinaryBackend** | 1 `[pow: 3]` |
+| `pow(t, t2)` same-shape | VulkanoBackend | 0 |
+| `add(t, 1.0)` | VulkanoBackend | 0 |
+| `sort(t)` | **BinaryBackend** | 1 `[sort: 3]` |
+| `exp(t)` | VulkanoBackend | 0 |
+
+Which independently reproduces upstream's `pow_ok_bcast?` finding on a third
+architecture: broadcast `pow` leaves the GPU because the broadcast elementwise
+shaders have no `pow` arm, while same-shape `pow` stays. `sort` is a second one.
+Weibull is the family in the f64 set whose per-op form needs `pow`.
+
+**The rule this broke was already written in this file:** a control that fails
+to trigger is not evidence the instrument is broken. It is evidence of nothing
+until the control is shown able to trigger. Mine could not, because the setup
+was wrong upstream of the thing being tested. Verify the control fires before
+trusting a null — the same discipline as the non-vacuity guards in
+`chain_meta_routing_test.exs`, applied to ad-hoc measurement.
+
+**Tally for the day, since the pattern is the point:** the GPU-utilisation
+question alone took six invalid measurements before a valid one — four
+tegrastats samples of a blocked, stale, still-compiling or wrong-arm process,
+then two fallback censuses on tensors that were never on the GPU. Every one
+produced a plausible number. None measured what its label said.
+
 ---
 
 ## Status — 2026-08-31 (latest), nx_vulkan ab2e779 — and a retracted measurement
