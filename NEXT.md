@@ -8,6 +8,118 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-01, the Jetson at MAXN — and the count lies a third time
+
+**The Jetson's power mode was never recorded in any baseline.** It ran at
+nvpmodel 5W: **2 of 4 cores**, CPU capped 918 MHz, GPU capped 640 MHz —
+roughly a third of the board. `/etc/nvpmodel.conf` declares `DEFAULT=0`
+(MAXN), so 5W came from a persisted `/var/lib/nvpmodel/status` and had been
+there for as long as anyone had run tests on that host. Every Jetson number in
+this file above this line was taken that way and none of them said so.
+
+Switched to MAXN (4 cores, 1479 MHz, GPU 921.6 MHz) and re-ran the identical
+arm. The suite now logs `nvpmodel`, `nproc`, `cpu_max` and `gpu_max` in its own
+header, because "trust me, it was MAXN" is the class of claim that produced this
+whole section.
+
+| | 5W | MAXN |
+|---|---|---|
+| commit | `4d1c4800d` | `c01ee78e7` |
+| nx_vulkan | `6b38aee` | `096d7bd` |
+| result | 652 tests, **7 failures** | 652 tests, **7 failures** |
+| wall | 6054 s | **3802 s** |
+
+### Seven and seven, and almost nothing in common
+
+| test | 5W | MAXN |
+|---|---|---|
+| `NewDistTest` Lognormal mean | FAIL | FAIL |
+| `PokerTest` parameter recovery | FAIL | FAIL |
+| `LevelSetIntegrationTest` 6x6 | FAIL | FAIL |
+| `IntegrationTest` large model | FAIL | FAIL |
+| `MCLMCTest` EEVPD target | FAIL (timeout) | **cleared** |
+| `MCLMCTest` raising EEVPD | FAIL (timeout) | **cleared** |
+| `NUTSTest` Leapfrog 4 momentum | FAIL (timeout) | **cleared** |
+| `FaultTolerantTest` supervised overhead | pass | **NEW — assertion** |
+| `ChaosTest` suicide window, age out | pass | **NEW — flake** |
+| `ChaosTest` suicide window, emergency brake | pass | **NEW — flake** |
+
+**Three timeouts cleared, three new failures appeared, and the total did not
+move.** This is the third time today a failure count has been misleading and it
+is the worst of the three: on mac-247 the count stayed at 4 while composition
+changed; on the Jetson's EXLA arm the population itself shrank; here the count
+is *identical* and seven of ten rows differ. A total is not a result.
+
+The three that cleared were all `ExUnit.TimeoutError`. That part was predicted
+in advance and held: those tests were starved, not slow.
+
+**The three that appeared are the interesting half, and they were not
+predicted.**
+
+* `FaultTolerantTest` — "Supervised overhead 10.7% exceeds 10% threshold". A
+  real assertion, not a timeout. Supervision overhead is a **ratio**, and a
+  faster box shrinks the denominator faster than the numerator, so the test
+  gets *harder* as the machine improves. It has presumably been passing on the
+  Keplers and here for the same reason the wall-clock test used to "pass"
+  somewhere: the hardware happened to sit on the friendly side of a threshold.
+* `ChaosTest` x2 — the same `on_exit` `GenServer.stop` on an already-dead pid,
+  `(EXIT) no process`, after the assertions passed. **Fifth and sixth
+  sightings**, now on a third host and two further test names. It is not
+  host-specific and never was; four cores simply surface the teardown race more
+  readily. This needs fixing rather than re-observing.
+
+### Do not read the 37% as a power-mode number
+
+6054 s -> 3802 s crosses **two** variables: the power mode and `nx_vulkan`
+`6b38aee -> 096d7bd`, which is independently worth ~39% per chain dispatch on
+Kepler. A clean power-mode figure needs `4d1c4800d` rebuilt at MAXN. The
+failure composition above is unaffected by the bump and is the comparable half.
+
+### Chain-dispatch cost, third architecture
+
+`bench/chain_dispatch_cost.exs`, N=3000, warmup 3000, 6 replicates:
+
+| host | GPU | per-dispatch | spread |
+|---|---|---|---|
+| mac-248 | GT 750M, headless | **365 us** | 0.3% |
+| Jetson | Tegra X1, MAXN, unified | **2225 us** | 2.5% |
+| super-io | RTX 3060 Ti, live desktop | 822-1741 us | 57% — unusable |
+
+The Jetson is 6.1x the 750M but tight, so it is a real number. `staging path:
+OFF` confirms the unified branch.
+
+### The GPU-utilisation scare: the instrument was fine, the operator was not
+
+tegrastats showing `GR3D_FREQ 0%` during a Vulkan run looked like evidence that
+the arm was secretly CPU. Under *confirmed* dispatch it reads **53-58%**, with
+sysfs `gpu load: 514`/1000. `scripts/tegrastats_bars.sh` parses it correctly.
+
+Four sampling attempts preceded that answer and every one measured something
+else: a process blocked on a build lock; a host whose checkout predated the
+bench file; a run still inside `mix compile`; and a run where `EXMC_COMPILER`
+was inert. A gate checking for `replicate 1:` in the log existed the whole time
+and the sample was printed regardless of whether it fired. **Writing the check
+and not letting it gate anything is the failure this whole document is about.**
+
+Two real defects fell out:
+
+* `bench/chain_dispatch_cost.exs` told the reader to "re-run with
+  EXMC_COMPILER=vulkan", which `config/test.exs` honours only under
+  `MIX_ENV=test`. Under `mix run` it was inert. It appeared to work on super-io
+  (EXLA unusable without `LD_LIBRARY_PATH`) and mac-248 (no EXLA) because
+  auto-detect fell through to Vulkan anyway. On the Jetson it selected EXLA and
+  the file's own compiler guard refused. Fixed in `c01ee78e7`.
+* `scripts/tegrastats_bars.sh` (nx_vulkan) extracts GPU/EMC clock only from a
+  `%@<freq>` suffix this board never emits, so those two bars **silently never
+  render**. Reported upstream.
+
+Also: `glslangValidator` lives in `~/.local/bin` on the Jetson. Omit it from
+`PATH` and synthesis fails with a bare `:enoent` and `detect_meta/2` returns
+`:unsupported` — which reads as "this model cannot be synthesised" rather than
+"the compiler binary is missing".
+
+---
+
 ## Status — 2026-08-31 (latest), nx_vulkan ab2e779 — and a retracted measurement
 
 `gate1/reconcile-core` @ **`f680412a3`**. `nx_vulkan` `6b38aee -> ab2e779`.
