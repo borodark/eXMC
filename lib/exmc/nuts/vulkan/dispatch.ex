@@ -35,6 +35,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   alias Exmc.NUTS.CustomSynth.Push
 
   @dispatch_count_key :exmc_chain_dispatches
+  @dispatch_micros_key :exmc_chain_dispatch_micros
 
   @doc """
   Read the per-process chain dispatch counter. Increments on every
@@ -43,14 +44,36 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   """
   def dispatch_count, do: Process.get(@dispatch_count_key) || 0
 
-  @doc "Zero the per-process chain dispatch counter."
+  @doc """
+  Microseconds spent inside `chain/8` in this process since the last reset.
+
+  Pairs with `dispatch_count/0` to split a sampling run into time spent in
+  the GPU call and time spent everywhere else, **as a measurement rather than
+  a subtraction**. The earlier decomposition of a run into ~1.2 ms GPU,
+  ~1.0 ms in-NIF and ~1.9 ms tree logic came from subtracting a benchmark
+  median from a wall-clock average, and a subtraction is where an upstream
+  per-fence estimate went wrong by 3x.
+
+  Costs two `monotonic_time` calls per dispatch — tens of nanoseconds against
+  a dispatch that measures ~170 us on Kepler and ~2225 us on Tegra, so it is
+  left always-on rather than gated behind a flag that would then need its own
+  test to prove it was enabled.
+  """
+  def dispatch_micros, do: Process.get(@dispatch_micros_key) || 0
+
+  @doc "Zero the per-process chain dispatch counter and timer."
   def reset_dispatch_count do
     Process.put(@dispatch_count_key, 0)
+    Process.put(@dispatch_micros_key, 0)
     :ok
   end
 
   defp record_dispatch! do
     Process.put(@dispatch_count_key, (Process.get(@dispatch_count_key) || 0) + 1)
+  end
+
+  defp record_micros!(us) do
+    Process.put(@dispatch_micros_key, (Process.get(@dispatch_micros_key) || 0) + us)
   end
 
   @doc """
@@ -69,7 +92,13 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   """
   def chain(meta, d, epsilon, inv_mass, q, p, k, dir_sign) do
     record_dispatch!()
-    do_chain(meta, d, epsilon, inv_mass, q, p, k, dir_sign)
+    t0 = :erlang.monotonic_time(:microsecond)
+
+    try do
+      do_chain(meta, d, epsilon, inv_mass, q, p, k, dir_sign)
+    after
+      record_micros!(:erlang.monotonic_time(:microsecond) - t0)
+    end
   end
 
   # Synthesised chain shader dispatch. Meta tuple produced by
