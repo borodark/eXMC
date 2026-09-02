@@ -118,10 +118,19 @@ defmodule Exmc.Compiler do
             - reshape the model so CustomSynth can emit a fused f64 chain shader
               (standard-family priors with optional Custom likelihood)
 
-          Note on width: the binding limit is the 128-byte f64 push-constants
-          block, which holds 13 prior floats — so d <= 13 for one-parameter
-          priors, d <= 6 for Normal, d <= 3 for TruncatedNormal. The `d <= 256`
-          in the dispatch guards is the thread-tile size, not the cap.
+          Note on width: this is NOT a width problem. `:unsupported` means the
+          IR itself has no chain-shader form — a non-standard prior family, or
+          a structure CustomSynth cannot compose — so widening anything will
+          not help.
+
+          The only width bound is d <= 256, the shader's thread tile
+          (`local_size_x = 256` with a `q_shared[256]` tile), and it reports
+          itself as `{:unsupported, :d_exceeds_tile}` rather than as this
+          message.
+
+          This note used to say the binding limit was the 128-byte push block
+          at 13 prior floats. That was wrong, and wrong in a way that sent
+          readers to reduce their model when the model was never the problem.
           See Exmc.NUTS.CustomSynth.Push.
           """
 
