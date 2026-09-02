@@ -8,6 +8,116 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-02 (later), the tree-logic split, measured — and D4 gets a number
+
+`gate1/reconcile-core` @ **`4ba9e8a6a`**.
+
+### The in-dispatch / out-of-dispatch split, measured rather than subtracted
+
+`Dispatch.dispatch_micros/0` now accumulates time inside `chain/8` alongside
+the counter, so both halves come from one run. `bench/tree_logic_split.exs`
+takes the marginal between 200 and 800 draws, so warmup, compilation, shader
+synthesis and BEAM startup cancel exactly.
+
+mac-248, median of 3:
+
+| d | disp/draw | us/draw | in-dispatch | out-of-dispatch | out % |
+|---|---|---|---|---|---|
+| 1 | 1.37 | 350.5 | 246.1 | 109.0 | **31.7%** |
+| 2 | 1.47 | 415.0 | 280.9 | 134.4 | 32.4% |
+| 4 | 1.64 | 629.6 | 430.0 | 178.1 | 30.9% |
+| 8 | 1.68 | 920.8 | 379.9 | 184.5 | 20.0% |
+
+**This revises the "~1.9 ms of every 4.1 ms is tree logic" figure this file has
+been quoting.** That was 46%, derived by differencing an isolated benchmark
+median against a wall-clock average across a different workload on a different
+host. Measured in one run: out-of-dispatch is **20-32%**, and **in-dispatch is
+the larger half at every width**.
+
+It is also neither cleanly per-draw nor per-dispatch — roughly **80 us fixed
+per dispatch plus a weak width term**, since 8x the model width buys only 1.4x
+the cost.
+
+### Our trees are shallow, and that changes what is worth optimising
+
+| model | n_steps max | mean | histogram |
+|---|---|---|---|
+| d=1 | 7 | 2.83 | `1:140 3:311 7:49` |
+| d=4 | 7 | 5.44 | `1:3 3:191 7:306` |
+| d=8 | 15 | 6.44 | `3:74 7:424 15:2` |
+
+**K = 2^depth is 1 to 16, effectively never large.** `tree.ex` calls
+`Nx.to_flat_list(Nx.slice(all_logp, [0], [n_steps]))` per dispatch, which
+measures 8.5 us at K=32, 105 us at K=256 and **419 us at K=1024**, against
+4.3 / 36 / 112 for a binary comprehension over `Nx.to_binary`. A 3.7x win — on
+a term that costs about **2 us** at the K we actually run.
+
+Right scaling curve, wrong operating point. Measure the operating point before
+writing the patch, not after. (`Nx.backend_copy` to a backend a tensor is
+already on costs ~1.1 us regardless of size, so the four of them in `tree.ex`
+are also not worth touching.)
+
+### D4 now has a number attached: up to 3.9x
+
+The batched chain path — `BatchCoordinator`, `synthesise_batched/1`,
+`:exmc_chain_coord` — has been inert since it was written and this file has
+carried it as "decide: wire it or retire it" with no way to price the decision.
+It can be priced now.
+
+`nx_vulkan` swept K on mac-248 at d=4, 2500 dispatches/sample, median of 5,
+fitted over K<=16:
+
+    K= 1   92.9 us      intercept  91.3 us
+    K= 2   95.4 us      slope       2.5 us/step
+    K= 4  102.8 us
+    K= 8  111.8 us
+    K=16  130.4 us
+    K=32  167.4 us
+
+At our d=4 mean of 5.44 steps: **91.3 us fixed + 14.9 us of steps — 86% of the
+call is intercept.**
+
+    4 chains serial     4 x (91.3 + 2.5*6)    = 424.7 us
+    4 chains batched    91.3 + 2.5*7 (padded) = 108.7 us      ~3.9x
+
+I measured whether our chains agree on depth, since batching pads to the
+deepest: **48 of 300 draws agree exactly, 31.6% padding waste.** That sounds
+disqualifying and is not — the waste lands on the slope, which is 14% of the
+call, so padding costs ~2.5 us while collapsing three intercepts saves ~274 us.
+**31.6% of 14%.**
+
+At d=4 the shader also dispatches ONE workgroup of 256 threads with four doing
+work — 1.5% occupancy. A batched `[n_instances, 1, 1]` runs the instances
+concurrently, so batched wall time should be `intercept + slope * max(K)`
+rather than `sum(K)`, and the padding may cost no wall time at all.
+
+**The exmc half is D4.** The 3.9x is the ceiling on the nx_vulkan side; we
+collect it only if we can prepare ONE batched call rather than four, which is
+exactly what `BatchCoordinator` exists to do and has never been wired to do.
+Three of four NIF intercepts go for certain; three of four Elixir-side
+marshalling costs go only if the coordinator is real. **That is the strongest
+argument yet for wiring D4 rather than retiring it**, and the first one with a
+measurement behind it.
+
+nx_vulkan needs an f64 batched NIF and template first — `leapfrog_chain_synth_batch`
+exists but is f32-only. They are taking that to their user as a proposal.
+
+### Correction: super-io inflated an intercept 3x
+
+Their earlier intercept was **296.8 us on super-io against 91.3 us on 248** —
+the same 2-13x inflation as every other per-dispatch figure from that desktop.
+Had we not redone it at our operating point, the batching case would have been
+built on a 3x overstated fixed cost.
+
+Also worth retracting from my side: I told them "your side of the boundary is
+spent, the 1.9 ms is the whole game", generalising the Jetson subtraction. The
+248 split says in-dispatch is 68-80% of a draw. The 3%-of-ceiling result argues
+we cannot fix per-dispatch cost by running **more** dispatches concurrently; it
+was never an argument that per-dispatch cost does not matter. Reducing the
+**count** attacks the majority term.
+
+---
+
 ## Status — 2026-09-02, fleet green, and the ceiling that decides what is next
 
 `gate1/reconcile-core` @ **`7284a57e6`**. `nx_vulkan` `d210601 -> 6d3a651`.
