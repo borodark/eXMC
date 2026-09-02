@@ -105,6 +105,65 @@ defmodule Exmc.NUTS.CustomSynth.PushWidthTest do
     end
   end
 
+  describe "the real width bound is the shader's thread tile" do
+    @describetag :requires_vulkan
+
+    # Removing the push cap made this boundary reachable for the first time.
+    # It matters more than it looks: past d = 256 the chain shaders returned
+    # buffers with an undefined tail (handed back whole, never sliced to a
+    # logical size) and the logp tree reduce summed only the first 256
+    # elements — so the log-probability was WRONG rather than truncated, and
+    # would have surfaced as a sampler bug rather than a dispatch error.
+    #
+    # That was harmless only by accident: the push-block budget kept d near
+    # 13, so nothing ever got close. Removing the accident is what made the
+    # guard necessary. nx_vulkan now also refuses d > 256 at the NIF
+    # (:bad_input); this asserts our half, which refuses earlier and
+    # degrades to per-op instead of raising.
+    defp wide_ir(n) do
+      1..n
+      |> Enum.reduce(Builder.new_ir(), fn i, acc ->
+        Builder.rv(acc, "m#{i}", Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(1.0)})
+      end)
+      |> Builder.obs("y", "m1", Nx.tensor(1.0))
+    end
+
+    test "d = 256 synthesises and dispatches finite, correctly sized chains" do
+      # n_rv = 257 because observing m1 leaves 256 free.
+      assert {:ok, {:synthesised, _sha, layout, _spec, _spv, _obs} = meta} =
+               Exmc.NUTS.ChainShaderCodegen.detect_meta(wide_ir(257), [])
+
+      assert length(layout) == 256
+
+      d = 256
+      k = 32
+      ones = fn v -> Nx.tensor(List.duplicate(v, d), type: :f64) end
+
+      {qc, pc, lc, gc} = Dispatch.chain(meta, d, 0.01, ones.(1.0), ones.(0.5), ones.(-0.25), k, 1)
+
+      # Sizes: the undefined-tail bug showed here first.
+      assert Nx.size(qc) == k * d
+      assert Nx.size(pc) == k * d
+      assert Nx.size(gc) == k * d
+      assert Nx.size(lc) == k, "logp is one scalar per step, not per dimension"
+
+      # And the values: a wrong logp reduce produced plausible numbers, so
+      # finiteness is the check that would have caught it, not the shape.
+      for {t, name} <- [{qc, "q"}, {pc, "p"}, {gc, "grad"}, {lc, "logp"}] do
+        assert Enum.all?(
+                 Nx.to_flat_list(t),
+                 &(is_float(&1) and &1 == &1 and abs(&1) != :infinity)
+               ),
+               "#{name}_chain contains NaN or infinity at d = 256"
+      end
+    end
+
+    test "d = 257 is refused at synthesis, not left to fail at dispatch" do
+      assert {:unsupported, :d_exceeds_tile} =
+               Exmc.NUTS.ChainShaderCodegen.detect_meta(wide_ir(258), [])
+    end
+  end
+
   describe "an 8-RV model reaches the fused chain shader" do
     @describetag :requires_vulkan
 
