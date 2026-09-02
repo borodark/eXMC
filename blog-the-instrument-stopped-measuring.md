@@ -80,7 +80,7 @@ Each of the three fixes above was run against its own reverted code before being
 
 Which brings us to the rest of the day, because once you start looking for instruments that have quietly stopped measuring, they are everywhere.
 
-## Seven more, in one session
+## Nine more, in one session
 
 ### 1. The count that stayed the same
 
@@ -215,11 +215,69 @@ So the honest output of that measurement is not a number. It is: *this instrumen
 
 Being wrong about the measurement is ordinary. Supplying a wrong constant to someone else's calculation, after flagging that constant as the important one, is the part worth writing down. An estimate you have labelled load-bearing is the one place you are not allowed to estimate.
 
-## What all eight have in common
+### 8. The defect with five tests defending it
+
+The Vulkan chain shader takes a 128-byte push-constants block. `Push.pack/1` built that block as a 24-byte header followed by one f64 per prior parameter, and rejected the result once it went past 128 bytes with `{:error, :push_too_large}` — at which point the model degraded to per-op sampling. That capped models at roughly 13 free random variables with one-parameter priors, 6 with Normal, 3 with TruncatedNormal.
+
+Nothing read the prior tail.
+
+`MultiRvCustomSpec` bakes prior parameters into the generated GLSL as literals at synthesis time. Disassemble a cached SPIR-V for a model with a `Normal(0.0, 7.3125)` prior and there they are — `OpConstant %double 7.3125` and its precomputed normalisation term, sitting in the shader body. The push struct in the same module is exactly:
+
+```
+OpTypeStruct %uint %uint %uint %uint %double
+```
+
+Five members. 24 bytes. No priors. The NIF agrees: `leapfrog_chain_synth_f64` pushes `sizeof(PushBlockF64) = 24` bytes and drops everything after it.
+
+But before dispatching, it rejects `push.len() > 128`. So the tail was charged against a budget it never spent, and was the sole cause of the width limit. Measured on an 8-parameter conjugate model:
+
+| | dispatches | wall clock |
+|---|---|---|
+| with the prior tail | 0 | 160.9 s |
+| without it | 2564 | 12.3 s |
+
+13.1x, with the posterior unchanged and correct against the closed-form conjugate on both arms.
+
+That is the ordinary part. Here is the part worth the section: **five tests were defending this, and all five passed at HEAD.** Four of them sat in a describe block named, in the source, "chain shader: the push block caps model width at 13 prior floats", carrying a measured table:
+
+| prior family | max free parameters |
+|---|---|
+| one-parameter | 13 |
+| Normal | 6 |
+| StudentT | 4 |
+| TruncatedNormal | 3 |
+
+with a comment saying the number "changes what the synthesis path is FOR". The fifth, `PushFallbackTest`, asserted that a ten-parameter model correctly degraded to per-op sampling.
+
+Every one of those assertions was true. Pack the tail, and the limit is real. They tested the implementation of a constraint instead of the need for one, and then the table's precision did the rest: four rows of distinct numbers, each reproducible, look like something that has been thoroughly established rather than something nobody questioned.
+
+A test is supposed to be the thing that contradicts a wrong belief. These had been recruited to defend one. **A passing test can be evidence for a defect** — and the more precise it is, the harder it is to notice that what it pins down is the defect's shape.
+
+### 9. Six invalid measurements before a valid one
+
+A tegrastats readout during a Vulkan test run on the Jetson showed `GR3D_FREQ 0%`. Was the GPU being used at all?
+
+Answering that took six measurements. Each produced a plausible number. Each measured the wrong thing.
+
+1. Sampled tegrastats while the benchmark process was blocked on a build lock. The CPU core sitting at 100% belonged to something else entirely.
+2. Sampled while the benchmark did not exist on that host — the checkout there predated the file.
+3. Sampled while the run was still inside `mix compile`, so the Vulkan backend had not initialised yet.
+4. Sampled while `EXMC_COMPILER=vulkan` was inert. That variable is read only by `config/test.exs`, i.e. under `MIX_ENV=test`, and the benchmark runs under `mix run`. It had appeared to work on two other hosts for reasons unrelated to it: one has no EXLA installed, the other's EXLA is unusable without `LD_LIBRARY_PATH`, so auto-detection fell through to Vulkan on both by accident.
+5. and 6. Two fallback censuses using `Nx.Vulkan.Fallback.count/1`, both reporting 0 host fallbacks — including a positive control, which also reported 0. The conclusion drawn: the counter was broken.
+
+It was not broken. Every tensor in those runs had been built on `BinaryBackend`, because the setup code set exmc's *compiler* — `Application.put_env(:exmc, :compiler, :vulkan)` — and not Nx's *default backend*. Nothing was ever on the GPU, so nothing could fall back. The counter was correctly answering a question nobody meant to ask.
+
+The valid measurement, taken once a gate had confirmed the dispatch loop was actually running: `GR3D_FREQ` 53-58%, sysfs `gpu load: 514` out of 1000. The GPU was working. Separately, the run decomposes to about 1.2 ms of GPU per dispatch, 1.0 ms of CPU inside the NIF call, and 1.9 ms of CPU in tree logic — roughly 70% CPU, which is why doubling the board's cores nearly halved the suite.
+
+Two things to take from it. The first is that **a gate existed the whole time.** The harness had a loop watching the log for `replicate 1:` before sampling — and the tegrastats sample was printed whether or not that loop ever fired. Writing the check and then not letting it gate anything is the same failure this post is about, committed by the person writing the post.
+
+The second is sharper. When the positive control came back 0 alongside the experiment, the instrument got blamed. But **a control that does not trigger proves nothing until it has been shown able to trigger.** A silent control and a broken counter produce identical output; so does a control pointed at the wrong subject, which is what this was. That rule was already written down in the project's own notes, two sections above the place it was broken.
+
+## What all ten have in common
 
 In every case the instrument stopped measuring and **the report still looked like a result.**
 
-That is the whole pattern. Not a crash, not a red X, not an error anyone had to dismiss. A number appeared, in the right format, in the right column, and it was not measuring what its label said. A wall-clock inequality that could not distinguish a disabled optimization from a busy machine. A failure count summing two changes to zero. A test population that shrank by 26. A verification step that printed `command not found` inside a green block. A mechanism that was arithmetically consistent with a code change that had not happened yet. A benchmark whose two arms ran on differently-clocked hardware. A host baseline that silently encoded a power mode. A per-operation cost computed against an operation count that was off by nine times.
+That is the whole pattern. Not a crash, not a red X, not an error anyone had to dismiss. A number appeared, in the right format, in the right column, and it was not measuring what its label said. A wall-clock inequality that could not distinguish a disabled optimization from a busy machine. A failure count summing two changes to zero. A test population that shrank by 26. A verification step that printed `command not found` inside a green block. A mechanism that was arithmetically consistent with a code change that had not happened yet. A benchmark whose two arms ran on differently-clocked hardware. A host baseline that silently encoded a power mode. A per-operation cost computed against an operation count that was off by nine times. A describe block whose four measured rows documented a limit that had no cause. A positive control that returned zero and got the instrument blamed for it.
 
 The unifying rule, if there is one:
 
@@ -230,6 +288,8 @@ Green is not evidence. Green plus a negative control is evidence. And the specif
 - **Assert on things that cannot be explained away.** Counters, not durations. `dispatch_count() > 0` survives a noisy box; `t_a < t_b` does not.
 - **Every test gets a negative control.** Revert the fix, confirm the test fails, confirm it fails *saying the right thing*. Ninety seconds.
 - **Every comparison gets a non-vacuity guard.** If both arms can be zero, assert that they are not.
+- **A control that does not trigger proves nothing until it has been shown able to trigger.** A silent control, a broken counter and a control aimed at the wrong subject all produce the same output.
+- **A passing test can be evidence for a defect.** Ask what a test would still assert if the thing it describes were unnecessary. Precision is not the same as having been checked.
 - **Compare by name, not by count** — and before that, confirm both runs ran the same population.
 - **Make the run describe itself.** Backend, precision, exclusions, host, power mode, clock state. Then read it.
 - **If you cannot point at the diff, you have a story.** A mechanism is lines of code, not arithmetic that comes out right.
