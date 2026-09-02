@@ -8,6 +8,129 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-01 (later), the push cap: 13.1x from deleting a guard
+
+`gate1/reconcile-core` @ **`ae2e1927a`**. `nx_vulkan` `6b38aee -> d210601`.
+super-io Vulkan arm: **658 tests, 2 failures** — the cleanest this branch has
+been. Both remaining are pre-existing and characterised: `LevelSet` (300s
+timeout) and a `ValidatorTest` Cauchy KS at `d=0.0999` against `crit=0.0975`,
+confirmed by reverting to HEAD and reproducing it. **Poker now passes here.**
+
+### The push-constants cap was measuring bytes nothing read
+
+`Push.pack/1` built a 24-byte header plus one f64 per prior parameter and
+rejected the result past 128 bytes, degrading the model to per-op sampling.
+That capped models at ~13 free RVs with one-parameter priors, 6 with Normal, 3
+with TruncatedNormal.
+
+The tail was read by nothing. `MultiRvCustomSpec` bakes prior parameters into
+the GLSL as literals — disassembling a cached SPV for `Normal(0.0, 7.3125)`
+shows `OpConstant %double 7.3125` and its precomputed normalisation term, in a
+push struct of exactly `OpTypeStruct %uint %uint %uint %uint %double`. And
+`leapfrog_chain_synth_f64` pushes `sizeof(PushBlockF64) = 24` and drops the
+rest. **But the NIF rejects `push.len() > 128` before dispatching**, so the
+unread tail was counted against a budget it never spent.
+
+| 8-RV conjugate model | dispatches | wall |
+|---|---|---|
+| with the tail | **0** | 160.9 s |
+| header only | **2564** | 12.3 s |
+
+**13.1x**, posterior unchanged and correct against the closed-form conjugate on
+both arms. Negative control: restoring the tail makes `detect_meta` refuse the
+model again and `push_width_test.exs` go 5/5 -> 3 failures.
+
+Since wide models are now reachable, synthesis refuses `d > 256` — the shader's
+actual bound (`local_size_x = 256`, `q_shared[256]`) — so it degrades rather
+than reaching `do_chain`'s single guarded clause and raising a
+`FunctionClauseError` naming nothing.
+
+### Five passing tests were defending it
+
+This is the part worth keeping.
+
+Four sat in a describe block named **"chain shader: the push block caps model
+width at 13 prior floats"**, carrying a measured table — `d <= 13` for
+one-parameter priors, 6 for Normal, 4 for StudentT, 3 for TruncatedNormal —
+and a comment saying the number "changes what the synthesis path is FOR". A
+fifth, `PushFallbackTest`, asserted that a ten-parameter model *correctly*
+degraded to per-op. All five were green at HEAD.
+
+They were not testing a limit. They were pinning a defect, and pinning it
+precisely enough to look thoroughly established. **A passing test can be
+evidence for a defect.** All five are rewritten to assert the corrected
+behaviour and kept as regressions: reinstating the tail fails them.
+
+Four doc sites asserted the wrong bound and all had to move together —
+`push.ex`'s moduledoc, `tree.ex:722`, `dispatch.ex:78`, `compiler.ex`. Each
+said `d <= 256` was "never the binding one". It is the only binding one.
+
+### A vanished shader is now rebuilt, not fatal
+
+`Dispatch` holds an `spv_path` from synthesis and hands it to the NIF every
+call. If the file disappears in between, the NIF returns `{:error,
+:dispatch_failed, "read spv: No such file or directory"}` and the `{:ok, _} =`
+match raises inside `Tree.do_build`, in whatever test is running.
+
+Two unrelated causes so far: this module's own shared temp paths (fixed
+earlier), and **`Nx.Vulkan.Synthesis.clear_cache/0` doing `File.rm_rf` on
+`~/.exmc/gpu_node/spv`** — the two projects shared that directory, from that
+project's `setup` AND `on_exit`. It deleted a shader out from under a
+full-suite run here. nx_vulkan has since moved its caches under
+`~/.nx_vulkan/` (b024ad1, verified with sentinel files).
+
+`Compile.compile_glsl/1` now remembers each source against its hash and
+`ensure!/1` rebuilds from it; dispatch retries once. Rebuilding is always
+correct — the GLSL is deterministic and the hash IS the filename. This removes
+the class, not one cause: eviction, partial writes, an operator `rm` and a
+restored home directory all reach the same state.
+
+Negative control, deleting the shader **during** a run: without the retry,
+`MatchError ... "read spv"` after **1 dispatch**, twice; with it, 600 draws and
+804 dispatches, posterior unchanged, twice.
+
+### Two test fixes, and what each cost to get right
+
+**`ChaosTest`'s teardown race** — six sightings, three hosts, five test names.
+ExUnit exits the test process with `:shutdown` when the body returns, reaping
+everything `start_link`ed in `setup`; `on_exit` then runs from a *different*
+process, so `Process.whereis/1` can return a pid dead microseconds later. The
+old teardown was `for name <- names, do: GenServer.stop(...)`, and a
+single-generator comprehension compiles to `Enum.map/2` — which is why the
+stack frames ran through `enum.ex:1714`, and why the first dead pid also
+aborted cleanup of every name after it. Deterministic control: 5 failures -> 0;
+12/12 clean after.
+
+**`FaultTolerantTest`'s overhead gate** — failed on the Jetson only after MAXN,
+because overhead is a *ratio* and a faster box shrinks the denominator faster
+than the numerator. The measurement found worse: seven alternating pairs of the
+same runs read -5.7, -1.5, +19.3, -11.8, +21.6, +3.4, +0.3 percent. **A +-20%
+instrument cannot adjudicate a 10% claim on any host.** Replaced with BEAM
+reductions and a same-run control arm (`supervised: :task`, a real
+implementation that spawns per subtree), normalised per leapfrog step.
+
+That rewrite then failed in the full suite while passing 8/8 in isolation —
+`:task` diverged from the unsupervised trajectory under load. A load-sensitive
+assertion inside the test written to remove load-sensitive assertions, and only
+a contended full-suite run could show it.
+
+### Four controls caught four things review did not
+
+Worth listing together, because the hit rate is the argument:
+
+1. The `ValidatorTest` Cauchy failure looked like mine; reverting to HEAD
+   reproduced it. Pre-existing.
+2. My first shader-recovery test deleted the artifact *before* sampling. That
+   proved nothing — `Sampler.sample` re-synthesises and rebuilds it first — and
+   the negative control **passed with the fix reverted**, which is the only
+   reason it was caught.
+3. My closing `assert File.exists?(spv)` was itself a race: the killer's last
+   `rm` can land after the last dispatch. It failed while the recovery it
+   tested had worked perfectly.
+4. The `:task` divergence above, caught only by the full suite.
+
+---
+
 ## Status — 2026-09-01, the Jetson at MAXN — and the count lies a third time
 
 **The Jetson's power mode was never recorded in any baseline.** It ran at
