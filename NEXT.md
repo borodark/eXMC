@@ -8,6 +8,106 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-02, fleet green, and the ceiling that decides what is next
+
+`gate1/reconcile-core` @ **`7284a57e6`**. `nx_vulkan` `d210601 -> 6d3a651`.
+
+### Fleet at `ae2e1927a`, all three hosts
+
+| host | before | now | what moved |
+|---|---|---|---|
+| mac-247 | 652 / **4** | 658 / **3** | `ChaosTest` flake gone |
+| mac-248 | 652 / **3** | 658 / **3** | identical to 247, by name |
+| Jetson (MAXN) | 652 / **7** | 658 / **4** | `ChaosTest` x2 + overhead gate gone |
+
+Both Keplers now fail on exactly the same three: Poker, LevelSet, CustomDist,
+all `SynthUnsupportedError` for **non-synthesisable IR, not width** — so the
+push-cap change correctly does not touch them. The Jetson's three
+disappearances are precisely the three things fixed that day. **No regression
+anywhere from removing the cap.** 652 -> 658 reconciles exactly: +5
+`push_width_test`, +2 `spv_recovery_test`, -1 from the P0 cap block.
+
+### The number that decides the next piece of work
+
+`nx_vulkan` measured concurrent dispatch on mac-248 — M processes each driving
+`leapfrog_chain_synth_f64`, d=13, K=32, both arms, two rounds:
+
+    M    us/dispatch     throughput
+    1    172 / 169       5800-5900 disp/s
+    2    135 / 135       ~7390
+    4    136 / 136       ~7350
+    8    136 / 136       ~7325
+
+**The chain path saturates at ~7350 dispatches/s from M=2 onward.** Every
+dispatch does `submit_and_wait` on a single queue, so two concurrent callers
+fill it and more buy nothing.
+
+Our sustained sampling run does **18550 dispatches in 76.1 s = 244/s — about
+3% of that ceiling.**
+
+Three consequences, and they are the clearest direction this file has had:
+
+1. **The bottleneck is confirmed to be ours, from an independent direction.**
+   The GPU-side decomposition already said ~1.9 ms of each ~4.1 ms dispatch is
+   NUTS tree logic. This says the same thing without reference to that
+   measurement: we are running at 3% of what the queue would allow.
+2. **Parallelising chains is not the lever.** Throughput is flat past M=2 on
+   this path. Adding concurrent samplers to buy dispatch throughput would be
+   work spent against a ceiling we are nowhere near and could not raise.
+3. **Further per-dispatch optimisation upstream has little left to give us at
+   our current rate.** The fence fold was worth 18.2%; at 3% queue occupancy
+   the remaining in-NIF cost is not what is holding us.
+
+### A hypothesis of mine that measurement killed
+
+I argued the buffer pool's global mutex might serialise our concurrent
+dispatch — seven `async: true` modules call `Sampler.sample`, so contention is
+real for us — and that a 1.3% win at M=1 could be a net loss at M=4.
+
+**The mutex does not hurt at any M.** No scaling penalty in either direction,
+despite 8 lock acquisitions per dispatch. What the measurement did find is that
+the pool's advantage *disappears entirely* at M >= 2, because per-dispatch CPU
+savings stop mattering once the queue saturates. So insisting on the
+measurement was right and my mechanism was wrong — the arms are
+indistinguishable everywhere except M=1. The pool has been dropped upstream on
+those grounds rather than on the 2.2 us.
+
+### Two corrections to figures this file has quoted
+
+`nx_vulkan` re-measured its own super-io numbers on mac-248 and both were
+inflated: the fence fold **-36% -> -18.2%**, the buffer pool **-17% -> -1.3%**.
+The cumulative chain-dispatch cost on 248, arms chained:
+
+    ab2e779           365 us
+    096d7bd fast OFF  238 us    8cce91c    -35%
+    096d7bd fast ON   224 us    b59c4a7     -6%
+    f4c00f4           210 us
+    8cd19ee           172 us    fence fold -18%
+    d210601           170 us    pool       -1.3%   (now dropped)
+
+**365 -> 170 us, about -53%**, with both large wins on the readback side —
+which is what our own `3*K*d*8` down against `2*d*8` up asymmetry predicted.
+
+The lesson attached to it is theirs and it is sharper than "super-io is noisy":
+**a ~900 us noise band does not merely fail to resolve a small effect, it
+manufactures a large one.** Treat every per-dispatch figure taken on super-io
+as an upper bound.
+
+Related, and it retires a documented constraint: **81 of 81 shaders are
+byte-identical at glslang 15.1.0, 16.2.0 and 16.5.0.** The generator word
+encodes glslang's generator version, not its release. The version pin was
+documented as load-bearing and is not.
+
+### Housekeeping
+
+`mac-248`'s `deps/nx_vulkan/priv/native/libnx_vulkan_vulkano.so` was left dated
+01:12 by upstream's `.so`-swap benchmarking. The git tree there is clean and at
+`ae2e1927a`, but **force `mix deps.compile nx_vulkan` before any run on that
+box** rather than trusting the artifact matches the lock. Same trap as
+deploying with `--no-compile`.
+
+---
+
 ## Status — 2026-09-01 (later), the push cap: 13.1x from deleting a guard
 
 `gate1/reconcile-core` @ **`ae2e1927a`**. `nx_vulkan` `6b38aee -> d210601`.
