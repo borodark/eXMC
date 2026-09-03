@@ -8,6 +8,106 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-02 (latest), the batching contract, and one method note
+
+`gate1/reconcile-core` @ **`abfbe8e81`**.
+
+### Differences of noisy measurements — the day's actual lesson
+
+Three separate things died of this today, in both repos:
+
+| claim | error | how |
+|---|---|---|
+| upstream's ~0.16 ms per submit-and-fence | **3x** | benchmark median minus benchmark median, across hosts |
+| my "~4500 chain dispatches" | **9x** | remembered from a different workload, then used as a divisor |
+| my in/out-of-dispatch split | **impossible** | marginal between two sample counts, giving negative time |
+
+Every one produced a number that looked *more* precise than either operand it
+came from. Subtracting two noisy quantities keeps both variances and discards
+the scale that would have made the noise visible.
+
+**Rule: do not difference two measurements to get a third.** Instrument the
+thing directly, or A/B the whole workload with medians. Where a difference is
+unavoidable, publish the repeatability of the difference before the difference
+— running the same commit three times would have caught all three of these in
+minutes.
+
+### The batching contract, and the key that would have broken it
+
+`nx_vulkan` shipped the f64 batched chain path (`bcfed0a`, bounds check
+`ab16b24`). Measured on mac-248 at our depth histogram:
+
+| chains | depths | serial us/draw | batched us/draw | speedup |
+|---|---|---|---|---|
+| 4 | 7,7,7,7 | 478.5 | 111.3 | 4.3x |
+| 4 | 7,7,3,3 | 424.2 | 123.5 | 3.4x |
+| 4 | 7,3,3,1 | 448.3 | 128.4 | 3.5x |
+| 2 | 7,7 | 267.0 | 119.2 | 2.2x |
+| 8 | 7x8 | 1143.6 | 119.3 | **9.6x** |
+
+**Batched cost is flat in chain count** — the GPU runs the workgroups
+concurrently, and at d=4 a single-instance dispatch occupies 4 of 256 threads.
+More chains is nearly free.
+
+**Scope, stated precisely because it is easy to overclaim:** this is 3.4-4.3x
+of the *in-dispatch term only*. What fraction of wall time that term is was my
+68-80% figure, now withdrawn along with the 1.9 ms it replaced. **The
+end-to-end benefit is currently unknown.** What is established is upstream's
+own measurement at our operating point: intercept 91.3 us against slope
+2.5 us/step over K<=16, so 86% of a dispatch is fixed cost.
+
+Contract: instances share one SPV, so priors and `d` must match; **K may
+differ and is padded to the deepest**; inputs and outputs are instance-major;
+`n_instances` is bounded by the device workgroup limit.
+
+**`BatchCoordinator`'s key is wrong for this**, `batch_coordinator.ex:434`:
+
+    {:erlang.phash2(meta), k, eps}
+
+K is in the key, so chains of differing depth are partitioned into singletons
+rather than padded. Against our measured histogram — 48 of 300 draws with all
+four chains at the same `n_steps` — **it would batch fully in 16% of draws and
+fragment in 84%**, which is most of the benefit gone. The comment justifying
+it is not wrong about the shader; it concluded "partition" where "pad" was
+available, and it predates any batched f64 NIF existing.
+
+Fix, when the coordinator is wired: **drop `k` from the key** to
+`{phash2(meta), eps}` and pad at flush. `d` is implicit in `meta`.
+
+**And a hazard to write before anyone codes the flush:** a padded instance
+runs MORE leapfrog steps than it asked for. If chain A wants K=3 in a group
+padded to K=7, its buffers come back with seven steps, and the coordinator
+must hand back only the first three. The extra steps are computed from valid
+state, so they are not garbage — they are trajectory the sampler never
+requested. Getting this wrong produces a plausible wrong posterior, not an
+error.
+
+### Our chains do not advance in lockstep
+
+The reason the batched path is not reachable from the default:
+`sampler.ex:1256` is **"Phase 3: Sample all chains sequentially (no XLA
+contention)"** — `Enum.map(chain_states, &run_sampling/…)`. Chain 0 finishes
+all its draws before chain 1 starts, so four chains never want a leapfrog at
+once.
+
+The **non-vectorized** path does: `sampler.ex:119` runs chains through
+`Task.async_stream` with `max_concurrency: num_chains`, in separate processes,
+hitting `Dispatch.chain/8` independently. They do not synchronise per draw and
+do not need to — coalescing requests from independent processes on a
+size-or-timer flush is exactly what `BatchCoordinator` was built for and has
+never done.
+
+So the work splits:
+
+1. **Wire `BatchCoordinator` to the parallel path.** Tractable. Machinery
+   exists, D1/D2/D3 fixed, callers already concurrent, and the batched NIF is
+   the half it was waiting for. Needs the key fix and the padding slice above.
+2. **Restructure the vectorized path to advance chains together.** A real
+   refactor of the default multi-chain loop, reversing a decision made for
+   EXLA. Not on the strength of a Vulkan number.
+
+---
+
 ## Status — 2026-09-02 (later), the tree-logic split, measured — and D4 gets a number
 
 `gate1/reconcile-core` @ **`4ba9e8a6a`**.
