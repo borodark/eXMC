@@ -8,6 +8,107 @@ stands rather than as the mission planned it.
 
 ---
 
+## NEXT TASK — the f64 batched chain shader (self-contained spec)
+
+This is the one blocker between here and a measured 3.4-4.3x on the chain
+dispatch. Everything else in the chain is done and waiting.
+
+### What is already in place
+
+| piece | state |
+|---|---|
+| `leapfrog_chain_synth_batch_f64/6` NIF | **exists**, `nx_vulkan` cccbd71, correct on discrete AND unified memory |
+| prefix property (K=k0 first k steps == K=k dispatch, bit-identical) | **pinned upstream**, verified k = 1, 3, 5 and through the batched path |
+| `BatchCoordinator` partition key `{meta_hash, |eps|}` | **done**, `02492ed78` |
+| padding to deepest + `trim_to_requested/3` per caller | **done**, tested |
+| `route_chain` reads `:exmc_chain_coord` | **exists**, `tree.ex` |
+| D1/D2/D3 (coord crash, prior encoder, push cap) | **fixed** |
+
+### What is missing, exactly
+
+`MultiRvCustomSpec.render_batched/1` emits **f32**: `float eps`, `float
+q_init[]`, `float q_chain[]`. The NIF that exists is the **f64** one. So there
+is no batched shader to dispatch.
+
+### The work
+
+1. **Write the f64 batched template.** ~141 lines. Two existing files are the
+   model, and it is a combination of them, NOT a `float` -> `double` rewrite:
+   * the **f64 single-instance** template in the same module — take its
+     conventions, particularly that it **bakes prior constants as literals**
+     because `GLSL.std.450` has no f64 transcendentals and an f32 boundary
+     cast costs nine significant digits;
+   * the **f32 batched** template — take its `inst`-offset indexing and its
+     `n_instances` push field.
+
+   Push block is 24 bytes, `{k_steps, n_obs, d, n_instances, eps}` — the same
+   first twelve bytes as the single-instance block, with `n_instances` where
+   `_pad` sits. Inputs are instance-major, `n_instances * d` f64. Outputs are
+   `n_instances * K * d * 8` per chain buffer and `n_instances * K * 8` for
+   logp — **logp is one scalar per step, not per dimension**.
+
+2. **Verify by bit-identity, not tolerance.** Each instance of a batched
+   dispatch must equal the same chain dispatched alone, byte for byte, on all
+   four buffers. Upstream verified their side this way; ours needs the same,
+   plus an instance-bleed test with deliberately divergent inputs (a size check
+   cannot see bleed) and `n_instances = 1` matching the single path exactly.
+
+3. **Then wire it**: set `:exmc_chain_coord` in the `Task.async_stream` path
+   (`sampler.ex:119`), start and stop a coordinator per multi-chain run.
+
+### What NOT to do
+
+**Do not touch the vectorized path.** `sampler.ex:1256` is "Phase 3: Sample all
+chains sequentially (no XLA contention)" — chains run to completion one at a
+time, so nothing to batch. Making it interleave is a refactor of the default
+multi-chain loop reversing a decision made for EXLA, and it is not justified by
+a Vulkan number.
+
+**Do not size the payoff from the 3.4-4.3x alone.** That is the *in-dispatch
+term only*. What fraction of wall time it represents is **unknown** — both
+estimates were withdrawn. Build an instrument that resolves it before claiming
+an end-to-end win.
+
+---
+
+## Host hazard — a swapped `.so` survives an ordinary rebuild
+
+**Confirmed on mac-248, 2026-09-02.** After `.so`-swap benchmarking left an
+artifact of unknown provenance in `deps/nx_vulkan/priv/native/`, the agreed
+mitigation was to force `mix deps.compile nx_vulkan` before any run there.
+**That does not work.** Cargo sees unchanged Rust sources, reports the crate up
+to date, and Rustler never re-copies — the copy into `priv/native` happens only
+when cargo produces a new artifact. Upstream demonstrated it by replacing the
+`.so` with 25 bytes of text and watching a plain `mix compile` leave it in place
+for 1622 failures.
+
+Verified here rather than accepted: a clean rebuild on 248 changed the
+checksum, `f1ab9681753dde0f -> 7cf6facf98be03e3`. **The artifact was stale and
+my mitigation would not have replaced it.**
+
+    # the only thing that actually replaces it
+    mix deps.clean nx_vulkan --build && mix deps.compile nx_vulkan
+    # or: rm -rf deps/nx_vulkan/native/nx_vulkan_vulkano/target
+
+**Impact on measurements taken on 248 in that window: none that changes a
+conclusion**, checked rather than assumed. The stale artifact was a `d210601`
+build; it differs from the lock by the buffer pool, which pools allocations and
+does not alter arithmetic — so the depth histogram (48/300 chains agreeing,
+`n_steps` 1..16) stands, and the kinetic-energy A/B used the *same* binary in
+both arms so its comparison is internally valid. The pure-Elixir microbenchmarks
+never touched the NIF.
+
+**Generalises past this incident:** any workflow that swaps a `.so` — benchmark
+arms, a cross-built deploy, a bisect — leaves an artifact ordinary rebuilds will
+not clear. Checksum `priv/native` before and after, always.
+
+Also from upstream (`c2c7a5b`): `NXV_SKIP_NIF_BUILD=1` now disables the crate
+build via `skip_compilation?`, so a Jetson verification is a ~2 minute
+cross-build on super-io plus a short Elixir compile for **any** commit, not just
+Rust-only ones.
+
+---
+
 ## Status — 2026-09-02 (latest), the batching contract, and one method note
 
 `gate1/reconcile-core` @ **`abfbe8e81`**.
