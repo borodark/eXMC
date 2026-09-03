@@ -7,11 +7,23 @@ defmodule Exmc.NUTS.CustomSynth.PushPriorParamFloatsTest do
   # dispatch path could stop carrying its own copy (D1 in
   # docs/BATCHED_CHAIN_DISPATCH.md).
   #
-  # These tests pin the behaviour the copy did NOT have. They are the only
-  # verification D1 can currently get: `Dispatch.chain_batch/5` calls
-  # `ensure_batch_nif!/0` before it packs anything, so with no f64 batch NIF
-  # in nx_vulkan the encoder is unreachable through that function. Testing it
-  # here rather than pretending the batched path covers it.
+  # THAT CALLER IS GONE, and it is worth saying why before anyone restores it.
+  # `chain_batch/5` appended these floats to its header and checked the total
+  # against the NIF's 128-byte bound. Nothing read them: the batched shader
+  # bakes prior parameters into its SPIR-V as literals exactly as the
+  # single-instance one does, and `leapfrog_chain_synth_batch_f64/6` pushes
+  # sizeof(PushBlockBatchF64) = 24 bytes and drops the rest. All the tail did
+  # was spend a budget it never used — an 8-RV Normal model came to 152 B and
+  # raised, a 16-RV one to 280 B, so batching was capped at about six free
+  # RVs and every wider model fell back to unbatched dispatch. Same defect,
+  # same shape, as the one that cost the single-instance path 13.1x; see
+  # `push_width_test.exs` and `batched_shader_test.exs`.
+  #
+  # Both functions stay: they are public API, the encoder is correct, and a
+  # future push layout that genuinely carries parameters would want it. What
+  # is no longer true is that any dispatch path calls them. The tests below
+  # therefore pin two public functions, not a live code path, and they say so
+  # rather than implying coverage they do not have.
 
   describe "clauses the deleted dispatch.ex copy also had" do
     test "Normal, HalfCauchy, HalfNormal, Exponential encode unchanged" do
@@ -90,15 +102,16 @@ defmodule Exmc.NUTS.CustomSynth.PushPriorParamFloatsTest do
     end
   end
 
-  describe "ensure_fits!/2 — the batched path's 128-byte cap (D2)" do
-    # chain_batch/5 builds its own header so it cannot go through pack/1, and
-    # had no size check at all: an oversized block reached the NIF, came back
+  describe "ensure_fits!/2 — a 128-byte guard with no caller left" do
+    # It was added because chain_batch/5 built its own header-plus-tail and
+    # had no size check: an oversized block reached the NIF, came back
     # {:error, :bad_input}, and failed the {:ok, {...}} = match as a MatchError
     # naming nothing.
     #
-    # Tested here rather than through chain_batch/5 because that function calls
-    # ensure_batch_nif!/0 first, and the f64 batch NIF does not exist -- the
-    # pack is unreachable through it. Same reason as prior_param_floats above.
+    # chain_batch/5 now sends the 24-byte header alone, so it cannot overflow
+    # and no longer calls this. The bound it encodes is still the NIF's real
+    # one (`push.len() > 128` is checked before dispatch in both the single
+    # and batched f64 entry points), so the function is kept and pinned here.
 
     test "a block at the budget passes through unchanged" do
       bin = :binary.copy(<<0>>, Push.max_bytes())
@@ -121,7 +134,7 @@ defmodule Exmc.NUTS.CustomSynth.PushPriorParamFloatsTest do
       end
     end
 
-    test "the budget binds the batched path only — pack/1 no longer has one" do
+    test "pack/1 has no budget, and the 128-byte bound is still the NIF's" do
       # This test used to assert "two encoders, one number": that a 16-prior
       # model overflowed BOTH `ensure_fits!/2` and `pack/1`. That is no longer
       # true and the change is deliberate.
@@ -133,16 +146,17 @@ defmodule Exmc.NUTS.CustomSynth.PushPriorParamFloatsTest do
       # the tail took an 8-RV model from 0 chain dispatches to 2564. See
       # `push_width_test.exs`.
       #
-      # `ensure_fits!/2` still guards `chain_batch/5`, which builds its own
-      # header-plus-tail for the batched f32 path and does not go through
-      # `pack/1`. That path is unreachable today (D4) but its encoder is real,
-      # so the budget it checks is real.
+      # `chain_batch/5` reached the same conclusion later, for the same reason
+      # and after the same measurement — see this file's header. Neither
+      # dispatch path packs a tail now, so `ensure_fits!/2` is checked here
+      # against a block this test builds itself rather than against one any
+      # caller produces.
       priors = for i <- 1..16, do: {"p#{i}", Exmc.Dist.HalfNormal, %{sigma: 1.0}}
 
       # pack/1: no budget, no width at which it fails.
       assert {:ok, _bin, 24} = Push.pack(%{K: 8, n_obs: 4, d: 16, eps: 0.1, priors: priors})
 
-      # ensure_fits!/2: still enforces 128 B, on a block the batched path builds.
+      # ensure_fits!/2: still enforces 128 B, the NIF's real bound.
       floats = Enum.flat_map(priors, &Push.prior_param_floats/1)
       oversized = <<0::128>> <> for f <- floats, into: <<>>, do: <<f::little-float-64>>
 

@@ -136,19 +136,42 @@ defmodule Exmc.NUTS.CustomSynth do
   Same return shape as `synthesise/1` but uses
   `MultiRvCustomSpec.render_batched/1` to emit the per-instance-offset
   variant. The returned `obs_bin` is empty — each instance brings its
-  own obs at dispatch time via `Dispatch.chain_batch/4`.
+  own obs at dispatch time via `Dispatch.chain_batch/5`.
+
+  `opts` is threaded into `Exmc.Rewrite.apply/2` for the same reason
+  `synthesise/1` threads it: the two arms must be handed the same `:ncp`
+  flag or the shader and the PointMap describe different coordinates.
+
+  Every model class `synthesise/1` accepts is accepted here — prior-only,
+  observed, and Custom alike. It used to refuse anything with `custom: nil`,
+  which is every conjugate model built through `Builder.obs` and so the
+  entire class the batch coordinator exists to serve.
 
   Returns `{:ok, {:synthesised, sha, layout, push_spec, spv_path, <<>>}}`.
   """
-  @spec synthesise_batched(IR.t()) ::
+  @spec synthesise_batched(IR.t(), keyword()) ::
           {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
-  def synthesise_batched(%IR{} = ir) do
+  def synthesise_batched(%IR{} = ir, opts \\ []) do
+    # Rewrite FIRST, and with the caller's opts, for exactly the reason
+    # synthesise/1 documents: skipping it gives the shader one coordinate
+    # system and the sampler another. This path used to skip it, so a
+    # non-centred model would have batched a shader built from the centred
+    # parameterisation while the PointMap described the standardised one.
+    ir = Exmc.Rewrite.apply(ir, opts)
+
     with {:ok, components} <- extract_components(ir),
          {:ok, glsl} <- Exmc.NUTS.CustomSynth.MultiRvCustomSpec.render_batched(components) do
+      # n_obs sizes the batched shader's per-instance stride:
+      # `extras_off = inst * (n_obs + d)`. Getting it wrong does not fail —
+      # it silently points every instance past index 0 at another instance's
+      # observations and inverse mass. This used to default to 1 whenever
+      # `ir.data` was absent, which is every `Builder.obs` model, so a
+      # two-observation conjugate model would have had instance 1 reading
+      # from the middle of instance 0's slice.
       n_obs =
         case ir.data do
           %Nx.Tensor{shape: {n}} -> n
-          _ -> 1
+          _ -> observed_n_obs(Map.get(components, :observed, []))
         end
 
       push_spec =

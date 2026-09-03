@@ -8,53 +8,130 @@ stands rather than as the mission planned it.
 
 ---
 
-## NEXT TASK — the f64 batched chain shader (self-contained spec)
+## Status 2026-09-02 — the f64 batched chain shader is written and verified
 
-This is the one blocker between here and a measured 3.4-4.3x on the chain
-dispatch. Everything else in the chain is done and waiting.
+The blocker is gone. `MultiRvCustomSpec.render_batched/1` now emits f64, every
+model class `render/1` accepts renders through it, and a batched instance is
+**bit-identical** to the same chain dispatched alone on all four output
+buffers. Measured on super-io (RTX 3060 Ti), 17 tests in
+`test/exmc/nuts/custom_synth/batched_shader_test.exs`.
 
-### What is already in place
+### What was actually wrong
 
-| piece | state |
+Four defects, three of which could not have been found by reading the shader.
+
+1. **The template was f32 and could not have compiled.** `float eps`, `float
+   q_init[]` — while the batched path's own reduce-sum rewriter emitted
+   `double` accumulators into it. GLSL has no implicit double-to-float
+   conversion, so every model with a vector observation failed in
+   `glslangValidator`. Invisible because there was no f64 batch NIF to
+   dispatch the result to, so nothing had ever rendered it in anger.
+
+2. **The batched renderer was a drifted copy of `render_with_custom/1`.** It
+   had lost the obs spans (a model with several observed nodes would have
+   counted its whole likelihood once per node — the defect
+   `docs/OPEN_VULKAN_OBSERVED_MODEL.md` describes, ~sqrt(n) too narrow a
+   posterior and a frozen chain), the common-subexpression pass, and the f64
+   transcendental rewrite.
+
+3. **`chain_batch/5` appended the unread prior tail.** The same defect that
+   cost the single-instance path 13.1x, still live on the batched one: 8
+   Normal priors made a 152-byte push block against the NIF's 128-byte bound,
+   16 made 280. So batching was **capped at about six free RVs** and every
+   wider model raised and fell back. Nothing read the tail — the batched
+   shader bakes priors as SPIR-V literals and the NIF forwards
+   `sizeof(PushBlockBatchF64) = 24`.
+
+4. **`synthesise_batched/1` sized `n_obs` from `ir.data` alone**, defaulting to
+   1 for every `Builder.obs` model, and skipped `Exmc.Rewrite.apply/2`. `n_obs`
+   is the per-instance extras stride (`inst * (n_obs + d)`), so a wrong value
+   does not fail — it points instance 1 into the middle of instance 0's slice.
+
+Also: `render_batched(%{custom: nil})` returned
+`{:error, :prior_only_batched_not_supported}`, which excluded every conjugate
+model — the entire class the coordinator exists to serve, since `Builder.obs`
+models have no Custom term.
+
+### The design that makes bit-identity a claim rather than a hope
+
+Both variants now render from **one emitter**. `render_prior_only/3` and
+`render_with_custom/3` take the template and the observation index expression
+as arguments; `obs_inv_mass[j]` becomes `obs_inv_mass[extras_off + j]` and
+nothing else differs. A batched instance therefore performs the same
+arithmetic in the same order as the lone chain, which is why byte equality is
+a reasonable thing to demand instead of a tolerance. A tolerance passes for a
+shader that reads a neighbour's inverse mass or sums an observation slice one
+element off, and those are exactly the failures this needed to catch.
+
+Pinned directly: `emitted_lines/1` compares the two renderers' emitted bodies
+line for line, for four model shapes.
+
+### Verified, and verified to be non-vacuous
+
+Bit-identity across prior-only (d=2), 1 RV, 3 RVs, vector obs (n_obs=4), 8 RVs
+and 16 RVs, at 1, 3, 4, 5 and 6 instances, both `dir_sign` values. Plus an
+instance-bleed test with observations at 3.0, -50.0 and 1000.0, each instance
+matched against its own single-instance dispatch, and an inverse-mass bleed
+test — inv_mass sits after the observations in each instance's extras slice,
+so it is the half of the stride the observation test cannot reach.
+
+Every one of these was mutation-tested. Five mutations, all caught:
+
+| mutation | failures of 17 |
 |---|---|
-| `leapfrog_chain_synth_batch_f64/6` NIF | **exists**, `nx_vulkan` cccbd71, correct on discrete AND unified memory |
-| prefix property (K=k0 first k steps == K=k dispatch, bit-identical) | **pinned upstream**, verified k = 1, 3, 5 and through the batched path |
-| `BatchCoordinator` partition key `{meta_hash, |eps|}` | **done**, `02492ed78` |
-| padding to deepest + `trim_to_requested/3` per caller | **done**, tested |
-| `route_chain` reads `:exmc_chain_coord` | **exists**, `tree.ex` |
-| D1/D2/D3 (coord crash, prior encoder, push cap) | **fixed** |
+| `extras_off = inst * d` (drops `n_obs` from the stride) | 8 |
+| batched obs index back to `"j"` | 2 |
+| `chain_off = 0u` | 8 |
+| `n_obs` back to defaulting to 1 | 9 |
+| push prior tail restored in `chain_batch/5` | 2 |
 
-### What is missing, exactly
+The stride mutation has the signature you would expect and would not have
+noticed by eye: instance 0 still matches (its offset is 0 either way), 1 and 2
+break on all four buffers.
 
-`MultiRvCustomSpec.render_batched/1` emits **f32**: `float eps`, `float
-q_init[]`, `float q_chain[]`. The NIF that exists is the **f64** one. So there
-is no batched shader to dispatch.
+**The single-instance path is untouched, checked rather than assumed.** The
+GLSL `render/1` produces is byte-identical to `92392d76e`'s for all five model
+shapes (SHA-256 compared across a `git stash`), so no cached SPV is
+invalidated and no sampling behaviour moves.
 
-### The work
+Full suite: **683 tests, 2 failures**, both pre-existing and both confirmed
+identical at `92392d76e` by re-running them with these changes stashed —
+`validator_test.exs:97` fails a KS check at d = 0.0999 against crit 0.0975
+(alpha 0.001), and `level_set_integration_test.exs:11` times out at 300 s,
+alone as well as under load.
 
-1. **Write the f64 batched template.** ~141 lines. Two existing files are the
-   model, and it is a combination of them, NOT a `float` -> `double` rewrite:
-   * the **f64 single-instance** template in the same module — take its
-     conventions, particularly that it **bakes prior constants as literals**
-     because `GLSL.std.450` has no f64 transcendentals and an f32 boundary
-     cast costs nine significant digits;
-   * the **f32 batched** template — take its `inst`-offset indexing and its
-     `n_instances` push field.
+### Two things left behind on purpose
 
-   Push block is 24 bytes, `{k_steps, n_obs, d, n_instances, eps}` — the same
-   first twelve bytes as the single-instance block, with `n_instances` where
-   `_pad` sits. Inputs are instance-major, `n_instances * d` f64. Outputs are
-   `n_instances * K * d * 8` per chain buffer and `n_instances * K * 8` for
-   logp — **logp is one scalar per step, not per dimension**.
+`Push.prior_param_floats/1` and `Push.ensure_fits!/2` now have **no caller**.
+Kept — public API, correct encoding — with docs saying plainly that no dispatch
+path calls them and that their existence is not a reason to reinstate a tail.
+`push_prior_param_floats_test.exs` was reframed to match; it was pinning "the
+batched path's 128-byte cap", which no longer exists.
 
-2. **Verify by bit-identity, not tolerance.** Each instance of a batched
-   dispatch must equal the same chain dispatched alone, byte for byte, on all
-   four buffers. Upstream verified their side this way; ours needs the same,
-   plus an instance-bleed test with deliberately divergent inputs (a size check
-   cannot see bleed) and `n_instances = 1` matching the single path exactly.
+`chain_batch/5` accepts `obs: nil`, because a prior-only model has no
+observations and Nx has no zero-size tensor to pass instead.
 
-3. **Then wire it**: set `:exmc_chain_coord` in the `Task.async_stream` path
-   (`sampler.ex:119`), start and stop a coordinator per multi-chain run.
+---
+
+## NEXT TASK — wire the coordinator to the parallel path
+
+The shader, the NIF, the coordinator, the partition key, the padding and the
+trim are all done. Nothing dispatches through them yet.
+
+Set `:exmc_chain_coord` in the `Task.async_stream` path (`sampler.ex:119`),
+starting and stopping a coordinator per multi-chain run. `route_chain` in
+`tree.ex` already reads it.
+
+**Before claiming a win, build the instrument.** The 3.4-4.3x is the
+*in-dispatch term only* and what fraction of wall time it represents is
+**unknown** — both estimates were withdrawn, one of them after three
+consecutive runs of the same commit produced -125.0, -130.4 and 1554.5 µs for
+the same quantity. super-io cannot resolve this: it is a desktop with a ~900 µs
+noise band that manufactured a 13x error once already. mac-248 is headless and
+resolves the chain-dispatch path at 0.3%.
+
+Also still open: `bulkhead_test.exs` and `server_test.exs` share the unguarded
+teardown pattern `chaos_test.exs` was fixed for.
 
 ### What NOT to do
 

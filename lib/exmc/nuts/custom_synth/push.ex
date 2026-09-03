@@ -190,6 +190,11 @@ defmodule Exmc.NUTS.CustomSynth.Push do
   what the batch coordinator's `try/rescue` turns into `{:fallback, ...}`, so
   the draw degrades to unbatched instead of dying.
 
+  As of 2026-09-02 nothing calls it: `chain_batch/5`, its only caller, now
+  builds a fixed 24-byte block that cannot overflow. The bound is still the
+  NIF's real one, so the function stays; see `prior_param_floats/1` for why
+  the tail it guarded is gone.
+
   `context` names the caller in the message; the numbers are only knowable
   here.
   """
@@ -217,12 +222,22 @@ defmodule Exmc.NUTS.CustomSynth.Push do
   @doc """
   Extract the scalar parameter floats a prior contributes to the push block.
 
-  Public because the batched path (`Exmc.NUTS.Vulkan.Dispatch.chain_batch/5`)
-  builds its own push header and must encode priors identically. It kept a
-  private copy until 2026-08-29; the copy had 5 of these 12 clauses and a
-  `scalar/2` that handled only numbers and scalar tensors, so a model that
-  sampled fine unbatched raised the moment batching turned on. One encoder,
-  or the two layouts drift again.
+  ## No dispatch path calls this any more
+
+  It became public on 2026-08-29 for the batched path
+  (`Exmc.NUTS.Vulkan.Dispatch.chain_batch/5`), which built its own push header
+  and had kept a private copy with 5 of these 12 clauses. `chain_batch/5` now
+  sends the 24-byte header alone, for the same reason `pack/1` does: the
+  shader reads prior parameters from SPIR-V literals, and the NIF forwards
+  only `sizeof(PushBlockBatchF64)`. The tail was unread bytes charged against
+  the NIF's 128-byte bound, which capped batching at about six free Normal
+  RVs — an 8-RV model came to 152 B and raised.
+
+  Kept because it is public API and the encoding is correct; a future push
+  layout that genuinely carries parameters would want exactly this. Do not
+  reinstate a tail on the strength of its existence — see
+  `push_width_test.exs` for what that cost the single-instance path, and
+  `batched_shader_test.exs` for the batched equivalent.
 
   Raises for a distribution with no clause — a missing encoder must not
   silently pack a short push block.

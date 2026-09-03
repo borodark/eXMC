@@ -593,9 +593,9 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       # P1). Only truly prior-only models (no custom, no observed) take the
       # per-tid analytic path.
       if is_nil(custom_info) and observed == [] do
-        render_prior_only(priors, layout)
+        render_prior_only(priors, layout, @template)
       else
-        render_with_custom(components)
+        render_with_custom(components, @template, "j")
       end
     end
   rescue
@@ -610,7 +610,10 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       end
   end
 
-  defp render_prior_only(priors, layout) do
+  # `template` selects the single-instance or the batched skeleton. The bodies
+  # are the same either way — a prior-only model reads no observations, so
+  # there is not even an index expression to vary.
+  defp render_prior_only(priors, layout, template) do
     with {:ok, fragments} <- emit_prior_fragments(priors) do
       grad_q_body = build_per_tid_dispatch(fragments, layout, "grad_q", :grad)
       grad_qn_body = build_per_tid_dispatch(fragments, layout, "grad_qn", :grad)
@@ -619,7 +622,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       helpers = f64_transcendental_helpers()
 
       glsl =
-        @template
+        template
         |> String.replace("{{prior_grad_body_q}}", indent(grad_q_body, 12))
         |> String.replace("{{prior_grad_body_qn}}", indent(grad_qn_body, 12))
         |> String.replace("{{prior_logp_body_qn}}", indent(logp_body, 12))
@@ -630,7 +633,16 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     end
   end
 
-  defp render_with_custom(components) do
+  # `obs_index` is the expression the emitted reduce-sum loops use to read the
+  # observation buffer: `j` for the single-instance shader, `extras_off + j`
+  # for the batched one, where each instance owns its own `n_obs + d` slice.
+  # It is the ONLY thing that varies in the emitted bodies, and threading it
+  # through here rather than duplicating the emitter is what keeps the batched
+  # arithmetic identical to the single-instance arithmetic instruction for
+  # instruction. A previous copy of this function drifted: it dropped the obs
+  # spans, the CSE pass and the f64 transcendental rewrite, and the copy that
+  # was left could not compile.
+  defp render_with_custom(components, template, obs_index) do
     # Trace the full compose (priors + custom) with an obs template
     # of shape {1}. The actual loop iteration count comes from
     # pc.n_obs at runtime — the trace shape just needs to be > 0 so
@@ -655,7 +667,8 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
       spans = obs_spans(components)
 
-      {log_p_loops, log_p_expr} = transform_reduce_sum(log_p_glsl_raw, "_lpacc", spans)
+      {log_p_loops, log_p_expr} =
+        transform_reduce_sum(log_p_glsl_raw, "_lpacc", spans, obs_index)
 
       grad_by_idx =
         grad_entries_raw
@@ -685,7 +698,9 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
           # bench/leapfrog_leaf_diff.exs pins it with DISTINCT per-node sigmas
           # precisely so a permutation cannot pass unnoticed — with identical
           # observations a mirrored assignment gives bit-identical answers.
-          {loops, expr} = transform_reduce_sum(summed, "_gacc#{i}_", reverse_spans(spans))
+          {loops, expr} =
+            transform_reduce_sum(summed, "_gacc#{i}_", reverse_spans(spans), obs_index)
+
           {i, {loops, expr}}
         end
         |> Enum.reduce({%{}, %{}}, fn {i, {loops, expr}}, {loops_acc, expr_acc} ->
@@ -709,7 +724,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       full_captured = f64_helpers <> "\n" <> captured_decls
 
       glsl =
-        @template
+        template
         |> String.replace("{{prior_grad_body_q}}", indent(grad_q_body, 12))
         |> String.replace("{{prior_grad_body_qn}}", indent(grad_qn_body, 12))
         |> String.replace("{{prior_logp_body_qn}}", indent(logp_body, 12))
@@ -913,8 +928,8 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   # `prefix1`, ...). Returns `{loops_block, glsl_with_accums_substituted}`.
   #
   # The inner expression references `obs_j` (the second-parameter
-  # layout binding); the loop's `double obs_j = obs_inv_mass[j];`
-  # binding provides it.
+  # layout binding); the loop's `double obs_j = obs_inv_mass[...];`
+  # binding provides it, indexed by `obs_index` below.
   #
   # `spans` decides what each loop ranges over:
   #
@@ -936,8 +951,14 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   # which collapsed the acceptance rate and froze the chain. Measured at
   # 3 observations: gradient 31.495 against a host/analytic 10.495, diverging
   # from leapfrog step 0. See docs/OPEN_VULKAN_OBSERVED_MODEL.md.
-  defp transform_reduce_sum(glsl, prefix, spans \\ :full) do
-    do_transform_rs(glsl, prefix, [], 0, spans)
+  # `obs_index` is the index expression for the observation buffer read. `"j"`
+  # for the single-instance shader; `"extras_off + j"` for the batched one,
+  # whose instances each own a contiguous `n_obs + d` slice. The loop BOUNDS
+  # stay in per-instance coordinates either way, so spans compose with it
+  # unchanged: a span is a property of the model's observed nodes, and the
+  # offset is a property of which instance is reading them.
+  defp transform_reduce_sum(glsl, prefix, spans \\ :full, obs_index \\ "j") do
+    do_transform_rs(glsl, prefix, [], 0, spans, obs_index)
   end
 
   defp reverse_spans(:full), do: :full
@@ -1010,7 +1031,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     "#{off + cnt}u"
   end
 
-  defp do_transform_rs(glsl, prefix, loops_acc, n, spans) do
+  defp do_transform_rs(glsl, prefix, loops_acc, n, spans, obs_index) do
     marker = "/*REDUCE_SUM*/("
 
     case :binary.match(glsl, marker) do
@@ -1050,7 +1071,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
             loop_block = """
             double #{accum} = 0.0lf;
             for (uint j = #{loop_lo(spans, n)}; j < #{loop_hi(spans, n)}; j++) {
-                double obs_j = obs_inv_mass[j];
+                double obs_j = obs_inv_mass[#{obs_index}];
             #{cse_binds}
                 #{accum} += (#{inner_cse});
             }
@@ -1060,7 +1081,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
             after_ = binary_part(glsl, close_paren + 1, byte_size(glsl) - close_paren - 1)
             new_glsl = before <> accum <> after_
 
-            do_transform_rs(new_glsl, prefix, [loop_block | loops_acc], n + 1, spans)
+            do_transform_rs(new_glsl, prefix, [loop_block | loops_acc], n + 1, spans, obs_index)
         end
     end
   end
@@ -1324,94 +1345,123 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   end
 
   # ============================================================
-  # Task #154 — Batched multi-instrument shader (Phase 1)
+  # Task #154 — Batched multi-instance shader
   # ============================================================
   #
-  # `render_batched/1` mirrors `render/1` but emits a multi-instance
-  # shader. Each workgroup processes one instance; all buffer indices
-  # are offset by gl_WorkGroupID.x. Dispatch with [n_instances, 1, 1].
+  # `render_batched/1` mirrors `render/1` but emits a multi-instance shader.
+  # Each workgroup processes one instance; every buffer index is offset by
+  # `gl_WorkGroupID.x`. Dispatch with `[n_instances, 1, 1]`.
   #
-  # The leapfrog math + prior bodies are identical per-instance — only
-  # buffer layouts and the reduce-sum's obs_j binding need per-instance
-  # offsets. Shared memory (partial[], q_shared[]) is naturally
-  # per-workgroup, so per-instance.
+  # The leapfrog math and the prior/likelihood bodies are identical
+  # per-instance, and that is load-bearing rather than incidental: both
+  # variants render from the SAME emitted bodies, through the same
+  # `emit_prior_fragments/1`, the same `transform_reduce_sum/4` (spans and
+  # CSE included) and the same `rewrite_transcendentals_f64/1`. Only two
+  # things differ — the template text, and the observation index expression
+  # (`obs_inv_mass[j]` becomes `obs_inv_mass[extras_off + j]`). Anything a
+  # batched instance computes is therefore the same arithmetic in the same
+  # order as the single-instance shader computes for that chain, which is
+  # what makes bit-identity a testable claim rather than a hope. See
+  # `batched_shader_test.exs`.
   #
-  # f64 throughout (matches Option A's compose_logp_defn) with boundary-
-  # cast helpers log_d/exp_d for transcendentals (GLSL.std.450 has no
-  # f64 log/exp; see EXMC_VULKAN_DOS_AND_DONTS).
+  # Shared memory (`partial[]`, `q_shared[]`) is per-workgroup, so it is
+  # already per-instance and needs no offsetting.
+  #
+  # ## This was f32, and could not have run
+  #
+  # The first version of this template declared `float` buffers and a
+  # `float eps` push field while `do_transform_rs_batched/4` emitted `double`
+  # accumulators into it — GLSL has no implicit double-to-float conversion,
+  # so any model reaching the reduce-sum path failed in `glslangValidator`.
+  # It never surfaced because there was no f64 batch NIF to dispatch to, so
+  # nothing ever rendered this template in anger.
+  #
+  # f32 was the wrong target regardless. `leapfrog_chain_synth_batch_f64/6`
+  # writes `n_instances * K * d * 8` bytes and `Dispatch.chain_batch/5` packs
+  # and slices f64 at 8 bytes an element; an f32 shader bound to those
+  # buffers reads and writes at half stride and returns plausible garbage.
 
-  @batched_template """
+  @batched_template ~S"""
   #version 450
+  #extension GL_ARB_gpu_shader_fp64 : require
 
-  // SYNTHESIZED BATCHED shader (Task #154) — multi-instance variant.
-  // Each workgroup handles one instance independently.
+  // SYNTHESIZED BATCHED by Exmc.NUTS.CustomSynth.MultiRvCustomSpec (f64)
   //
-  // Buffer layouts (instance-contiguous, std430):
+  // Same shader as @template, one workgroup per instance. Every difference
+  // from the single-instance variant is an index offset; the arithmetic is
+  // byte-for-byte the same code.
+  //
+  // Buffer layouts (instance-major, std430, f64) — these match
+  // Dispatch.chain_batch/5's packer and the batch NIF's slicing:
   //   q_init[i*d + j]
   //   p_init[i*d + j]
-  //   obs_inv_mass[i*(n_obs+d) + j]   (obs 0..n_obs-1, inv_mass n_obs..n_obs+d-1)
+  //   obs_inv_mass[i*(n_obs+d) + j]   obs 0..n_obs-1, then inv_mass 0..d-1
   //   q_chain[i*K*d + k*d + j], p_chain[...], grad_chain[...]
-  //   logp_chain[i*K + k]
+  //   logp_chain[i*K + k]             one scalar per step, not per dimension
   //
-  // Push constants include n_instances; dispatch as [n_instances, 1, 1].
-  //
-  // Phase 1 uses f32 throughout (matches the existing single-instance
-  // path's precision). Boundary-cast f64 upgrade is a later phase if
-  // batching+correctness profiling shows precision regressions.
+  // Push block is 24 bytes: the same first twelve as the single-instance
+  // block, with n_instances occupying the slot _pad holds there. Matches
+  // parse_push_block_batch_f64 in nx_vulkan.
 
   layout (local_size_x = 256) in;
 
   layout (push_constant) uniform Push {
-      uint  K;
-      uint  n_obs;
-      uint  d;
-      uint  n_instances;
-      float eps;
+      uint   K;
+      uint   n_obs;
+      uint   d;
+      uint   n_instances;
+      double eps;
   } pc;
 
-  layout (std430, binding = 0) readonly  buffer In_q     { float q_init[]; };
-  layout (std430, binding = 1) readonly  buffer In_p     { float p_init[]; };
+  layout (std430, binding = 0) readonly  buffer In_q     { double q_init[]; };
+  layout (std430, binding = 1) readonly  buffer In_p     { double p_init[]; };
   layout (std430, binding = 2) readonly  buffer In_extras {
-      float obs_inv_mass[];
+      double obs_inv_mass[];
   };
-  layout (std430, binding = 3) writeonly buffer Out_q    { float q_chain[]; };
-  layout (std430, binding = 4) writeonly buffer Out_p    { float p_chain[]; };
-  layout (std430, binding = 5) writeonly buffer Out_grad { float grad_chain[]; };
-  layout (std430, binding = 6) writeonly buffer Out_logp { float logp_chain[]; };
+  layout (std430, binding = 3) writeonly buffer Out_q    { double q_chain[]; };
+  layout (std430, binding = 4) writeonly buffer Out_p    { double p_chain[]; };
+  layout (std430, binding = 5) writeonly buffer Out_grad { double grad_chain[]; };
+  layout (std430, binding = 6) writeonly buffer Out_logp { double logp_chain[]; };
 
   {{captured_decls}}
 
-  // Per-workgroup → per-instance shared memory.
-  shared float partial[256];
-  shared float q_shared[256];
+  // Per-workgroup, therefore per-instance. No offsetting needed, and none
+  // wanted: two instances sharing one tile is exactly the bleed this
+  // shader's tests go looking for.
+  shared double partial[256];
+  shared double q_shared[256];
 
   void main() {
       uint inst = gl_WorkGroupID.x;
       uint tid  = gl_LocalInvocationIndex;
-      bool in_inst = inst < pc.n_instances;
-      bool in_d    = tid  < pc.d;
-      bool in_bounds = in_inst && in_d;
 
-      // Per-instance buffer offsets
+      // `inst` is uniform across the workgroup, so every barrier below is
+      // still reached by every invocation in it — the whole workgroup is
+      // either in range or idle together. A per-thread in_inst would be a
+      // deadlock, not a guard.
+      bool in_inst   = (inst < pc.n_instances);
+      bool in_bounds = in_inst && (tid < pc.d);
+
       uint q_off      = inst * pc.d;
       uint extras_off = inst * (pc.n_obs + pc.d);
       uint chain_off  = inst * pc.K * pc.d;
       uint logp_off   = inst * pc.K;
 
-      float qi = in_bounds ? q_init[q_off + tid]                            : 0.0;
-      float pi = in_bounds ? p_init[q_off + tid]                            : 0.0;
-      float mi = in_bounds ? obs_inv_mass[extras_off + pc.n_obs + tid]      : 0.0;
+      double qi = in_bounds ? q_init[q_off + tid]                       : 0.0lf;
+      double pi = in_bounds ? p_init[q_off + tid]                       : 0.0lf;
+      double mi = in_bounds ? obs_inv_mass[extras_off + pc.n_obs + tid] : 0.0lf;
 
       for (uint k = 0u; k < pc.K; k++) {
           if (in_bounds) q_shared[tid] = qi;
           barrier();
 
-          float grad_q = 0.0;
+          double grad_q = 0.0lf;
           if (in_bounds) {
   {{prior_grad_body_q}}
           }
-          float p_half = pi + 0.5 * pc.eps * grad_q;
-          float qn = qi + pc.eps * mi * p_half;
+          double p_half = pi + 0.5lf * pc.eps * grad_q;
+
+          double qn = qi + pc.eps * mi * p_half;
           qi = qn;
 
           barrier();
@@ -1419,14 +1469,18 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
           barrier();
 
           // POST-update, for the same reason as the single-instance template:
-          // logp_chain[k] must describe the state q_chain[k] describes.
-          float grad_qn = 0.0;
-          float lp_i    = 0.0;
+          // the four outputs of iteration k must describe the SAME state, so
+          // logp_chain[k] is computed here, below the position update and
+          // reading the refreshed q_shared. See @template for what a stale
+          // density did to the posterior, and for three weeks of blaming it
+          // on the GPU.
+          double grad_qn = 0.0lf;
+          double lp_i    = 0.0lf;
           if (in_bounds) {
   {{prior_grad_body_qn}}
   {{prior_logp_body_qn}}
           }
-          pi = p_half + 0.5 * pc.eps * grad_qn;
+          pi = p_half + 0.5lf * pc.eps * grad_qn;
 
           if (in_bounds) {
               q_chain[chain_off + k * pc.d + tid]    = qi;
@@ -1434,8 +1488,11 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
               grad_chain[chain_off + k * pc.d + tid] = grad_qn;
           }
 
-          // Per-instance workgroup reduction for log_p
-          partial[tid] = in_inst ? lp_i : 0.0;
+          // lp_i is already 0.0lf on every thread that did not compute one —
+          // out of bounds, out of instance, or simply not thread 0 in the
+          // custom path — so this needs no in_inst ternary, and matches
+          // @template's line exactly.
+          partial[tid] = lp_i;
           barrier();
 
           for (uint s = 128u; s > 0u; s /= 2u) {
@@ -1452,132 +1509,59 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   """
 
   @doc """
-  Render a batched multi-instance GLSL shader for the given components.
-  Phase 1 of Task #154 (batched dispatch branch). Currently supports
-  custom-likelihood IRs only (mirrors render_with_custom flow); prior-
-  only batched path can be added later if needed.
+  Render the batched multi-instance GLSL shader for `components`.
 
-  Each workgroup processes one instance. Dispatch with
-  `[n_instances, 1, 1]`. Buffers are laid out [n_instances][per-instance].
+  Same contract as `render/1` and the same two paths through it — prior-only
+  models go through `render_prior_only/3`, everything else through
+  `render_with_custom/3` — differing only in the template and in the
+  observation index expression. One workgroup handles one instance; dispatch
+  with `[n_instances, 1, 1]` and lay the buffers out instance-major.
 
-  Returns `{:ok, glsl}` on success.
+  ## Why it is not its own renderer
+
+  It was, and the copy drifted. The batched path had its own reduce-sum
+  rewriter that omitted the obs spans (so a model with several observed nodes
+  would have counted its whole likelihood once per node), omitted the
+  common-subexpression pass, and emitted `double` accumulators into a `float`
+  template — which does not compile. None of that showed up, because there
+  was no f64 batch NIF to dispatch the result to.
+
+  Sharing the emitter is also the only way the bit-identity claim in
+  `batched_shader_test.exs` can hold: an instance of a batched dispatch must
+  equal the same chain dispatched alone, byte for byte, on all four output
+  buffers. That is a statement about the two shaders performing the same
+  arithmetic in the same order, and the cheapest way to guarantee it is for
+  one function to emit both.
+
+  ## Prior-only and observed models are batchable
+
+  This used to return `{:error, :prior_only_batched_not_supported}` for
+  `custom: nil`, which excluded every conjugate model — the whole class the
+  batch coordinator exists to serve, since `Builder.obs` models have no
+  Custom likelihood. The guard now matches `render/1`'s: only a model with
+  neither a Custom term nor observed nodes takes the prior-only path, and it
+  takes it in both variants.
   """
   @spec render_batched(components()) :: {:ok, binary()} | {:error, term()}
-  def render_batched(%{custom: nil}), do: {:error, :prior_only_batched_not_supported}
-
   def render_batched(%{priors: priors, custom: custom_info, layout: layout} = components) do
+    observed = Map.get(components, :observed, [])
+
     with :ok <- validate_layout(priors, layout) do
-      render_batched_with_custom(components)
+      if is_nil(custom_info) and observed == [] do
+        render_prior_only(priors, layout, @batched_template)
+      else
+        render_with_custom(components, @batched_template, "extras_off + j")
+      end
     end
-  end
-
-  defp render_batched_with_custom(components) do
-    n_obs_trace = 1
-    layout = ["q_shared", "obs_j"]
-
-    fun = compose_logp_defn(components)
-    q_template = Nx.template({length(components.layout)}, :f64)
-    obs_template = Nx.template({n_obs_trace}, :f64)
-
-    value_expr = Nx.Defn.debug_expr_apply(fun, [q_template, obs_template])
-
-    grad_fn = fn q, obs -> Nx.Defn.grad(q, fn q -> fun.(q, obs) end) end
-    grad_expr = Nx.Defn.debug_expr_apply(grad_fn, [q_template, obs_template])
-
-    Exmc.NUTS.CustomSynth.Glsl.start_captures()
-
-    with {:ok, log_p_glsl_raw} <- Exmc.NUTS.CustomSynth.Glsl.emit(value_expr, layout),
-         {:ok, grad_entries_raw} <-
-           Exmc.NUTS.CustomSynth.Glsl.emit_vector(grad_expr, layout) do
-      captured_decls = build_captured_decls(Exmc.NUTS.CustomSynth.Glsl.collect_captures())
-
-      # Batched variant of reduce-sum: obs_j reads from per-instance slice.
-      {log_p_loops, log_p_expr} = transform_reduce_sum_batched(log_p_glsl_raw, "_lpacc")
-
-      grad_by_idx =
-        grad_entries_raw
-        |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
-      d = length(components.layout)
-
-      {grad_loops_per_tid, grad_expr_per_tid} =
-        for i <- 0..(d - 1), into: %{} do
-          frags = Map.get(grad_by_idx, i, ["0.0"])
-
-          summed =
-            case frags do
-              [single] -> single
-              many -> "(" <> Enum.join(many, ") + (") <> ")"
-            end
-
-          {loops, expr} = transform_reduce_sum_batched(summed, "_gacc#{i}_")
-          {i, {loops, expr}}
-        end
-        |> Enum.reduce({%{}, %{}}, fn {i, {loops, expr}}, {loops_acc, expr_acc} ->
-          {Map.put(loops_acc, i, loops), Map.put(expr_acc, i, expr)}
-        end)
-
-      logp_body = build_logp_body_with_loops(d, log_p_loops, log_p_expr)
-      grad_q_body = build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_q")
-
-      grad_qn_body =
-        build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_qn")
-
-      glsl =
-        @batched_template
-        |> String.replace("{{prior_grad_body_q}}", indent(grad_q_body, 16))
-        |> String.replace("{{prior_grad_body_qn}}", indent(grad_qn_body, 16))
-        |> String.replace("{{prior_logp_body_qn}}", indent(logp_body, 16))
-        |> String.replace("{{captured_decls}}", captured_decls)
-
-      {:ok, glsl}
-    else
-      err ->
-        Exmc.NUTS.CustomSynth.Glsl.collect_captures()
-        err
-    end
-  end
-
-  # Batched variant of transform_reduce_sum: obs_j reads from the per-
-  # instance slice via `extras_off + j`. Otherwise identical to the
-  # single-instance version. Also uses `double` instead of `float` and
-  # numeric-suffix LF literals consistent with @batched_template.
-  defp transform_reduce_sum_batched(glsl, prefix) do
-    do_transform_rs_batched(glsl, prefix, [], 0)
-  end
-
-  defp do_transform_rs_batched(glsl, prefix, loops_acc, n) do
-    marker = "/*REDUCE_SUM*/("
-
-    case :binary.match(glsl, marker) do
-      :nomatch ->
-        {Enum.reverse(loops_acc), glsl}
-
-      {start, marker_len} ->
-        open_paren = start + marker_len - 1
-
-        case find_matching_paren(glsl, open_paren) do
-          {:error, _} = e ->
-            e
-
-          close_paren ->
-            inner = binary_part(glsl, open_paren + 1, close_paren - open_paren - 1)
-            accum = "#{prefix}#{n}"
-
-            loop_block = """
-            double #{accum} = 0.0lf;
-            for (uint j = 0u; j < pc.n_obs; j++) {
-                double obs_j = obs_inv_mass[extras_off + j];
-                #{accum} += (#{inner});
-            }
-            """
-
-            before = binary_part(glsl, 0, start)
-            after_ = binary_part(glsl, close_paren + 1, byte_size(glsl) - close_paren - 1)
-            new_glsl = before <> accum <> after_
-
-            do_transform_rs_batched(new_glsl, prefix, [loop_block | loops_acc], n + 1)
-        end
-    end
+  rescue
+    # Same degradation as render/1: an unattributable obs span becomes an
+    # {:error, _} so the caller reports :unsupported and the model samples
+    # unbatched rather than wrongly.
+    e in RuntimeError ->
+      if String.starts_with?(Exception.message(e), "transform_reduce_sum:") do
+        {:error, {:obs_span_attribution, Exception.message(e)}}
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 end

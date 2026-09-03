@@ -145,7 +145,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     signed_eps = dir_sign * epsilon
 
     {:ok, push, _bytes} =
-      Exmc.NUTS.CustomSynth.Push.pack(%{push_spec | eps: signed_eps, K: k})
+      Push.pack(%{push_spec | eps: signed_eps, K: k})
 
     q_bin = q |> Nx.as_type(:f64) |> Nx.to_binary()
     p_bin = p |> Nx.as_type(:f64) |> Nx.to_binary()
@@ -249,6 +249,11 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   in the per-instance natural shape (q, p, inv_mass = {d}; obs = {n_obs}).
   All instances must have the same `d` and `n_obs`.
 
+  `obs` may be `nil`, which is how a model with no observations says so.
+  Nx has no zero-size tensor to pass instead, and a prior-only model does
+  render and compile a batched shader — its `extras` slice is just the
+  inverse mass, `extras_off = inst * d`.
+
   Returns a list of `{q_chain, p_chain, logp_chain, grad_chain}` tuples,
   one per input instance, in the same order.
 
@@ -283,9 +288,19 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     eps_used = epsilon || push_spec.eps
     signed_eps = dir_sign * eps_used
 
-    # Batched push: K(4) + n_obs(4) + d(4) + n_instances(4) + eps(8) bytes
-    # header. Prior floats follow (same as single-instance Push.pack).
-    header =
+    # Batched push: K(4) + n_obs(4) + d(4) + n_instances(4) + eps(8) = 24
+    # bytes, matching parse_push_block_batch_f64. Header only.
+    #
+    # It used to append one f64 per prior parameter, the same unread tail
+    # Push.pack/1 carried on the single-instance path. Nothing reads it there
+    # either: MultiRvCustomSpec bakes prior parameters into the generated GLSL
+    # as literals, and the NIF pushes sizeof(PushBlockBatchF64) = 24 bytes and
+    # drops the rest. All the tail did was spend a budget it never used —
+    # `push.len() > 128` is checked before dispatch, so a wide enough model was
+    # refused for carrying bytes the shader could not have read. That cost the
+    # single-instance path 13.1x on an 8-RV model before it was removed; see
+    # Exmc.NUTS.CustomSynth.Push and push_width_test.exs.
+    push =
       <<
         k::little-unsigned-32,
         n_obs::little-unsigned-32,
@@ -294,25 +309,12 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
         signed_eps::little-float-64
       >>
 
-    prior_bin =
-      push_spec.priors
-      |> Enum.flat_map(&Push.prior_param_floats/1)
-      |> Enum.reduce(<<>>, fn f, acc ->
-        acc <> <<f * 1.0::little-float-64>>
-      end)
-
-    # D2: the batched header is not Push.pack/1's, so the 128-byte cap has to
-    # be applied explicitly. Raising is what the coordinator's try/rescue turns
-    # into {:fallback, _}; without it an oversized block reached the NIF and
-    # came back as a MatchError on {:error, :bad_input} naming nothing.
-    push = Push.ensure_fits!(header <> prior_bin, "chain_batch/5")
-
     # Pack inputs: instance-contiguous layout (f64)
     {q_bin, p_bin, extras_bin} =
       Enum.reduce(instances, {<<>>, <<>>, <<>>}, fn {q, p, inv_mass, obs}, {qa, pa, ea} ->
         q_b = q |> Nx.as_type(:f64) |> Nx.to_binary()
         p_b = p |> Nx.as_type(:f64) |> Nx.to_binary()
-        obs_b = obs |> Nx.as_type(:f64) |> Nx.to_binary()
+        obs_b = if is_nil(obs), do: <<>>, else: obs |> Nx.as_type(:f64) |> Nx.to_binary()
         inv_mass_b = inv_mass |> Nx.as_type(:f64) |> Nx.to_binary()
         # extras layout per instance: obs[0..n_obs-1] then inv_mass[0..d-1]
         {qa <> q_b, pa <> p_b, ea <> obs_b <> inv_mass_b}
@@ -350,22 +352,27 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     end
   end
 
-  # `leapfrog_chain_synth_batch_f64/6` has never existed. Not at the pinned
-  # ref in mix.lock, and not at nx_vulkan HEAD — checked 2026-08-28, 78
-  # commits ahead of the pin. The dep exports exactly three chain NIFs:
+  # `leapfrog_chain_synth_batch_f64/6` landed in nx_vulkan and is exported at
+  # the pinned ref — verified 2026-09-02. The guard stays because the dep is
+  # tracked by branch, not by release, and because a host can carry a stale
+  # `priv/native` artifact that `mix deps.compile` will NOT replace (cargo
+  # sees unchanged sources and reports the crate up to date; only
+  # `mix deps.clean nx_vulkan --build` actually rebuilds). So "the dep says it
+  # has it" and "this VM can call it" are different claims, and this checks
+  # the second one.
   #
-  #     leapfrog_chain_synth/6        f32, single instance
-  #     leapfrog_chain_synth_f64/6    f64, single instance — the live path
-  #     leapfrog_chain_synth_batch/6  f32, batched
+  # The dep now exports four chain NIFs:
   #
-  # The f32 batch NIF is not a substitute. It writes f32 chains
-  # (`n_instances * K * d * 4` bytes) while everything in `chain_batch` packs
-  # and slices f64 at 8 bytes per element, so routing to it would return
-  # numerically plausible garbage — the one outcome worse than this raise.
+  #     leapfrog_chain_synth/6            f32, single instance
+  #     leapfrog_chain_synth_f64/6        f64, single instance
+  #     leapfrog_chain_synth_batch/6      f32, batched
+  #     leapfrog_chain_synth_batch_f64/6  f64, batched — this path
   #
-  # Until then `chain_batch/5` cannot run, and says so here rather than
-  # surfacing as a bare UndefinedFunctionError inside a rescue that reports
-  # it as a generic dispatch failure.
+  # The f32 batch NIF is not a substitute, which is why the arity check names
+  # the f64 one specifically. It writes f32 chains (`n_instances * K * d * 4`
+  # bytes) while everything in `chain_batch` packs and slices f64 at 8 bytes
+  # per element, so routing to it would return numerically plausible garbage —
+  # the one outcome worse than this raise.
   defp ensure_batch_nif! do
     mod = Nx.Vulkan.NativeV
 
@@ -375,10 +382,15 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
       Batched chain dispatch is unavailable: \
       Nx.Vulkan.NativeV.leapfrog_chain_synth_batch_f64/6 is not exported.
 
-      nx_vulkan provides an f32 batch NIF (leapfrog_chain_synth_batch/6) and \
-      an f64 single-instance NIF (leapfrog_chain_synth_f64/6), but no f64 \
-      batched variant. The f32 one is not interchangeable — chain_batch/5 \
-      packs and unpacks f64.
+      The dep declares it, so the most likely cause is a stale compiled \
+      artifact: cargo reports the crate up to date when its sources have not \
+      changed, and `mix deps.compile nx_vulkan` then copies nothing into \
+      priv/native. Rebuild with `mix deps.clean nx_vulkan --build && \
+      mix deps.compile nx_vulkan`, and check the checksum of \
+      deps/nx_vulkan/priv/native before and after.
+
+      The f32 batch NIF (leapfrog_chain_synth_batch/6) is not \
+      interchangeable — chain_batch/5 packs and unpacks f64.
 
       Sampling is unaffected: callers fall back to single-instance dispatch, \
       which loses the one-vkQueueSubmit-per-batch win but not correctness.
