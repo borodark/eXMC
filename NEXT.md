@@ -32,6 +32,28 @@ unavoidable, publish the repeatability of the difference before the difference
 — running the same commit three times would have caught all three of these in
 minutes.
 
+### A second pattern, three instances in one day
+
+**A constraint that was true when written and false by the time it mattered**,
+each one documented confidently enough that nobody re-derived it:
+
+* **Our 128-byte push cap.** Real arithmetic on bytes the GPU never receives.
+  Cost: models past ~6 free Normal RVs silently routed to per-op sampling.
+  13.1x when removed, and five green tests were defending it.
+* **`nx_vulkan`'s glslang version pin.** Documented as load-bearing. 81 of 81
+  shaders are byte-identical across 15.1.0, 16.2.0 and 16.5.0 — the generator
+  word encodes the generator version, not the release.
+* **`BatchCoordinator` partitioning on K.** Correct about the shader — a single
+  K does parameterise the whole workgroup — and wrong about the conclusion,
+  because padding was available. Written when no batched f64 NIF existed, so it
+  reasoned about a capability nobody could exercise.
+
+The shape: a true observation, a conclusion that followed from it *at the
+time*, and no mechanism that notices when the premise moves. None of the three
+would have been caught by a test, because each was consistent with the code as
+it stood. What catches them is asking "is this still true?" of the constraints
+you are about to design around — which is what all three of these cost.
+
 ### The batching contract, and the key that would have broken it
 
 `nx_vulkan` shipped the f64 batched chain path (`bcfed0a`, bounds check
@@ -74,13 +96,24 @@ available, and it predates any batched f64 NIF existing.
 Fix, when the coordinator is wired: **drop `k` from the key** to
 `{phash2(meta), eps}` and pad at flush. `d` is implicit in `meta`.
 
-**And a hazard to write before anyone codes the flush:** a padded instance
-runs MORE leapfrog steps than it asked for. If chain A wants K=3 in a group
-padded to K=7, its buffers come back with seven steps, and the coordinator
-must hand back only the first three. The extra steps are computed from valid
-state, so they are not garbage — they are trajectory the sampler never
-requested. Getting this wrong produces a plausible wrong posterior, not an
-error.
+**A hazard to write before anyone codes the flush:** a padded instance runs
+MORE leapfrog steps than it asked for. If chain A wants K=3 in a group padded
+to K=7, its buffers come back with seven steps, and the coordinator must hand
+back only the first three. The extra steps are computed from valid state, so
+they are not garbage — they are trajectory the sampler never requested.
+Getting this wrong produces a plausible wrong posterior, not an error.
+
+**The property that makes the slice sound is now checked rather than assumed**
+(`nx_vulkan` cccbd71). A K=7 dispatch's first n steps are **bit-identical** to
+a K=n dispatch, on all four output buffers, verified at n = 1, 3 and 5 and
+again through the batched path with an instance sliced out of a padded group.
+It is a property of their shader so the test lives in their suite, which means
+a future change to the step loop cannot silently break our flush.
+
+`ab16b24` also verified on **unified memory**: 833 doctests / 884 tests / 0
+failures on the Jetson, where `record_upload` and `record_readback` both take
+their no-op branches — a genuinely different path from the discrete box every
+other batched measurement came from.
 
 ### Our chains do not advance in lockstep
 
