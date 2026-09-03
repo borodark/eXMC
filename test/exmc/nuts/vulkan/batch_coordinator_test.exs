@@ -115,7 +115,16 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinatorTest do
         )
 
       assert {:fallback, {:dispatch_raise, msg}} = result
-      assert msg =~ "leapfrog_chain_synth_batch_f64/6"
+
+      # This used to assert the message named `leapfrog_chain_synth_batch_f64/6`
+      # — i.e. that the batch NIF did not exist. It does now (nx_vulkan
+      # bcfed0a), so the dispatch gets further and fails on this test's
+      # deliberately bogus spv path instead. The NIF's absence was never what
+      # this test was about: it is a D3 regression guard for the coordinator
+      # SURVIVING a raising dispatch and replying :fallback to its caller.
+      # Asserting on the message pinned an incidental fact that has since
+      # changed.
+      assert is_binary(msg) and msg != ""
       # Coord must still be alive.
       assert Process.alive?(coord)
     end
@@ -146,7 +155,11 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinatorTest do
       result = BatchCoordinator.request_chain(coord, q, p, im, obs, 0.05, 4)
 
       assert {:fallback, {:dispatch_raise, msg}} = result
-      assert msg =~ "leapfrog_chain_synth_batch_f64/6"
+
+      # See the note on the sibling assertion above: the batch NIF now exists,
+      # so the failure this provokes is a different one. What is being guarded
+      # is that the coordinator replies :fallback and stays alive.
+      assert is_binary(msg) and msg != ""
       assert Process.alive?(coord)
     end
 

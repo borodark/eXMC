@@ -417,22 +417,41 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
     end
   end
 
+  @doc false
+  # Public for direct testing. K is deliberately absent — see do_chain_flush/2.
+  def partition_key({_from, meta, _q, _p, _im, _obs, eps, _k}),
+    do: {:erlang.phash2(meta), eps}
+
   defp do_chain_flush(dir, state) do
     queue = state.chain_pending[dir]
     state = put_in(state.chain_pending[dir], [])
     dir_sign = if dir == :forward, do: 1, else: -1
 
-    # Partition by (meta-hash, K, |eps|). Different synthesised SPVs
-    # can't share a batched dispatch (different shader binaries);
-    # within the same meta, K and |eps| must also agree because the
-    # batched chain shader is parameterized on a single K + signed eps
-    # for the whole workgroup. The meta hash uses phash2 over the full
-    # meta tuple — including spv_path — so two callers with identical
-    # synthesised shaders batch together cleanly.
+    # Partition by (meta-hash, |eps|). Different synthesised SPVs cannot share
+    # a batched dispatch, and |eps| is a single push field for the whole
+    # workgroup, so both must agree. The meta hash is phash2 over the full
+    # meta tuple — including spv_path — so identical synthesised shaders batch
+    # together cleanly, and `d` rides along inside it.
+    #
+    # **K is deliberately NOT in this key**, and it used to be. The comment
+    # that put it there was right about the shader — a single K really does
+    # parameterise the whole workgroup — and drew the wrong conclusion from
+    # it, because padding to the deepest was available and partitioning was
+    # not the only way to satisfy the constraint. It was written when no
+    # batched f64 NIF existed, so it reasoned about a capability nobody could
+    # exercise.
+    #
+    # Measured cost of getting this wrong: of 300 draws with 4 chains, only
+    # **48 had all four at the same n_steps**. Keying on K would batch fully
+    # in 16% of draws and fall back to singletons in the other 84% — the
+    # machinery paid for and almost none of the benefit collected.
+    #
+    # Padding is nearly free at our depths. Upstream's K-sweep on mac-248 puts
+    # a chain call at 91.3 us intercept against 2.5 us/step over K <= 16, so
+    # 86% is fixed cost and the padding lands on the 14%. Ragged depths
+    # measured 3.4-3.5x against 4.3x for uniform ones.
     groups =
-      Enum.group_by(queue, fn {_from, meta, _q, _p, _im, _obs, eps, k} ->
-        {:erlang.phash2(meta), k, eps}
-      end)
+      Enum.group_by(queue, &partition_key/1)
 
     Enum.reduce(groups, state, fn {_partition_key, group_queue}, acc ->
       do_chain_flush_group(group_queue, dir_sign, acc)
@@ -440,12 +459,16 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
   end
 
   defp do_chain_flush_group(queue, dir_sign, state) do
-    [{_from, meta0, _q, _p, _im, _obs, eps_abs0, k0} | _] = queue
+    [{_from, meta0, _q, _p, _im, _obs, eps_abs0, _k} | _] = queue
 
     instances =
       Enum.map(queue, fn {_from, _meta, q, p, im, obs, _eps, _k} -> {q, p, im, obs} end)
 
     n_instances = length(queue)
+
+    # Pad to the deepest request in the group. Every instance is dispatched
+    # for k0 steps; callers that asked for fewer are sliced back below.
+    k0 = queue |> Enum.map(fn {_f, _m, _q, _p, _im, _o, _e, k} -> k end) |> Enum.max()
 
     # USDT probe — chain flush event. Distinct from coord_flush so
     # the dtrace harness can tell which pathway is firing.
@@ -511,8 +534,8 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
 
         queue
         |> Enum.zip(results)
-        |> Enum.each(fn {{from, _, _, _, _, _, _, _}, result} ->
-          GenServer.reply(from, result)
+        |> Enum.each(fn {{from, _, _, _, _, _, _, k_req}, result} ->
+          GenServer.reply(from, trim_to_requested(result, k_req, k0))
         end)
 
         %{
@@ -531,6 +554,44 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
         end)
 
         state
+    end
+  end
+
+  # A padded instance runs MORE leapfrog steps than its caller asked for. The
+  # extra steps are computed from valid state — they are trajectory the sampler
+  # never requested, not garbage — so handing them back would be a plausible
+  # wrong posterior rather than an error. Trim every buffer to the requested
+  # depth.
+  #
+  # This is sound because the prefix property is exact: a K=k0 dispatch's first
+  # k_req steps are BIT-identical to a K=k_req dispatch, on all four output
+  # buffers. That is pinned upstream (nx_vulkan cccbd71) rather than assumed
+  # here, verified at k_req = 1, 3 and 5 and again through the batched path
+  # with an instance sliced out of a padded group.
+  #
+  # q/p/grad are {K, d}; logp is {K}, one scalar per step, not per dimension.
+  @doc false
+  # Public for direct testing: handing back untrimmed buffers is a silent
+  # wrong posterior, so it is worth asserting on rather than reaching only
+  # through a GenServer that needs a working batch NIF.
+  def trim_to_requested(result, k_req, k0)
+
+  def trim_to_requested(result, k_req, k0) when k_req >= k0, do: result
+
+  def trim_to_requested({q, p, logp, grad}, k_req, _k0) do
+    {slice_steps(q, k_req), slice_steps(p, k_req), slice_steps(logp, k_req),
+     slice_steps(grad, k_req)}
+  end
+
+  # Anything that is not the 4-tuple of tensors passes through untouched —
+  # a {:fallback, _} or an error shape must not be reshaped by this.
+  def trim_to_requested(other, _k_req, _k0), do: other
+
+  defp slice_steps(t, k_req) do
+    case Nx.shape(t) do
+      {k, d} when k > k_req -> Nx.slice(t, [0, 0], [k_req, d])
+      {k} when k > k_req -> Nx.slice(t, [0], [k_req])
+      _ -> t
     end
   end
 end
