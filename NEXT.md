@@ -113,6 +113,65 @@ observations and Nx has no zero-size tensor to pass instead.
 
 ---
 
+### Fleet-verified at `475bf73aa`
+
+All four hosts, `~/exmc_oss` on each (mac-248's `~/exmc` stays excluded — it
+holds `trial/accounts.config` on an unpushed branch).
+
+| host | GPU | memory | batched shader test | full suite |
+|---|---|---|---|---|
+| super-io (.249) | RTX 3060 Ti | discrete | 17/17 | 683, **2** |
+| mac-247 (.247) | GT 650M | discrete | 17/17 | 683, **1** |
+| mac-248 (.248) | GT 750M | discrete | 17/17 | 683, **1** |
+| Jetson (.250) | Tegra X1 | **unified** | 17/17 | 683, **3** |
+
+**Every failure is pre-existing and was confirmed so, not assumed.**
+`LevelSetIntegrationTest` times out at 300 s on all four. The Jetson adds two
+more, `PokerTest` at 300 s and `IntegrationTest` at 120 s — both
+`ExUnit.TimeoutError`, both in host-side `Nx.Defn.Evaluator` /
+`BinaryBackend` stacks, and both reproduced identically at `92392d76e` by
+checking that commit out on the Jetson and re-running the two files.
+super-io's extra failure is the marginal KS check
+(`validator_test.exs:97`, d = 0.0999 vs crit 0.0975 at alpha 0.001); it passes
+on both headless Macs, which is what a noisy desktop looks like.
+
+**The unified-memory arm is the one worth naming.** The Jetson reports
+`unified memory: true (staging path: OFF)` — a different path through the
+batch NIF, no staging buffers — and the batched instances are still
+bit-identical to their lone dispatches there. Both memory regimes are covered.
+
+`leapfrog_chain_synth_batch_f64/6` exported on all three remotes after the
+rebuild.
+
+### The `.so` hazard, measured across the fleet
+
+Every host got `mix deps.clean nx_vulkan --build && mix deps.compile
+nx_vulkan`, with `cksum deps/nx_vulkan/priv/native/*` recorded either side.
+
+| host | before | after | |
+|---|---|---|---|
+| mac-247 | `426809503 3286600` | `164127991 3292760` | **replaced** (was the `d210601` build) |
+| mac-248 | `164127991 3292760` | `164127991 3292760` | unchanged — already correct |
+| Jetson | `2606488089 3408192` | (new) | **replaced** |
+
+Two things fall out of that table. The lock moved `d210601 -> cccbd71`, which
+is the commit that *adds* the batch NIF, so 247 and the Jetson genuinely had
+to rebuild — no ambiguity about whether the copy landed. And **247 and 248
+produced byte-identical artifacts**: the Rust build is reproducible across
+that FreeBSD pair, which is what makes `cksum` a valid staleness detector
+there rather than a coincidence. 248 was unchanged because the earlier forced
+rebuild had already produced exactly these bytes.
+
+### One unexplained anomaly, recorded rather than smoothed over
+
+On mac-247 the scripted bare `mix test` printed nothing and returned
+immediately — no test output, no summary, no error. The same script ran the
+suite normally on 248 and the Jetson, and a manual `mix test` on 247 minutes
+later gave the 683/1 in the table above. Cause unknown. Worth watching if a
+future fleet run reports a suspiciously fast pass on that host; a suite that
+prints nothing and exits 0 is indistinguishable from a suite that passed if
+you only check the exit code.
+
 ## NEXT TASK — wire the coordinator to the parallel path
 
 The shader, the NIF, the coordinator, the partition key, the padding and the
