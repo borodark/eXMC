@@ -162,15 +162,62 @@ that FreeBSD pair, which is what makes `cksum` a valid staleness detector
 there rather than a coincidence. 248 was unchanged because the earlier forced
 rebuild had already produced exactly these bytes.
 
-### One unexplained anomaly, recorded rather than smoothed over
+### The mac-247 anomaly was a BEAM segfault in Vulkan instance init
 
-On mac-247 the scripted bare `mix test` printed nothing and returned
-immediately — no test output, no summary, no error. The same script ran the
-suite normally on 248 and the Jetson, and a manual `mix test` on 247 minutes
-later gave the 683/1 in the table above. Cause unknown. Worth watching if a
-future fleet run reports a suspiciously fast pass on that host; a suite that
-prints nothing and exits 0 is indistinguishable from a suite that passed if
-you only check the exit code.
+On mac-247 the scripted bare `mix test` printed nothing and returned within
+seconds. It was recorded as unexplained; it is not. The checkout held a
+**524 MB `beam.smp.core` timestamped `Sep 3 02:50`** — the same minute the
+script gave up. Preserved at
+`~/cores/beam.smp.247.2026-09-03T0250Z.core` on 247, moved out of the working
+tree because an untracked core in a git checkout is one `git clean -fd` from
+being gone.
+
+    thread #1, name = 'erts_dios_3', stop reason = signal SIGSEGV
+      frame #0: 0x0000000000000000
+      frame #1: libvulkan.so.1`___lldb_unnamed_symbol1062 + 114
+      frame #5: libvulkan.so.1`vkEnumerateInstanceExtensionProperties + 477
+      frame #6: libnx_vulkan_vulkano.so`vulkano::library::VulkanLibrary::get_extension_properties
+      frame #7: libnx_vulkan_vulkano.so`nx_vulkan_vulkano::ctx
+      frame #8: libnx_vulkan_vulkano.so`...::leapfrog_chain_synth_f64
+      frame #10: beam.smp`erts_call_dirty_nif
+
+A jump through a **null function pointer** inside the ICD loader's dispatch
+chain, on first-touch Vulkan initialisation, on a dirty-IO scheduler thread.
+
+What this is and is not:
+
+  * **Not the batched path, and not this commit.** It is `ctx()` on the
+    `leapfrog_chain_synth_f64` entry — the live single-instance path — during
+    instance creation, before any shader is dispatched. A pre-existing hazard
+    that this fleet run happened to catch.
+  * **Intermittent.** The same binary ran the full suite to 683/1 minutes
+    later, and the batched shader test had passed on it moments before.
+  * **Not a stale or dirty build.** 247 had just had
+    `mix deps.clean nx_vulkan --build`, its artifact checksum changed, and the
+    result was byte-identical to 248's. The crash happened *on* a
+    verified-clean build, which is why wiping or rebuilding 247 is neither a
+    diagnosis nor a fix.
+  * **Not obviously the ICD config.** 247 carries four ICD manifests (intel,
+    lvp, nvidia, radeon) with all four libraries present — and 248 carries
+    exactly the same four and does not crash.
+
+**Worth reporting upstream, carefully labelled.** `ctx()` is
+`CTX.get()` -> build -> `CTX.set()`, not `get_or_init`. Several dirty-IO
+threads can therefore build complete `VkInstance`s concurrently, and
+`let _ = CTX.set(ctx)` **drops every loser**, running vulkano's `Drop` on a
+live instance while another thread may still be inside the loader. That is a
+real teardown race sitting exactly where this crash is — but it is a
+hypothesis, not a finding: only `erts_dios_3` was inside Vulkan at dump time,
+and the dump shows the state after the fault, not microseconds before it.
+
+Second, smaller point for upstream: a NIF that segfaults during first-touch
+init takes the whole VM with it, and the only trace is a core file in the
+caller's working directory.
+
+**Method note.** The run that crashed exited 0 and printed nothing. A suite
+that prints nothing and exits 0 is indistinguishable from one that passed, if
+the harness only checks the exit code — this one was caught because the script
+grepped for a summary line and found none. Keep that grep.
 
 ## NEXT TASK — wire the coordinator to the parallel path
 
