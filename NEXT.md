@@ -19,24 +19,45 @@ the counter, so both halves come from one run. `bench/tree_logic_split.exs`
 takes the marginal between 200 and 800 draws, so warmup, compilation, shader
 synthesis and BEAM startup cancel exactly.
 
-mac-248, median of 3:
+**RETRACTED — the instrument cannot resolve anything. Do not use these
+numbers.** They are left visible because the way they failed is the useful
+part.
+
+The first run looked clean and tight:
 
 | d | disp/draw | us/draw | in-dispatch | out-of-dispatch | out % |
 |---|---|---|---|---|---|
-| 1 | 1.37 | 350.5 | 246.1 | 109.0 | **31.7%** |
+| 1 | 1.37 | 350.5 | 246.1 | 109.0 | 31.7% |
 | 2 | 1.47 | 415.0 | 280.9 | 134.4 | 32.4% |
 | 4 | 1.64 | 629.6 | 430.0 | 178.1 | 30.9% |
 | 8 | 1.68 | 920.8 | 379.9 | 184.5 | 20.0% |
 
-**This revises the "~1.9 ms of every 4.1 ms is tree logic" figure this file has
-been quoting.** That was 46%, derived by differencing an isolated benchmark
-median against a wall-clock average across a different workload on a different
-host. Measured in one run: out-of-dispatch is **20-32%**, and **in-dispatch is
-the larger half at every width**.
+Three consecutive runs of the **same commit** on the same quiet box:
 
-It is also neither cleanly per-draw nor per-dispatch — roughly **80 us fixed
-per dispatch plus a weak width term**, since 8x the model width buys only 1.4x
-the cost.
+| d | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| 1 | 111.5 | 123.2 | 180.3 |
+| 2 | 138.2 | **-125.0** | **-130.4** |
+| 4 | 83.4 | 177.2 | 161.1 |
+| 8 | 148.5 | **1554.5** | 250.3 |
+
+Negative out-of-dispatch is physically impossible — it is wall minus
+in-dispatch — and d=8 spans 10x. The table above was one draw from that
+distribution that happened to look tidy.
+
+**The design is the fault.** Taking the marginal between 200 and 800 draws
+cancels warmup, which is what it was for, but it differences two noisy
+quantities and amplifies both variances. A direct A/B of the same workload
+with medians spreads 9-19% on the same box, which is bad but at least finite.
+
+So the "~1.9 ms of every 4.1 ms is tree logic" figure this file has quoted
+remains unverified rather than corrected. Both it and its replacement are
+now known to come from instruments that cannot support them. **What is
+actually established is only that `disp/draw` is 1.4-1.7** — that number is
+stable across every run above.
+
+Building an instrument that resolves this is the prerequisite for any further
+host-side work, and it is unfinished.
 
 ### Our trees are shallow, and that changes what is worth optimising
 
@@ -56,6 +77,30 @@ Right scaling curve, wrong operating point. Measure the operating point before
 writing the patch, not after. (`Nx.backend_copy` to a backend a tensor is
 already on costs ~1.1 us regardless of size, so the four of them in `tree.ex`
 are also not worth touching.)
+
+### The kinetic-energy change: written, verified, reverted
+
+`cached_step_fn` computes `0.5 * sum(p * inv_mass * p)` as four Nx operations
+on a d-element BinaryBackend tensor, per leaf. On mac-248 at d=4 the whole
+leaf body is **21.84 us and that line is 14.3 of it — 63%**, for twelve
+floating-point operations. Hoisting the row extraction to one
+`Nx.to_flat_list` per dispatch and summing in plain Elixir measures
+**21.84 -> 9.56 us per leaf, -56.2%**, with the hoist cost accounted
+separately (1.7-12.2 us per dispatch, breaking even inside one leaf against
+~3.3 leaves per dispatch) and posteriors **bit-identical to four decimal
+places**, mean and sd, every parameter.
+
+It was reverted (`7ad45d90d`). End to end it is ~4350 leaves x 12.28 us =
+~53 ms against a 2200 ms run — **2.4%, below the 9-19% noise floor** of the
+best instrument available — and the direct A/B point estimate came out 5%
+*slower*. Unmeasurable benefit against a permanent branch plus a fallback for
+rank-2 mass matrices.
+
+Same standard applied to `nx_vulkan`'s buffer pool an hour earlier, and it
+would have been inconsistent to keep this one. **Re-apply it if leaf count
+ever rises** — deeper trees, larger K, or a model that stops being
+4-dimensional — because the 56% is real, it is just currently multiplied by
+too small a number.
 
 ### D4 now has a number attached: up to 3.9x
 
