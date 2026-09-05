@@ -43,7 +43,8 @@ defmodule PDB.Provenance do
       seed: Keyword.fetch!(opts, :seed),
       ncp: Keyword.fetch!(opts, :ncp),
       transcendentals: inspect(Keyword.fetch!(opts, :transcendentals)),
-      chains: Keyword.fetch!(opts, :chains)
+      chains: Keyword.fetch!(opts, :chains),
+      tier: to_string(Keyword.fetch!(opts, :tier))
     }
   end
 
@@ -61,6 +62,7 @@ defmodule PDB.Provenance do
       #{p.jit_describe}
       protocol      #{p.num_warmup} warmup + #{p.num_samples} sampling, seed=#{p.seed}, ncp=#{p.ncp}
       transcend.    #{p.transcendentals}
+      tier          #{p.tier}
       chains        #{p.chains}#{if p.chains < 2, do: " (R-hat CANNOT be computed -- needs >= 2)", else: ", seeds #{p.seed}..#{p.seed + p.chains - 1}"}
       parallel      #{p.parallel}#{if p.mode == "race" and p.parallel == 1, do: " (serialized — timings are meaningful)", else: ""}
     """

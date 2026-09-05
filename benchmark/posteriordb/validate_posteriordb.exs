@@ -31,6 +31,7 @@ defmodule PosteriorDBValidator do
     transcendentals = Keyword.get(opts, :transcendentals, :f32_cast)
     chains = Keyword.get(opts, :chains, 4)
     arms = Keyword.get(opts, :arms) || [compiler]
+    tier = Keyword.get(opts, :tier, :full)
 
     parallel = resolve_parallel(mode, compiler, opts)
     guard_race!(mode, parallel)
@@ -68,13 +69,14 @@ defmodule PosteriorDBValidator do
         seed: seed,
         ncp: ncp,
         transcendentals: transcendentals,
-        chains: chains
+        chains: chains,
+        tier: tier
       )
 
     IO.puts(PDB.Provenance.banner(provenance))
 
     manifest = load_json(Path.join(@processed_dir, "manifest.json"))
-    posteriors = manifest["posteriors"] |> filter_only(only)
+    posteriors = manifest["posteriors"] |> tier_filter(tier, only)
     IO.puts("Posteriors to run: #{length(posteriors)}\n")
 
     run_opts = [
@@ -137,6 +139,60 @@ defmodule PosteriorDBValidator do
   end
 
   defp guard_race!(_, _), do: :ok
+
+  # (f) Tiers.
+  #
+  # 33 models x 4 chains x 1000+1000 is far too slow to run on every bump, and
+  # the obvious economy does NOT work: (d) measured kilpisjarvi at R-hat 1.845
+  # on 300 draws against 1.003 on 1000. Shortening chains does not buy a
+  # cheaper check, it buys a check that fails for a reason unrelated to the
+  # change under test. So the tier cuts the MODEL LIST and leaves the protocol
+  # alone.
+  #
+  # Six models, one per posteriordb family, chosen for structural coverage
+  # rather than for being quick:
+  #
+  #   eight_schools_noncentered   hierarchical + NCP; the only non-regression
+  #   mesquite-logmesquite_logvolume  n_obs=46,  n_beta=2  the small corner
+  #   sblri-blr                   n_obs=100, n_beta=5  produced the Inf/NaN
+  #   kidiq-kidscore_momhs        n_obs=434, n_beta=2  just under the old
+  #                               pipeline ceiling (868)
+  #   nes2000-nes                 n_obs=476, n_beta=9  widest d
+  #   earnings-earn_height        n_obs=1192, n_beta=2 largest data; the model
+  #                               that first hit the pipeline ceiling
+  #
+  # Two of the six are there because they BROKE: earnings-earn_height was the
+  # canary for the shader-size ceiling and sblri-blr for the non-finite crash.
+  # A tier picked purely for speed would have contained neither, and would have
+  # been green through both bugs.
+  @fast_tier ~w(
+    eight_schools-eight_schools_noncentered
+    mesquite-logmesquite_logvolume
+    sblri-blr
+    kidiq-kidscore_momhs
+    nes2000-nes
+    earnings-earn_height
+  )
+
+  defp tier_filter(posteriors, _tier, only) when is_binary(only),
+    do: filter_only(posteriors, only)
+
+  defp tier_filter(posteriors, :fast, _only) do
+    selected = Enum.filter(posteriors, &(&1 in @fast_tier))
+
+    # A tier that silently shrinks because a model was renamed is a tier that
+    # quietly stops covering what it claims to.
+    missing = @fast_tier -- selected
+
+    if missing != [] do
+      raise "fast tier names #{length(@fast_tier)} models but the manifest is missing: " <>
+              Enum.join(missing, ", ")
+    end
+
+    selected
+  end
+
+  defp tier_filter(posteriors, :full, _only), do: posteriors
 
   # (b) Paired, interleaved, counterbalanced.
   #
@@ -916,7 +972,8 @@ end
       only: :string,
       transcendentals: :string,
       chains: :integer,
-      arms: :string
+      arms: :string,
+      tier: :string
     ]
   )
 
@@ -946,6 +1003,12 @@ PosteriorDBValidator.run(
     ncp: Keyword.get(opts, :ncp, false),
     only: Keyword.get(opts, :only),
     chains: Keyword.get(opts, :chains, 4),
+    tier:
+      case Keyword.get(opts, :tier, "full") do
+        "full" -> :full
+        "fast" -> :fast
+        other -> raise ArgumentError, "--tier must be fast|full, got #{inspect(other)}"
+      end,
     arms:
       case Keyword.get(opts, :arms) do
         nil ->
