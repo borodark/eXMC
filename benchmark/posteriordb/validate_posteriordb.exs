@@ -645,24 +645,34 @@ defmodule PosteriorDBValidator do
   # permanently red and therefore detects nothing -- the same uselessness as a
   # gate that can never fail, arrived at from the other side.
   #
-  # Measured 2026-09-05, EXLA, 1000 warmup + 1000 sampling, 4 chains:
+  # Measured 2026-09-05, EXLA, 1000 warmup + 1000 sampling, 4 chains. The whole
+  # fast tier, i.e. one model from every posteriordb family:
   #
-  #   model              R-hat   ESS/chain   mcse_z       div rate
-  #   sblrc-blr          1.005   127-430     0.07-1.74     48/4000 = 1.2%
-  #   kilpisjarvi        1.003   157-234     1.27-1.68    141/4000 = 3.5%
+  #   model                           R-hat   min ESS   max err   div rate
+  #   mesquite-logmesquite_logvolume  1.001      1906      0.01    32/4000 = 0.8%
+  #   sblri-blr                       1.001       777      0.04    42/4000 = 1.05%
+  #   kidiq-kidscore_momhs            1.002      1332      0.01    67/4000 = 1.7%
+  #   eight_schools_noncentered       1.002      2402      0.03    88/4000 = 2.2%
+  #   earnings-earn_height            1.000      1001      0.04   114/4000 = 2.85%
+  #   nes2000-nes                     1.002      1370      0.03   240/4000 = 6.0%
   #
-  # So 1.01 / 100 / 4.0 all clear with room. Divergences do NOT: Stan's
-  # convention of treating any divergence as suspect would fail both healthy
-  # models, so the threshold is set from the measurement at 5%, which still
-  # catches the failure it exists to catch -- the Vulkan arm on these same
-  # models runs 48% to 94%, an order of magnitude clear of the gate.
+  # 1.01 / 100 / 4.0 clear by wide margins -- ESS is 8-24x the gate. Divergences
+  # do not, and this threshold has now been wrong twice in the honest direction:
+  # Stan's "any divergence is suspect" fails all six, and 5% (calibrated on two
+  # models) failed nes2000-nes, whose R-hat is 1.002 and whose max mean error is
+  # 0.03. That is an accurate posterior on a healthy sampler, so the gate was
+  # wrong, not the model.
   #
-  # Calibrated on two models. Re-derive from a full 33-model baseline run
-  # before treating 5% as settled.
+  # 10% gives ~1.7x headroom over the worst healthy model while still catching
+  # what it exists to catch: the Vulkan arm runs 45-94% on these models, 4.5-9x
+  # clear of the gate.
+  #
+  # Calibrated on the 6-model fast tier, one per family. Re-derive if the full
+  # 33 turn up a healthy model above 6%.
   @rhat_max 1.01
   @ess_min_per_chain 100
   @mcse_z_max 4.0
-  @div_rate_max 0.05
+  @div_rate_max 0.10
 
   defp compare_stats(pstats, ref_draws, param_map, div_rate) do
     Enum.map(param_map, fn {exmc_name, pdb_name} ->
