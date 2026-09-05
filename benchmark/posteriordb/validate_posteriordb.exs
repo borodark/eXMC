@@ -30,6 +30,7 @@ defmodule PosteriorDBValidator do
     only = Keyword.get(opts, :only)
     transcendentals = Keyword.get(opts, :transcendentals, :f32_cast)
     chains = Keyword.get(opts, :chains, 4)
+    arms = Keyword.get(opts, :arms) || [compiler]
 
     parallel = resolve_parallel(mode, compiler, opts)
     guard_race!(mode, parallel)
@@ -85,20 +86,25 @@ defmodule PosteriorDBValidator do
     ]
 
     results =
-      posteriors
-      |> Task.async_stream(
-        fn name -> validate_one(name, run_opts) end,
-        max_concurrency: parallel,
-        timeout: 1_800_000,
-        ordered: false
-      )
-      |> Enum.map(fn
-        {:ok, result} -> result
-        {:exit, reason} -> %{name: "unknown", status: :crash, error: inspect(reason)}
-      end)
-      |> Enum.sort_by(& &1.name)
+      if length(arms) > 1 do
+        race_arms(posteriors, arms, run_opts)
+      else
+        posteriors
+        |> Task.async_stream(
+          fn name -> validate_one(name, Keyword.put(run_opts, :arm, compiler)) end,
+          max_concurrency: parallel,
+          timeout: 1_800_000,
+          ordered: false
+        )
+        |> Enum.map(fn
+          {:ok, result} -> result
+          {:exit, reason} -> %{name: "unknown", status: :crash, error: inspect(reason)}
+        end)
+        |> Enum.sort_by(& &1.name)
+      end
 
     print_report(results, provenance)
+    if length(arms) > 1, do: print_pairing(results, arms)
     save_results(results, provenance)
     results
   end
@@ -132,6 +138,73 @@ defmodule PosteriorDBValidator do
 
   defp guard_race!(_, _), do: :ok
 
+  # (b) Paired, interleaved, counterbalanced.
+  #
+  # Running all of A and then all of B hands every bit of drift over the run --
+  # GPU clocks, thermal state, page cache, background load -- to whichever arm
+  # went second. That is not a hypothetical: the (c) self-race measured a 55%
+  # systematic slowdown of the second pass, in the SAME direction on all ten
+  # models, with the code identical. An unpaired A/B would have reported that
+  # as a 55% regression.
+  #
+  # So arms alternate per MODEL, and the order flips on odd indices. Flipping
+  # matters as much as interleaving: if arm A always ran first within each
+  # model it would absorb the cold-cache penalty every time, which is a
+  # systematic bias merely relocated rather than removed.
+  #
+  # Only runtime-selectable arms can be raced this way -- a compiler is an
+  # Application env key, so both arms live in one process and share one machine
+  # state. Racing two COMMITS still needs two invocations and race.exs to diff
+  # the artifacts; that is what its self-race mode is for.
+  defp race_arms(posteriors, arms, run_opts) do
+    posteriors
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {name, idx} ->
+      ordered = if rem(idx, 2) == 0, do: arms, else: Enum.reverse(arms)
+
+      Enum.map(ordered, fn arm ->
+        Application.put_env(:exmc, :compiler, arm)
+        validate_one(name, Keyword.put(run_opts, :arm, arm))
+      end)
+    end)
+    |> Enum.sort_by(&{&1.name, to_string(&1[:arm])})
+  end
+
+  # Paired per-model ratios. Reported as a geometric mean because ratios are
+  # ratio data: an arithmetic mean of them is asymmetric under swapping the
+  # arms, which is the one property a race must not have.
+  defp print_pairing(results, [a, b | _]) do
+    by_name = Enum.group_by(results, & &1.name)
+
+    pairs =
+      for {name, rows} <- by_name,
+          ra = Enum.find(rows, &(&1[:arm] == a)),
+          rb = Enum.find(rows, &(&1[:arm] == b)),
+          ra && rb,
+          is_number(ra[:wall_ms]) and is_number(rb[:wall_ms]) and ra.wall_ms > 0,
+          do: {name, rb.wall_ms / ra.wall_ms, ra, rb}
+
+    if pairs != [] do
+      IO.puts("\n--- Paired comparison: #{inspect(b)} relative to #{inspect(a)} ---")
+      IO.puts("(interleaved per model, order counterbalanced)\n")
+
+      for {name, r, ra, rb} <- Enum.sort_by(pairs, fn {n, _, _, _} -> n end) do
+        IO.puts("  #{String.pad_trailing(name, 44)} wall #{pct(r)}  " <>
+                "#{String.pad_leading(to_string(ra.status), 5)} -> #{rb.status}  " <>
+                "ess #{fmt(ra[:min_ess], 0)} -> #{fmt(rb[:min_ess], 0)}  " <>
+                "div #{fmt(ra[:div_rate] && ra.div_rate * 100, 1)}% -> #{fmt(rb[:div_rate] && rb.div_rate * 100, 1)}%")
+      end
+
+      ratios = Enum.map(pairs, fn {_, r, _, _} -> r end)
+      g = :math.exp(Enum.sum(Enum.map(ratios, &:math.log/1)) / length(ratios))
+      IO.puts("\n  geometric mean wall: #{pct(g)} over #{length(pairs)} paired models")
+    end
+  end
+
+  defp print_pairing(_results, _arms), do: :ok
+
+  defp pct(r), do: "#{if r >= 1.0, do: "+", else: ""}#{Float.round((r - 1.0) * 100, 1)}%"
+
   defp filter_only(posteriors, nil), do: posteriors
 
   # Comma-separated substrings, so a subset can be driven in one run. Needed
@@ -150,6 +223,7 @@ defmodule PosteriorDBValidator do
     seed = Keyword.fetch!(opts, :seed)
     ncp = Keyword.fetch!(opts, :ncp)
     chains = Keyword.fetch!(opts, :chains)
+    arm = Keyword.get(opts, :arm)
 
     t0 = System.monotonic_time(:millisecond)
 
@@ -212,6 +286,7 @@ defmodule PosteriorDBValidator do
 
       result = %{
         name: name,
+        arm: arm,
         status: status,
         wall_ms: wall_ms,
         divergences: divergences,
@@ -237,7 +312,7 @@ defmodule PosteriorDBValidator do
       }
 
       status_str = if passed, do: "PASS", else: "FAIL"
-      IO.puts("  #{status_str}  #{String.pad_trailing(name, 44)}  " <>
+      IO.puts("  #{status_str}  #{String.pad_trailing("#{name}#{if arm, do: " (#{arm})", else: ""}", 44)}  " <>
               "#{wall_ms}ms  ess=#{round(min_ess)}  " <>
               "rhat=#{if max_rhat, do: Float.round(max_rhat, 3), else: "n/a"}  " <>
               "lf=#{leapfrog}  div=#{divergences}/#{total_draws}  " <>
@@ -840,7 +915,8 @@ end
       ncp: :boolean,
       only: :string,
       transcendentals: :string,
-      chains: :integer
+      chains: :integer,
+      arms: :string
     ]
   )
 
@@ -870,6 +946,21 @@ PosteriorDBValidator.run(
     ncp: Keyword.get(opts, :ncp, false),
     only: Keyword.get(opts, :only),
     chains: Keyword.get(opts, :chains, 4),
+    arms:
+      case Keyword.get(opts, :arms) do
+        nil ->
+          nil
+
+        str ->
+          str
+          |> String.split(",", trim: true)
+          |> Enum.map(fn
+            "vulkan" -> :vulkan
+            "exla" -> :exla
+            "none" -> :none
+            other -> raise ArgumentError, "--arms entries must be vulkan|exla|none, got #{inspect(other)}"
+          end)
+      end,
     transcendentals:
       case Keyword.get(opts, :transcendentals, "f32_cast") do
         "f32_cast" -> :f32_cast
