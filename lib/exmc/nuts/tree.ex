@@ -960,7 +960,8 @@ defmodule Exmc.NUTS.Tree do
 
     use_nif =
       Application.get_env(:exmc, :use_nif, true) and nif_available?() and
-        inv_mass_list != nil and depth >= nif_threshold
+        inv_mass_list != nil and depth >= nif_threshold and
+        chain_all_finite?(sliced_q, sliced_p, sliced_logp, sliced_grad)
 
     if use_nif do
       build_subtree_nif_precomputed(
@@ -2015,6 +2016,42 @@ defmodule Exmc.NUTS.Tree do
   defp all_finite?(tensor) do
     s = tensor |> Nx.sum() |> Nx.to_number()
     is_number(s)
+  end
+
+  # A non-finite log-density is an ORDINARY event in HMC: it means "reject this
+  # trajectory". The recursive Elixir path has always known that -- see the
+  # cond in build_subtree/13, which routes `not is_number(joint_logp_new)` and
+  # `not all_finite?(q_new)` to the divergent fallback, and whose comment names
+  # the exact producer: "vulkano f32 dispatch that hits a numerical edge case
+  # and emits NaN into the trajectory tensors".
+  #
+  # The NIF path did not. `build_subtree_nif_precomputed/8` guarded only
+  # `joint_logp_0` and handed the chain binaries to
+  # `NativeTree.build_subtree_bin/9` unchecked, where a non-finite f64 is
+  # rejected as `badarg` -- so the same trajectory that the Elixir path
+  # rejects and moves on from crashed the sampler.
+  #
+  # Measured 2026-09-05: posteriordb `sblrc-blr` under `compiler: :vulkan` at
+  # 300 warmup + 300 sampling died with `argument error` from build_subtree_bin
+  # carrying <<0,0,0,0,0,0,240,127>> (+Inf) and <<0,0,0,224,255,255,255,127>>
+  # (NaN) in the gradient. Source is the f64 boundary cast: GLSL.std.450 has no
+  # double transcendentals, so `exp_d(x)` is `double(exp(float(x)))` and
+  # overflows at ln(f32_max) = 88.7228. Sigma is sampled as log-sigma, the
+  # likelihood needs 1/sigma^2 = exp(-2*q_uc), so the boundary is q_uc < -44.36
+  # -- which nx_vulkan measured independently as the halfnormal_f64 boundary,
+  # 44.36, to the digit.
+  #
+  # Falling through to the cached path rather than duplicating the divergence
+  # construction here is deliberate: there is one definition of what a
+  # divergence IS, and it is the one already under test.
+  #
+  # Cost is four Nx.sum passes over BinaryBackend tensors, only at
+  # depth >= nif_depth_threshold, against a subtree build that is orders of
+  # magnitude more work. Checking all four rather than just logp is what the
+  # Elixir guard does, and for its stated reason: joint_logp can be finite
+  # while the trajectory tensors are not.
+  defp chain_all_finite?(q, p, logp, grad) do
+    all_finite?(q) and all_finite?(p) and all_finite?(logp) and all_finite?(grad)
   end
 
   # --- Helpers ---
