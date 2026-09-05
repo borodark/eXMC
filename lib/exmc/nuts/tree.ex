@@ -825,7 +825,7 @@ defmodule Exmc.NUTS.Tree do
   # as the family clauses above; the new path is at the dispatch.ex /
   # Native shim layer, not here.
   defp do_dispatch(
-         {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin} = meta,
+         {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin, _captures} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
          q, p, grad, eps_t, n_t, k, dir_sign

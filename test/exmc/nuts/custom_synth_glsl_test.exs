@@ -85,16 +85,81 @@ defmodule Exmc.NUTS.CustomSynth.GlslTest do
 
       Glsl.start_captures()
       assert {:ok, glsl} = Glsl.emit(expr, ["q"])
-      assert glsl =~ "__captured_t"
-      # Loop-index accessor: the convention is `[j]` matching the
+
+      # Captures are read from the extras SSBO, NOT emitted as a
+      # `const double[]` literal. That inlining made SPIR-V size grow with the
+      # DATA and cost 21 of 33 posteriordb models a compute pipeline; see
+      # docs/SHADER_CONSTANT_INLINING.md.
+      refute glsl =~ "__captured_t"
+      refute glsl =~ "double["
+
+      # Layout: obs | inv_mass | captures. First capture sits at offset 0 of
+      # the capture region, which begins at pc.n_obs + pc.d. `j` is the
       # transform_reduce_sum loop iterator.
-      assert glsl =~ "[j]"
+      assert glsl =~ "obs_inv_mass[pc.n_obs + pc.d + 0 + j]"
 
       captures = Glsl.collect_captures()
       assert length(captures) == 1
-      [%{name: name, length: 3, values: vs, dtype: :f}] = captures
+      [%{name: name, length: 3, values: vs, dtype: :f, offset: 0}] = captures
       assert name =~ ~r/^__captured_t-?\d+$/
       assert vs == [1.0, 2.0, 3.0]
+    end
+
+    test "a second distinct capture is appended, not overlaid" do
+      # Both captures must be q-DEPENDENT. `Nx.sum(b)` on a closed-over
+      # constant is folded by Nx.Defn before tracing, so it never becomes a
+      # :tensor op and never registers -- which is what a first draft of this
+      # test discovered about its own fixture rather than about the code.
+      a = Nx.tensor([1.0, 2.0, 3.0], type: :f64, backend: Nx.BinaryBackend)
+      b = Nx.tensor([4.0, 5.0, 6.0], type: :f64, backend: Nx.BinaryBackend)
+
+      fun = fn q -> Nx.add(Nx.sum(Nx.multiply(a, q)), Nx.sum(Nx.multiply(b, q))) end
+      expr = trace_scalar(fun, [Nx.template({3}, :f64)])
+
+      Glsl.start_captures()
+      assert {:ok, glsl} = Glsl.emit(expr, ["q"])
+      captures = Glsl.collect_captures()
+
+      assert length(captures) == 2
+
+      # collect_captures/0 returns entries in offset order, so the packer and
+      # the emitter cannot disagree about layout.
+      offsets = Enum.map(captures, & &1.offset)
+      assert offsets == [0, 3]
+
+      # The second region starts exactly where the first ends -- no overlap,
+      # which is the whole correctness property of the offset arithmetic.
+      [first, second] = captures
+      assert second.offset == first.offset + first.length
+
+      for %{offset: off} <- captures do
+        assert glsl =~ "obs_inv_mass[pc.n_obs + pc.d + #{off} + j]"
+      end
+    end
+
+    test "captures_bin/1 packs f64 in offset order, matching the emitter" do
+      a = Nx.tensor([1.0, 2.0], type: :f64, backend: Nx.BinaryBackend)
+      b = Nx.tensor([3.0, 4.0], type: :f64, backend: Nx.BinaryBackend)
+
+      fun = fn q -> Nx.add(Nx.sum(Nx.multiply(a, q)), Nx.sum(Nx.multiply(b, q))) end
+      expr = trace_scalar(fun, [Nx.template({2}, :f64)])
+
+      Glsl.start_captures()
+      assert {:ok, _glsl} = Glsl.emit(expr, ["q"])
+      captures = Glsl.collect_captures()
+      assert length(captures) == 2
+
+      bin = Exmc.NUTS.CustomSynth.MultiRvCustomSpec.captures_bin(captures)
+
+      # One contiguous f64 region, laid out in offset order.
+      assert byte_size(bin) == 4 * 8
+
+      expected =
+        captures
+        |> Enum.sort_by(& &1.offset)
+        |> Enum.flat_map(& &1.values)
+
+      assert for(<<v::little-float-64 <- bin>>, do: v) == expected
     end
 
     test "same tensor emitted twice registers once (idempotent)" do

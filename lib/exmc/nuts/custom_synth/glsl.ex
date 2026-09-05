@@ -76,7 +76,8 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
           name: binary(),
           values: [number()],
           length: non_neg_integer(),
-          dtype: atom()
+          dtype: atom(),
+          offset: non_neg_integer()
         }
 
   @doc """
@@ -113,7 +114,7 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
 
     captures
     |> Map.values()
-    |> Enum.sort_by(& &1.name)
+    |> Enum.sort_by(& &1.offset)
   end
 
   # --- Common-subexpression elimination (CSE) -----------------------
@@ -605,25 +606,56 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
   # same accessor, no duplicate registration).
   defp register_capture(%T{shape: {n}, type: type} = t) do
     hash = :erlang.phash2(Nx.to_binary(t))
-    name = "__captured_t#{hash}"
-    accessor = "#{name}[#{@loop_index_var}]"
-
     captures = Process.get(@captures_key, %{})
 
-    case Map.fetch(captures, hash) do
-      {:ok, _existing} ->
-        accessor
+    entry =
+      case Map.fetch(captures, hash) do
+        {:ok, existing} ->
+          existing
 
-      :error ->
-        entry = %{
-          name: name,
-          values: Nx.to_flat_list(t),
-          length: n,
-          dtype: elem(type, 0)
-        }
+        :error ->
+          entry = %{
+            name: "__captured_t#{hash}",
+            values: Nx.to_flat_list(t),
+            length: n,
+            dtype: elem(type, 0),
+            offset: next_capture_offset(captures)
+          }
 
-        Process.put(@captures_key, Map.put(captures, hash, entry))
-        accessor
-    end
+          Process.put(@captures_key, Map.put(captures, hash, entry))
+          entry
+      end
+
+    capture_accessor(entry)
+  end
+
+  # Captures are a THIRD region of the extras SSBO, after obs and inv_mass:
+  #
+  #     obs[0, n_obs)  inv_mass[n_obs, n_obs+d)  captures[n_obs+d, ...)
+  #
+  # Appended after inv_mass rather than inserted before it so that every
+  # pre-existing index expression -- `obs_inv_mass[j]` and
+  # `obs_inv_mass[pc.n_obs + tid]` -- stays byte-identical. A change that
+  # cannot perturb the paths it was not meant to touch is worth an extra
+  # addend in the index.
+  #
+  # `j` is the reduce-loop variable and is a GLOBAL index into the
+  # concatenated observation buffer in both span modes (`loop_lo/2` starts
+  # marker n at its global offset), so a capture aligned to the whole obs
+  # buffer is read correctly. `MultiRvCustomSpec` refuses the one shape where
+  # that is not sound -- per-node spans WITH captures -- rather than emitting
+  # a plausible wrong density.
+  defp capture_accessor(%{offset: off}) do
+    "obs_inv_mass[pc.n_obs + pc.d + #{off} + #{@loop_index_var}]"
+  end
+
+  # Offsets are assigned at first registration and never recomputed, so the
+  # emitter is the single source of truth for the packing order. The binary
+  # MUST be built from these same entries -- see
+  # `MultiRvCustomSpec.captures_bin/1`. Two encoders that agree by
+  # construction today and drift later is defect D1 in
+  # docs/BATCHED_CHAIN_DISPATCH.md, and this is the same shape of trap.
+  defp next_capture_offset(captures) do
+    captures |> Map.values() |> Enum.reduce(0, fn e, acc -> acc + e.length end)
   end
 end

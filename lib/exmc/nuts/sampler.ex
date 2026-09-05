@@ -1647,7 +1647,7 @@ defmodule Exmc.NUTS.Sampler do
   #
   # For other (single-RV) meta tags: fall back to broadcasting the existing
   # scalar prior_inv_mass to all d components.
-  defp prior_inv_mass_per_rv({:synthesised, _sha, layout, push_spec, _spv, _obs}, d) do
+  defp prior_inv_mass_per_rv({:synthesised, _sha, layout, push_spec, _spv, _obs, _capt}, d) do
     priors_by_id =
       push_spec.priors
       |> Enum.map(fn {id, mod, params} -> {id, {mod, params}} end)

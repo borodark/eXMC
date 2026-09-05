@@ -161,7 +161,7 @@ defmodule Exmc.PlanBPrimeGuardTest do
         chain_meta = elem(result, 5)
 
         assert match?({:normal, _, _}, chain_meta) or
-                 match?({:synthesised, _, _, _, _, _}, chain_meta),
+                 match?({:synthesised, _, _, _, _, _, _}, chain_meta),
                "expected a chain meta, got: #{inspect(chain_meta)}"
       end
     end

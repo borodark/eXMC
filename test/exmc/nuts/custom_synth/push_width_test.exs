@@ -130,7 +130,7 @@ defmodule Exmc.NUTS.CustomSynth.PushWidthTest do
 
     test "d = 256 synthesises and dispatches finite, correctly sized chains" do
       # n_rv = 257 because observing m1 leaves 256 free.
-      assert {:ok, {:synthesised, _sha, layout, _spec, _spv, _obs} = meta} =
+      assert {:ok, {:synthesised, _sha, layout, _spec, _spv, _obs, _capt} = meta} =
                Exmc.NUTS.ChainShaderCodegen.detect_meta(wide_ir(257), [])
 
       assert length(layout) == 256
@@ -168,7 +168,7 @@ defmodule Exmc.NUTS.CustomSynth.PushWidthTest do
     @describetag :requires_vulkan
 
     test "it synthesises rather than degrading to per-op" do
-      assert {:ok, {:synthesised, _sha, layout, _spec, _spv, _obs}} =
+      assert {:ok, {:synthesised, _sha, layout, _spec, _spv, _obs, _capt}} =
                Exmc.NUTS.ChainShaderCodegen.detect_meta(conjugate_ir(@vs), []),
              "an 8 free-RV model must synthesise; it used to return " <>
                "{:unsupported, :push_too_large} and sample per-op at ~13x the cost"

@@ -54,7 +54,7 @@ defmodule Exmc.NUTS.CustomSynth.SpvRecoveryTest do
   end
 
   test "sampling survives its shader being deleted underneath it" do
-    {:ok, {:synthesised, _sha, _layout, _spec, spv, _obs}} =
+    {:ok, {:synthesised, _sha, _layout, _spec, spv, _obs, _capt}} =
       Exmc.NUTS.CustomSynth.synthesise(ir())
 
     assert File.exists?(spv), "synthesis did not produce #{spv}"
@@ -121,7 +121,7 @@ defmodule Exmc.NUTS.CustomSynth.SpvRecoveryTest do
       Path.join(
         Path.dirname(
           (fn ->
-             {:ok, {:synthesised, _, _, _, p, _}} = Exmc.NUTS.CustomSynth.synthesise(ir())
+             {:ok, {:synthesised, _, _, _, p, _, _}} = Exmc.NUTS.CustomSynth.synthesise(ir())
              p
            end).()
         ),

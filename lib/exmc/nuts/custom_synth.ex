@@ -78,7 +78,7 @@ defmodule Exmc.NUTS.CustomSynth do
   @typedoc "Meta returned when synthesis succeeds; consumed by Tree.do_dispatch/10."
   @type synth_meta ::
           {:synthesised, sha256 :: binary(), layout :: [atom()], push_spec :: map(),
-           spv_path :: Path.t(), obs_bin :: binary()}
+           spv_path :: Path.t(), obs_bin :: binary(), captures_bin :: binary()}
 
   @doc """
   Entry point.  Walks the IR + Custom dist, renders a fused
@@ -123,8 +123,8 @@ defmodule Exmc.NUTS.CustomSynth do
     ir = Exmc.Rewrite.apply(ir, opts)
 
     with {:ok, components} <- extract_components(ir),
-         {:ok, glsl} <- render_template(components, ir) do
-      synthesise_with_template_glsl(components, glsl, ir)
+         {:ok, glsl, captures_bin} <- render_template(components, ir) do
+      synthesise_with_template_glsl(components, glsl, ir, captures_bin: captures_bin)
     else
       _ -> :unsupported
     end
@@ -194,7 +194,9 @@ defmodule Exmc.NUTS.CustomSynth do
       else
         with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
           sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
-          {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, <<>>}}
+          # Batched synthesis refuses any non-empty capture set in
+          # `capture_guard/3`, so this arm can only ever carry an empty one.
+          {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, <<>>, <<>>}}
         else
           _ -> :unsupported
         end
@@ -218,6 +220,11 @@ defmodule Exmc.NUTS.CustomSynth do
   @spec synthesise_with_template_glsl(map(), binary(), IR.t(), keyword()) ::
           {:ok, synth_meta()} | {:unsupported, :push_too_large} | {:error, term()}
   def synthesise_with_template_glsl(components, glsl, %IR{} = ir, opts \\ []) do
+    # The packed closure-capture region of the extras buffer, produced by the
+    # same emitter pass that assigned its offsets. Defaults to empty so the
+    # hand-written-GLSL callers (tests, the R1 emitter) are unaffected.
+    captures_bin = Keyword.get(opts, :captures_bin, <<>>)
+
     # Obs data has two sources: `ir.data` (Custom / regime models via
     # Builder.data) and the `observed` list (synth P1 — RVs carrying an
     # {:obs, ...} node). When ir.data is absent, size + pack from the
@@ -259,7 +266,7 @@ defmodule Exmc.NUTS.CustomSynth do
     else
       with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
         sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
-        {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin}}
+        {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin, captures_bin}}
       end
     end
   end

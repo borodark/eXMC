@@ -208,7 +208,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
             vector_obs_ir([1.0, 2.0, 3.0])
           ] do
         comps = components(ir)
-        {:ok, single} = MultiRvCustomSpec.render(comps)
+        {:ok, single, _captures} = MultiRvCustomSpec.render(comps)
         {:ok, batched} = MultiRvCustomSpec.render_batched(comps)
 
         expected =
@@ -267,7 +267,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
       # Builder.obs model. n_obs is the per-instance extras stride
       # (`inst * (n_obs + d)`), so a wrong value does not fail — it points
       # instance 1 into the middle of instance 0's slice.
-      {:ok, {:synthesised, _, layout, push_spec, _, obs_bin}} =
+      {:ok, {:synthesised, _, layout, push_spec, _, obs_bin, _capt}} =
         CustomSynth.synthesise_batched(conjugate_ir([3.0, -2.0, 1.5]))
 
       assert push_spec.n_obs == 3
@@ -277,7 +277,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
       # batched meta carries none.
       assert obs_bin == <<>>
 
-      {:ok, {:synthesised, _, _, vec_spec, _, _}} =
+      {:ok, {:synthesised, _, _, vec_spec, _, _, _}} =
         CustomSynth.synthesise_batched(vector_obs_ir([1.0, 2.0, 3.0, 4.0]))
 
       assert vec_spec.n_obs == 4
@@ -319,7 +319,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
 
         n_inst = unquote(n_inst)
 
-        {:ok, {:synthesised, _, layout, _, _, obs_bin} = single} = CustomSynth.synthesise(ir)
+        {:ok, {:synthesised, _, layout, _, _, obs_bin, _capt} = single} = CustomSynth.synthesise(ir)
         {:ok, batched} = CustomSynth.synthesise_batched(ir)
 
         d = length(layout)
@@ -365,7 +365,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
       # on an 8-RV model; see push_width_test.exs.
       ir = conjugate_ir(Enum.map(1..16, &(&1 * 0.5 - 4.0)))
 
-      {:ok, {:synthesised, _, layout, _, _, obs_bin} = single} = CustomSynth.synthesise(ir)
+      {:ok, {:synthesised, _, layout, _, _, obs_bin, _capt} = single} = CustomSynth.synthesise(ir)
       {:ok, batched} = CustomSynth.synthesise_batched(ir)
 
       d = length(layout)
@@ -387,7 +387,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
 
     test "n_instances = 1 matches the single-instance path exactly" do
       ir = conjugate_ir([3.0, -2.0])
-      {:ok, {:synthesised, _, layout, _, _, obs_bin} = single} = CustomSynth.synthesise(ir)
+      {:ok, {:synthesised, _, layout, _, _, obs_bin, _capt} = single} = CustomSynth.synthesise(ir)
       {:ok, batched} = CustomSynth.synthesise_batched(ir)
 
       d = length(layout)
@@ -404,7 +404,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
       # eps is signed by the caller's direction on both paths; a batch that
       # dropped it would still return finite, plausible trajectories.
       ir = conjugate_ir([3.0, -2.0])
-      {:ok, {:synthesised, _, layout, _, _, obs_bin} = single} = CustomSynth.synthesise(ir)
+      {:ok, {:synthesised, _, layout, _, _, obs_bin, _capt} = single} = CustomSynth.synthesise(ir)
       {:ok, batched} = CustomSynth.synthesise_batched(ir)
 
       d = length(layout)
@@ -449,7 +449,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
       pairs =
         for {v, i} <- Enum.with_index(vs) do
           ir = vector_obs_ir([v, v + 1.0])
-          {:ok, {:synthesised, _, _, _, _, obs_bin} = meta} = CustomSynth.synthesise(ir)
+          {:ok, {:synthesised, _, _, _, _, obs_bin, _capt} = meta} = CustomSynth.synthesise(ir)
           inst = instance_inputs(i + 1, d, obs_tensor(obs_bin))
           {q, p, im, _} = inst
           {Dispatch.chain(meta, d, @eps, im, q, p, @k, 1), inst}
@@ -477,7 +477,7 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
       # Two instances with the same q and p but different inverse mass must
       # produce different trajectories, each matching its own lone dispatch.
       ir = conjugate_ir([3.0, -2.0])
-      {:ok, {:synthesised, _, layout, _, _, obs_bin} = single} = CustomSynth.synthesise(ir)
+      {:ok, {:synthesised, _, layout, _, _, obs_bin, _capt} = single} = CustomSynth.synthesise(ir)
       {:ok, batched} = CustomSynth.synthesise_batched(ir)
 
       d = length(layout)

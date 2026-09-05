@@ -582,7 +582,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   layout references an RV the priors list doesn't know about,
   or whatever the emitter returns for an unsupported op.
   """
-  @spec render(components()) :: {:ok, binary()} | {:error, term()}
+  @spec render(components()) :: {:ok, binary(), binary()} | {:error, term()}
   def render(%{priors: priors, custom: custom_info, layout: layout} = components) do
     observed = Map.get(components, :observed, [])
 
@@ -595,7 +595,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       if is_nil(custom_info) and observed == [] do
         render_prior_only(priors, layout, @template)
       else
-        render_with_custom(components, @template, "j")
+        render_with_custom(components, @template, "j", :single)
       end
     end
   rescue
@@ -629,7 +629,9 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
         |> String.replace("{{captured_decls}}", helpers)
         |> rewrite_transcendentals_f64()
 
-      {:ok, glsl}
+      # A prior-only model reads no observations, so it can hold no closure
+      # captures either. The empty binary keeps the arity uniform.
+      {:ok, glsl, <<>>}
     end
   end
 
@@ -642,7 +644,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   # instruction. A previous copy of this function drifted: it dropped the obs
   # spans, the CSE pass and the f64 transcendental rewrite, and the copy that
   # was left could not compile.
-  defp render_with_custom(components, template, obs_index) do
+  defp render_with_custom(components, template, obs_index, variant) do
     # Trace the full compose (priors + custom) with an obs template
     # of shape {1}. The actual loop iteration count comes from
     # pc.n_obs at runtime — the trace shape just needs to be > 0 so
@@ -663,8 +665,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
     with {:ok, log_p_glsl_raw} <- Exmc.NUTS.CustomSynth.Glsl.emit(value_expr, layout),
          {:ok, grad_entries_raw} <- Exmc.NUTS.CustomSynth.Glsl.emit_vector(grad_expr, layout) do
-      captured_decls = build_captured_decls(Exmc.NUTS.CustomSynth.Glsl.collect_captures())
-
+      captures = Exmc.NUTS.CustomSynth.Glsl.collect_captures()
       spans = obs_spans(components)
 
       {log_p_loops, log_p_expr} =
@@ -719,19 +720,18 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       grad_qn_body =
         build_grad_body_with_loops(d, grad_loops_per_tid, grad_expr_per_tid, "grad_qn")
 
-      f64_helpers = f64_transcendental_helpers()
-
-      full_captured = f64_helpers <> "\n" <> captured_decls
-
       glsl =
         template
         |> String.replace("{{prior_grad_body_q}}", indent(grad_q_body, 12))
         |> String.replace("{{prior_grad_body_qn}}", indent(grad_qn_body, 12))
         |> String.replace("{{prior_logp_body_qn}}", indent(logp_body, 12))
-        |> String.replace("{{captured_decls}}", full_captured)
+        |> String.replace("{{captured_decls}}", f64_transcendental_helpers())
         |> rewrite_transcendentals_f64()
 
-      {:ok, glsl}
+      case capture_guard(captures, spans, variant) do
+        :ok -> {:ok, glsl, captures_bin(captures)}
+        {:error, _} = err -> err
+      end
     else
       err ->
         # Clear capture buffer on emit failure so subsequent renders
@@ -740,6 +740,66 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
         err
     end
   end
+
+  # Captures used to be emitted here as `const double name[N] = double[](...)`
+  # at file scope, which made SPIR-V size grow with the DATA: a linear
+  # regression closes over its design matrix as one rank-1 tensor per
+  # predictor, so the shader carried n_obs * n_beta float literals. Past
+  # roughly 1300 of them the NVIDIA driver refuses to create the compute
+  # pipeline -- 21 of 33 posteriordb models died in `ComputePipeline::new`
+  # with "a non-validation error occurred". Synthesised shaders reached
+  # 2.15 MB against ~8 KB for a hand-written one.
+  #
+  # They now live in the extras SSBO instead; `Glsl.capture_accessor/1` has
+  # the layout. See docs/SHADER_CONSTANT_INLINING.md.
+
+  # The packed capture region, in the SAME order the emitter assigned offsets.
+  # Built from the emitter's own entries and never re-derived from the
+  # tensors: a second encoder is how the offsets and the bytes drift apart.
+  # `render_batched/1` keeps its 2-tuple contract: `capture_guard/3` has
+  # already refused any non-empty capture set on that path, so the only
+  # success it can see carries an empty binary.
+  defp drop_captures({:ok, glsl, <<>>}), do: {:ok, glsl}
+  defp drop_captures({:ok, _glsl, _bin}), do: {:error, :captures_unsupported_batched}
+  defp drop_captures(other), do: other
+
+  @doc false
+  def captures_bin([]), do: <<>>
+
+  def captures_bin(captures) do
+    captures
+    |> Enum.sort_by(& &1.offset)
+    |> Enum.map(fn %{values: values} ->
+      for v <- values, into: <<>>, do: <<v * 1.0::little-float-64>>
+    end)
+    |> IO.iodata_to_binary()
+  end
+
+  # Two shapes we refuse rather than emit a plausible wrong density for.
+  defp capture_guard([], _spans, _variant), do: :ok
+
+  # `j` is a GLOBAL index into the concatenated observation buffer even under
+  # per-node spans (`loop_lo/2` starts marker n at its global offset). A
+  # capture aligned to one node's own slice would therefore be read at the
+  # wrong offset. Every capture-bearing model today has a Custom likelihood,
+  # and `obs_spans/1` returns `:full` for those, so this combination is not
+  # reachable from anything that currently works -- but it is silently wrong
+  # if it ever becomes reachable, so refuse it and sample on the host.
+  defp capture_guard(captures, spans, _variant) when is_list(spans) do
+    {:error, {:captures_with_obs_spans, length(captures), length(spans)}}
+  end
+
+  # The batched shader gives each instance its own `n_obs + d` slice of the
+  # extras buffer. Captures are shared data, so they belong outside that
+  # per-instance region -- an unresolved layout question. Refusing is the
+  # honest answer; emitting would bake instance-0's data into a shader every
+  # instance shares, which is exactly what this function's predecessor's own
+  # comment predicted.
+  defp capture_guard(captures, _spans, :batched) do
+    {:error, {:captures_unsupported_batched, length(captures)}}
+  end
+
+  defp capture_guard(_captures, _spans, :single), do: :ok
 
   # Render `const float __captured_tN[K] = float[](v0, v1, ...);`
   # declarations from the per-process tensor capture buffer. Returns
@@ -1548,9 +1608,11 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
     with :ok <- validate_layout(priors, layout) do
       if is_nil(custom_info) and observed == [] do
-        render_prior_only(priors, layout, @batched_template)
+        drop_captures(render_prior_only(priors, layout, @batched_template))
       else
-        render_with_custom(components, @batched_template, "extras_off + j")
+        drop_captures(
+          render_with_custom(components, @batched_template, "extras_off + j", :batched)
+        )
       end
     end
   rescue

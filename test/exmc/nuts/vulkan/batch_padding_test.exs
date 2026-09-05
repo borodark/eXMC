@@ -31,7 +31,7 @@ defmodule Exmc.NUTS.Vulkan.BatchPaddingTest do
 
   describe "partition key" do
     test "requests differing ONLY in K group together" do
-      meta = {:synthesised, "sha", ["mu"], %{}, "/tmp/x.spv", <<>>}
+      meta = {:synthesised, "sha", ["mu"], %{}, "/tmp/x.spv", <<>>, <<>>}
 
       keys = for k <- [1, 3, 7, 16], do: C.partition_key(req(meta, 0.05, k))
 
@@ -41,8 +41,8 @@ defmodule Exmc.NUTS.Vulkan.BatchPaddingTest do
     end
 
     test "different shaders and different |eps| still separate" do
-      m1 = {:synthesised, "sha1", ["mu"], %{}, "/tmp/a.spv", <<>>}
-      m2 = {:synthesised, "sha2", ["mu"], %{}, "/tmp/b.spv", <<>>}
+      m1 = {:synthesised, "sha1", ["mu"], %{}, "/tmp/a.spv", <<>>, <<>>}
+      m2 = {:synthesised, "sha2", ["mu"], %{}, "/tmp/b.spv", <<>>, <<>>}
 
       refute C.partition_key(req(m1, 0.05, 4)) == C.partition_key(req(m2, 0.05, 4)),
              "two different synthesised shaders cannot share one batched dispatch"

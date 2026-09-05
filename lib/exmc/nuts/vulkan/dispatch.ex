@@ -116,7 +116,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   # still counting against the NIF's `push.len() > 128` check. Removing them
   # took an 8-RV model from 0 chain dispatches to 2564.
   defp do_chain(
-         {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin} = meta,
+         {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin, _captures} = meta,
          d,
          epsilon,
          inv_mass,
@@ -133,7 +133,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   # Allocates fresh buffers per dispatch. No tensor refs to keep alive
   # across calls — eliminates the stale-handle class of bugs.
   defp chain_synth_vulkano(
-         {:synthesised, _sha, _layout, push_spec, spv_path, obs_bin},
+         {:synthesised, _sha, _layout, push_spec, spv_path, obs_bin, captures_bin},
          d,
          epsilon,
          inv_mass,
@@ -150,7 +150,14 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     q_bin = q |> Nx.as_type(:f64) |> Nx.to_binary()
     p_bin = p |> Nx.as_type(:f64) |> Nx.to_binary()
     inv_mass_bin = inv_mass |> Nx.as_type(:f64) |> Nx.to_binary()
-    extras_bin = obs_bin <> inv_mass_bin
+    # Layout of binding 2: obs | inv_mass | captures.
+    #
+    # Captures are appended LAST so `obs_inv_mass[j]` and
+    # `obs_inv_mass[pc.n_obs + tid]` keep their existing meanings; the shader
+    # reads captures at `pc.n_obs + pc.d + <offset>`. The bytes come from the
+    # same emitter entries that assigned those offsets -- see
+    # `MultiRvCustomSpec.captures_bin/1` -- so there is one encoder, not two.
+    extras_bin = obs_bin <> inv_mass_bin <> captures_bin
 
     # USDT probe (no-op unless BEAM built with --with-dynamic-trace).
     # Tag "vk_leap_in": entry-side hash of q_bin xor p_bin so a DTrace
@@ -269,7 +276,7 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
   down the single-instance path.
   """
   def chain_batch(
-        {:synthesised, _sha, _layout, push_spec, spv_path, _empty_obs},
+        {:synthesised, _sha, _layout, push_spec, spv_path, _empty_obs, _captures},
         instances,
         k,
         dir_sign,

@@ -27,6 +27,98 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
 
   alias Exmc.NUTS.CustomSynth.{Compile, Eval, Glsl, MultiRvCustomSpec}
 
+  describe "shader size is independent of the DATA (regression: pipeline ceiling)" do
+    # The bug this pins: closure-captured rank-1 tensors were emitted as
+    # `const double name[N] = double[](...)` at file scope, so SPIR-V grew with
+    # n_obs * n_beta. Synthesised shaders reached 2.15 MB against ~8 KB for a
+    # hand-written one, and past roughly 1300 inlined elements the NVIDIA
+    # driver refused to create the compute pipeline -- 21 of 33 posteriordb
+    # models could not run on Vulkan at all.
+    #
+    # Asserted on GLSL rather than SPIR-V so the guard does not need
+    # glslangValidator on the host. The relationship is monotone, so a
+    # regression that reinlines the data blows this by orders of magnitude:
+    # before the fix a 20x change in n_obs moved GLSL by megabytes.
+    defp linreg_ir(n_obs, n_beta) do
+      alias Exmc.Builder
+      alias Exmc.Dist.{Custom, HalfNormal, Normal}
+
+      x_cols =
+        for j <- 1..n_beta do
+          Nx.tensor(for(i <- 1..n_obs, do: i * 0.01 + j), type: :f64, backend: Nx.BinaryBackend)
+        end
+
+      y =
+        Nx.tensor(for(i <- 1..n_obs, do: :math.sin(i * 0.1)),
+          type: :f64,
+          backend: Nx.BinaryBackend
+        )
+
+      ir =
+        Enum.reduce(0..(n_beta - 1), Builder.new_ir(), fn j, acc ->
+          Builder.rv(acc, "beta_#{j}", Normal, %{
+            mu: Nx.tensor(0.0, type: :f64),
+            sigma: Nx.tensor(1.0, type: :f64)
+          })
+        end)
+
+      ir = Builder.rv(ir, "sigma", HalfNormal, %{sigma: Nx.tensor(1.0, type: :f64)})
+
+      logpdf = fn _x, params ->
+        mu =
+          Enum.reduce(0..(n_beta - 1), Nx.tensor(0.0, type: :f64), fn j, acc ->
+            beta = Map.fetch!(params, String.to_atom("beta_#{j}"))
+            Nx.add(acc, Nx.multiply(beta, Enum.at(x_cols, j)))
+          end)
+
+        z = Nx.divide(Nx.subtract(y, mu), params.sigma)
+        Nx.multiply(Nx.tensor(-0.5, type: :f64), Nx.sum(Nx.multiply(z, z)))
+      end
+
+      params =
+        Map.new(0..(n_beta - 1), fn j -> {String.to_atom("beta_#{j}"), "beta_#{j}"} end)
+        |> Map.put(:sigma, "sigma")
+
+      ir
+      |> Custom.rv("y_lik", Custom.new(logpdf), params)
+      |> Builder.obs("y_obs", "y_lik", Nx.tensor(0.0, type: :f64))
+    end
+
+    defp render_sizes(n_obs, n_beta) do
+      ir = Exmc.Rewrite.apply(linreg_ir(n_obs, n_beta), [])
+      {:ok, components} = Exmc.NUTS.CustomSynth.extract_components(ir)
+      {:ok, glsl, captures} = MultiRvCustomSpec.render(components)
+      {byte_size(glsl), byte_size(captures)}
+    end
+
+    test "a 20x increase in n_obs leaves the shader essentially unchanged" do
+      {small_glsl, small_cap} = render_sizes(50, 2)
+      {large_glsl, large_cap} = render_sizes(1000, 2)
+
+      # The only legitimate difference is the decimal width of literal offsets
+      # and counts in the source text -- tens of bytes, not thousands.
+      assert abs(large_glsl - small_glsl) < 500,
+             "GLSL grew by #{large_glsl - small_glsl} bytes for 20x the observations; " <>
+               "the data is being inlined into the shader again"
+
+      # The data did not vanish -- it moved to the extras buffer, where it is
+      # supposed to scale linearly and harmlessly.
+      assert large_cap == small_cap * 20
+
+      # n_beta predictor columns PLUS the response vector y -- the likelihood
+      # closes over that too, so it is a capture like any other.
+      assert large_cap == 1000 * (2 + 1) * 8
+    end
+
+    test "shader size still scales with the number of TERMS, which is correct" do
+      {two_beta, _} = render_sizes(50, 2)
+      {four_beta, _} = render_sizes(50, 4)
+
+      assert four_beta > two_beta,
+             "more predictors means more arithmetic in the shader; that much should grow"
+    end
+  end
+
   # The render/1 push-header assertions check f32-template field layout
   # (`uint  K;`, `float eps;`). Under D88 Vulkano f64 default, render/1
   # picks @template_f64 which uses `uint   K;` (extra space) and
@@ -52,7 +144,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         layout: [:theta]
       }
 
-      assert {:ok, glsl} = MultiRvCustomSpec.render(components)
+      assert {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
 
       # Fixed push header (R2.2.4: per-prior fields are inlined as constants,
       # not declared in push).
@@ -84,7 +176,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         layout: [:mu, :sigma]
       }
 
-      assert {:ok, glsl} = MultiRvCustomSpec.render(components)
+      assert {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
 
       assert glsl =~ "if (tid == 0u) { grad_q ="
       assert glsl =~ "if (tid == 1u) { grad_q ="
@@ -119,7 +211,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         layout: [:theta]
       }
 
-      {:ok, glsl} = MultiRvCustomSpec.render(components)
+      {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
 
       assert {:ok, spv_path} = Compile.compile_glsl(glsl)
       assert File.exists?(spv_path)
@@ -141,7 +233,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         layout: [:mu, :sigma, :tau, :lam]
       }
 
-      {:ok, glsl} = MultiRvCustomSpec.render(components)
+      {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
       assert {:ok, spv_path} = Compile.compile_glsl(glsl)
 
       <<magic::little-unsigned-integer-32, _rest::binary>> = File.read!(spv_path)
@@ -160,7 +252,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         layout: [:mu, :sigma]
       }
 
-      {:ok, glsl} = MultiRvCustomSpec.render(components)
+      {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
 
       for line <- ["uint   K;", "uint   n_obs;", "uint   d;", "uint   _pad;", "double eps;"] do
         assert glsl =~ line, "expected #{inspect(line)} in rendered GLSL"
@@ -341,7 +433,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         layout: ["theta"]
       }
 
-      {:ok, glsl} = MultiRvCustomSpec.render(components)
+      {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
       # New binding-2 declaration is present.
       assert glsl =~ "obs_inv_mass"
       assert glsl =~ "obs_inv_mass[pc.n_obs + tid]"
@@ -579,7 +671,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
         |> Exmc.Builder.obs("y3_obs", "y3", t64(8.0))
 
       assert worst_gap(ir, 100) < 1.0e-12
-      assert {:ok, _glsl} = render_components(ir)
+      assert {:ok, _glsl, _captures} = render_components(ir)
     end
 
     defp render_components(ir) do

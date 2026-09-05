@@ -91,7 +91,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinator do
   def request_synth_chain(coord_pid, meta, q, p, inv_mass, obs, epsilon, k, dir_sign)
       when is_pid(coord_pid) do
     case meta do
-      {:synthesised, _, _, _, _, _} ->
+      {:synthesised, _, _, _, _, _, _} ->
         eps_abs = abs(epsilon)
 
         try do

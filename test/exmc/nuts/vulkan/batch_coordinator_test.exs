@@ -3,7 +3,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinatorTest do
 
   alias Exmc.NUTS.Vulkan.BatchCoordinator
 
-  @synth_meta {:synthesised, "abc", [], %{eps: 0.1, n_obs: 4}, "/tmp/fake.spv", <<>>}
+  @synth_meta {:synthesised, "abc", [], %{eps: 0.1, n_obs: 4}, "/tmp/fake.spv", <<>>, <<>>}
 
   # The early-guard tests above never reach Dispatch, so a push_spec stub is
   # enough for them. The live-coord test below does reach it, and needs
@@ -15,7 +15,7 @@ defmodule Exmc.NUTS.Vulkan.BatchCoordinatorTest do
                         eps: 0.1,
                         n_obs: 4,
                         priors: [{"x", Exmc.Dist.Normal, %{mu: 0.0, sigma: 1.0}}]
-                      }, "/tmp/fake.spv", <<>>}
+                      }, "/tmp/fake.spv", <<>>, <<>>}
 
   describe "request_synth_chain/9 — early guards (no coord round-trip)" do
     test "non-synthesised meta returns {:fallback, :unsupported_meta_type}" do

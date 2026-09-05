@@ -35,7 +35,7 @@ defmodule Exmc.NUTS.P0CorrectnessTest do
         layout: ["x"]
       }
 
-      {:ok, glsl} = MultiRvCustomSpec.render(components)
+      {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
       {:ok, glsl: glsl}
     end
 

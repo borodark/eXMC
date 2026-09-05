@@ -58,7 +58,7 @@ defmodule Exmc.PushFallbackTest do
   end
 
   test "a ten-parameter model synthesises instead of degrading to per-op" do
-    assert {:ok, {:synthesised, _sha, layout, _spec, _spv, _obs}} =
+    assert {:ok, {:synthesised, _sha, layout, _spec, _spv, _obs, _capt}} =
              Exmc.NUTS.ChainShaderCodegen.detect_meta(ten_param_ir()),
            "twenty prior floats used to return {:unsupported, :push_too_large} " <>
              "and sample per-op; the push block no longer carries them"
