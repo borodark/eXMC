@@ -41,7 +41,8 @@ defmodule PDB.Provenance do
       num_warmup: Keyword.fetch!(opts, :num_warmup),
       num_samples: Keyword.fetch!(opts, :num_samples),
       seed: Keyword.fetch!(opts, :seed),
-      ncp: Keyword.fetch!(opts, :ncp)
+      ncp: Keyword.fetch!(opts, :ncp),
+      transcendentals: inspect(Keyword.fetch!(opts, :transcendentals))
     }
   end
 
@@ -58,6 +59,7 @@ defmodule PDB.Provenance do
       compiler      requested #{p.compiler_requested} -> resolved #{p.compiler_resolved}
       #{p.jit_describe}
       protocol      #{p.num_warmup} warmup + #{p.num_samples} sampling, seed=#{p.seed}, ncp=#{p.ncp}
+      transcend.    #{p.transcendentals}
       parallel      #{p.parallel}#{if p.mode == "race" and p.parallel == 1, do: " (serialized — timings are meaningful)", else: ""}
     """
   end

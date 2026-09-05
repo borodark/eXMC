@@ -28,6 +28,7 @@ defmodule PosteriorDBValidator do
     seed = Keyword.get(opts, :seed, 42)
     ncp = Keyword.get(opts, :ncp, false)
     only = Keyword.get(opts, :only)
+    transcendentals = Keyword.get(opts, :transcendentals, :f32_cast)
 
     parallel = resolve_parallel(mode, compiler, opts)
     guard_race!(mode, parallel)
@@ -46,6 +47,15 @@ defmodule PosteriorDBValidator do
     # indistinguishable from a clean run in the report.
     Application.put_env(:exmc, :compiler, compiler)
 
+    # The f64 chain shader has no double transcendentals to call -- GLSL.std.450
+    # provides none -- so `exp_d(x)` is `double(exp(float(x)))` by default and
+    # overflows at ln(f32_max) = 88.7228. For a log-scale parameter that is a
+    # hard boundary at q_uc < -44.36. :polynomial synthesises real f64 log/exp
+    # instead (~10-15x shader latency, ~1 ULP f64), moving the boundary to the
+    # f64 range. Recorded in provenance because it changes the ARITHMETIC, so
+    # two runs that differ on it are not comparable.
+    Application.put_env(:exmc, :chain_shader_transcendentals, transcendentals)
+
     provenance =
       PDB.Provenance.collect(
         compiler: compiler,
@@ -54,7 +64,8 @@ defmodule PosteriorDBValidator do
         num_warmup: num_warmup,
         num_samples: num_samples,
         seed: seed,
-        ncp: ncp
+        ncp: ncp,
+        transcendentals: transcendentals
       )
 
     IO.puts(PDB.Provenance.banner(provenance))
@@ -693,7 +704,8 @@ end
       compiler: :string,
       seed: :integer,
       ncp: :boolean,
-      only: :string
+      only: :string,
+      transcendentals: :string
     ]
   )
 
@@ -721,6 +733,12 @@ PosteriorDBValidator.run(
     num_warmup: Keyword.get(opts, :warmup, 1000),
     seed: Keyword.get(opts, :seed, 42),
     ncp: Keyword.get(opts, :ncp, false),
-    only: Keyword.get(opts, :only)
+    only: Keyword.get(opts, :only),
+    transcendentals:
+      case Keyword.get(opts, :transcendentals, "f32_cast") do
+        "f32_cast" -> :f32_cast
+        "polynomial" -> :polynomial
+        other -> raise ArgumentError, "--transcendentals must be f32_cast|polynomial, got #{inspect(other)}"
+      end
   ] ++ if(opts[:parallel], do: [parallel: opts[:parallel]], else: [])
 )
