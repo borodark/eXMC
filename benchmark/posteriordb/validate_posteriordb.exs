@@ -10,6 +10,8 @@
 #
 # Requires: preprocess_posteriordb.py to have been run first.
 
+Code.require_file("harness.exs", __DIR__)
+
 defmodule PosteriorDBValidator do
   alias Exmc.Builder
   alias Exmc.Dist.{Normal, HalfNormal, HalfCauchy, Custom}
@@ -19,25 +21,61 @@ defmodule PosteriorDBValidator do
   # --- Public API ---
 
   def run(opts \\ []) do
-    parallel = Keyword.get(opts, :parallel, System.schedulers_online())
+    mode = Keyword.get(opts, :mode, :validate)
+    compiler = Keyword.get(opts, :compiler, :vulkan)
     num_samples = Keyword.get(opts, :num_samples, 1000)
     num_warmup = Keyword.get(opts, :num_warmup, 1000)
+    seed = Keyword.get(opts, :seed, 42)
+    ncp = Keyword.get(opts, :ncp, false)
+    only = Keyword.get(opts, :only)
 
-    IO.puts("=== posteriordb Validation Suite ===")
-    IO.puts("Parallel workers: #{parallel}")
-    IO.puts("Samples: #{num_warmup} warmup + #{num_samples} sampling")
-    IO.puts("")
+    parallel = resolve_parallel(mode, compiler, opts)
+    guard_race!(mode, parallel)
+
+    # The compiler is a DEMAND, and it is applied before anything samples.
+    #
+    # Under `mix run` the environment is :dev, and config/config.exs imports
+    # config/test.exs only when config_env() == :test. So EXMC_COMPILER has
+    # never had any effect here, Application.get_env(:exmc, :compiler) was nil,
+    # and JIT.detect_compiler/0 fell through auto_detect/0 to EXLA without
+    # saying so. Every posteriordb number ever recorded is an EXLA number that
+    # does not admit it.
+    #
+    # JIT.demand/2 RAISES when a named compiler is unusable on this host. That
+    # is the behaviour we want: a loud stop beats a silent downgrade, which is
+    # indistinguishable from a clean run in the report.
+    Application.put_env(:exmc, :compiler, compiler)
+
+    provenance =
+      PDB.Provenance.collect(
+        compiler: compiler,
+        mode: mode,
+        parallel: parallel,
+        num_warmup: num_warmup,
+        num_samples: num_samples,
+        seed: seed,
+        ncp: ncp
+      )
+
+    IO.puts(PDB.Provenance.banner(provenance))
 
     manifest = load_json(Path.join(@processed_dir, "manifest.json"))
-    posteriors = manifest["posteriors"]
-    IO.puts("Posteriors to validate: #{length(posteriors)}\n")
+    posteriors = manifest["posteriors"] |> filter_only(only)
+    IO.puts("Posteriors to run: #{length(posteriors)}\n")
+
+    run_opts = [
+      num_samples: num_samples,
+      num_warmup: num_warmup,
+      seed: seed,
+      ncp: ncp
+    ]
 
     results =
       posteriors
       |> Task.async_stream(
-        fn name -> validate_one(name, num_samples, num_warmup) end,
+        fn name -> validate_one(name, run_opts) end,
         max_concurrency: parallel,
-        timeout: 600_000,
+        timeout: 1_800_000,
         ordered: false
       )
       |> Enum.map(fn
@@ -46,14 +84,51 @@ defmodule PosteriorDBValidator do
       end)
       |> Enum.sort_by(& &1.name)
 
-    print_report(results)
-    save_results(results)
+    print_report(results, provenance)
+    save_results(results, provenance)
     results
   end
 
+  # Racing and validating want opposite things, and fusing them into one pass is
+  # exactly why the old Wall column cannot be trusted: 33 models ran through
+  # Task.async_stream at max_concurrency, so each model's timer measured
+  # contention from the other 32. The number moved with core count and
+  # background load, and its spread was never characterised — so there was no
+  # threshold below which a delta was meaningless.
+  #
+  #   :validate — parallel. Throughput matters; timings do not.
+  #   :race     — serialized. The timer measures the sampler, not the scheduler.
+  defp resolve_parallel(:race, _compiler, _opts), do: 1
+
+  defp resolve_parallel(:validate, compiler, opts) do
+    Keyword.get(opts, :parallel) || default_parallel(compiler)
+  end
+
+  # One GPU does not absorb 33 concurrent Vulkan contexts the way 88 cores
+  # absorb 33 CPU chains. Conservative under :vulkan; override with --parallel.
+  defp default_parallel(:vulkan), do: 4
+  defp default_parallel(_), do: System.schedulers_online()
+
+  defp guard_race!(:race, 1), do: :ok
+
+  defp guard_race!(:race, n) do
+    raise "race mode is serialized by construction, got parallel=#{n}. " <>
+            "A concurrent timer measures the scheduler, not the sampler."
+  end
+
+  defp guard_race!(_, _), do: :ok
+
+  defp filter_only(posteriors, nil), do: posteriors
+  defp filter_only(posteriors, pat), do: Enum.filter(posteriors, &String.contains?(&1, pat))
+
   # --- Per-posterior validation ---
 
-  def validate_one(name, num_samples, num_warmup) do
+  def validate_one(name, opts) do
+    num_samples = Keyword.fetch!(opts, :num_samples)
+    num_warmup = Keyword.fetch!(opts, :num_warmup)
+    seed = Keyword.fetch!(opts, :seed)
+    ncp = Keyword.fetch!(opts, :ncp)
+
     t0 = System.monotonic_time(:millisecond)
 
     try do
@@ -67,15 +142,30 @@ defmodule PosteriorDBValidator do
         Exmc.Sampler.sample(ir, init_values,
           num_samples: num_samples,
           num_warmup: num_warmup,
-          seed: 42,
-          ncp: false
+          seed: seed,
+          ncp: ncp
         )
 
       # Compare against reference draws
       comparisons = compare_draws(trace, ref_draws, param_map)
 
       wall_ms = System.monotonic_time(:millisecond) - t0
+      wall_s = wall_ms / 1000
       divergences = stats.divergences
+
+      # stats.sample_stats has always carried per-draw :n_steps, :tree_depth,
+      # :divergent and :accept_prob. The old harness read only :divergences and
+      # :step_size and threw the rest away, and never computed ESS at all --
+      # which is why its pass criteria were structurally unable to see a
+      # performance regression.
+      leapfrog = PDB.Metrics.leapfrog(stats)
+      ess = PDB.Metrics.ess_table(trace, Enum.map(param_map, fn {n, _} -> n end))
+
+      min_ess =
+        case ess |> Map.values() |> Enum.map(& &1.ess) do
+          [] -> 0.0
+          vs -> Enum.min(vs)
+        end
 
       passed = Enum.all?(comparisons, fn c -> c.pass end)
       status = if passed, do: :pass, else: :fail
@@ -88,15 +178,27 @@ defmodule PosteriorDBValidator do
         step_size: stats.step_size,
         n_params: length(comparisons),
         comparisons: comparisons,
+        leapfrog: leapfrog,
+        # Diluted by warmup: sample_stats covers the SAMPLING phase only while
+        # wall_ms spans warmup + sampling. That bias is a constant of the
+        # protocol, not of the code under test, so it cancels in an A/B ratio.
+        # It is NOT absolute throughput. See PDB.Metrics.
+        leapfrog_per_sec_apparent: if(wall_s > 0, do: leapfrog / wall_s, else: nil),
+        min_ess: min_ess,
+        ess_per_sec: if(wall_s > 0, do: min_ess / wall_s, else: nil),
+        div_rate: divergences / max(num_samples, 1),
+        mean_accept: PDB.Metrics.mean_accept(stats),
+        mean_tree_depth: PDB.Metrics.mean_tree_depth(stats),
+        ess: ess,
         max_mean_err: comparisons |> Enum.map(& &1.mean_err) |> Enum.max(),
         max_sd_ratio: comparisons |> Enum.map(& &1.sd_ratio) |> Enum.max(),
       }
 
       status_str = if passed, do: "PASS", else: "FAIL"
-      IO.puts("  #{status_str}  #{String.pad_trailing(name, 50)}  " <>
-              "#{wall_ms}ms  div=#{divergences}  eps=#{Float.round(stats.step_size, 4)}  " <>
-              "max_mean_err=#{Float.round(result.max_mean_err, 3)}  " <>
-              "max_sd_ratio=#{Float.round(result.max_sd_ratio, 3)}")
+      IO.puts("  #{status_str}  #{String.pad_trailing(name, 46)}  " <>
+              "#{wall_ms}ms  ess=#{round(min_ess)}  lf=#{leapfrog}  " <>
+              "div=#{divergences}  eps=#{Float.round(stats.step_size, 4)}  " <>
+              "err=#{Float.round(result.max_mean_err, 3)}")
 
       result
     rescue
@@ -379,7 +481,7 @@ defmodule PosteriorDBValidator do
 
   # --- Reporting ---
 
-  defp print_report(results) do
+  defp print_report(results, provenance) do
     IO.puts("\n#{"=" |> String.duplicate(80)}")
     IO.puts("POSTERIORDB VALIDATION REPORT")
     IO.puts("#{"=" |> String.duplicate(80)}\n")
@@ -393,7 +495,23 @@ defmodule PosteriorDBValidator do
     IO.puts("")
 
     total_wall = results |> Enum.map(& Map.get(&1, :wall_ms, 0)) |> Enum.sum()
-    IO.puts("Total wall time: #{div(total_wall, 1000)}s (parallel)")
+
+    shape =
+      if provenance.mode == "race",
+        do: "serialized - timings are meaningful",
+        else: "summed across #{provenance.parallel} concurrent workers - NOT a serial cost"
+
+    IO.puts("Total sampling time: #{div(total_wall, 1000)}s (#{shape})")
+
+    lf = results |> Enum.map(&Map.get(&1, :leapfrog, 0)) |> Enum.sum()
+    ok = Enum.filter(results, &(Map.get(&1, :min_ess) != nil))
+
+    if ok != [] do
+      worst = Enum.min_by(ok, & &1.min_ess)
+      IO.puts("Total leapfrog steps: #{lf}")
+      IO.puts("Lowest ESS: #{round(worst.min_ess)} (#{worst.name}) of #{provenance.num_samples} draws")
+    end
+
     IO.puts("")
 
     # Failures detail
@@ -421,22 +539,27 @@ defmodule PosteriorDBValidator do
     IO.puts("#{"=" |> String.duplicate(80)}")
   end
 
-  defp save_results(results) do
+  defp save_results(results, provenance) do
     passed = Enum.count(results, & &1.status == :pass)
     total = length(results)
-    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
+    timestamp = provenance.timestamp
 
     md = """
     # posteriordb Validation Results
 
     **Date:** #{timestamp}
     **Pass rate:** #{passed}/#{total} (#{Float.round(passed / max(total, 1) * 100, 1)}%)
-    **Protocol:** 1000 warmup + 1000 sampling, seed=42, ncp=false
+    **Mode:** #{provenance.mode}#{if provenance.mode == "race", do: " (serialized)", else: " (parallel=#{provenance.parallel}; wall times are contention-bound)"}
+    **Protocol:** #{provenance.num_warmup} warmup + #{provenance.num_samples} sampling, seed=#{provenance.seed}, ncp=#{provenance.ncp}
+    **Compiler:** requested #{provenance.compiler_requested}, resolved #{provenance.compiler_resolved}, backend #{provenance.backend}, precision #{provenance.precision}
+    **Host:** #{provenance.host} (#{provenance.schedulers_online} schedulers, OTP #{provenance.otp_release}, Elixir #{provenance.elixir_version})
+    **exmc:** #{provenance.exmc_sha}#{if provenance.exmc_dirty, do: " (DIRTY)", else: ""}
+    **nx_vulkan:** #{provenance.nx_vulkan_sha}
 
     ## Summary
 
-    | Model | Status | Wall (s) | Div | Step Size | Max Mean Err | Max SD Ratio |
-    |-------|--------|----------|-----|-----------|-------------|-------------|
+    | Model | Status | Wall (s) | Min ESS | Leapfrog | Div | Step Size | Max Mean Err | Max SD Ratio |
+    |-------|--------|----------|---------|----------|-----|-----------|-------------|-------------|
     """ <>
     (results
      |> Enum.map(fn r ->
@@ -446,7 +569,9 @@ defmodule PosteriorDBValidator do
        eps = if r[:step_size], do: Float.round(r.step_size, 4), else: "-"
        max_me = if r[:max_mean_err], do: Float.round(r.max_mean_err, 3), else: "-"
        max_sd = if r[:max_sd_ratio], do: Float.round(r.max_sd_ratio, 3), else: "-"
-       "| #{r.name} | #{status} | #{wall_s} | #{div} | #{eps} | #{max_me} | #{max_sd} |"
+       ess = if r[:min_ess], do: round(r.min_ess), else: "-"
+       lf = r[:leapfrog] || "-"
+       "| #{r.name} | #{status} | #{wall_s} | #{ess} | #{lf} | #{div} | #{eps} | #{max_me} | #{max_sd} |"
      end)
      |> Enum.join("\n")) <>
     "\n\n## Pass Criteria\n\n" <>
@@ -456,7 +581,11 @@ defmodule PosteriorDBValidator do
 
     path = Path.join(@processed_dir, "validation_results.md")
     File.write!(path, md)
-    IO.puts("\nResults saved to #{path}")
+    IO.puts("\nMarkdown: #{path}")
+
+    {json, latest} = PDB.Report.write(results, provenance, @processed_dir)
+    IO.puts("JSON:     #{json}")
+    IO.puts("Latest:   #{latest}")
   end
 
   # --- Post-processing ---
@@ -532,18 +661,44 @@ defmodule PosteriorDBValidator do
 end
 
 # --- CLI ---
-{opts, _, _} = OptionParser.parse(System.argv(), strict: [
-  parallel: :integer,
-  samples: :integer,
-  warmup: :integer,
-])
+{opts, _, _} =
+  OptionParser.parse(System.argv(),
+    strict: [
+      parallel: :integer,
+      samples: :integer,
+      warmup: :integer,
+      mode: :string,
+      compiler: :string,
+      seed: :integer,
+      ncp: :boolean,
+      only: :string
+    ]
+  )
 
-parallel = Keyword.get(opts, :parallel, System.schedulers_online())
-num_samples = Keyword.get(opts, :samples, 1000)
-num_warmup = Keyword.get(opts, :warmup, 1000)
+mode =
+  case Keyword.get(opts, :mode, "validate") do
+    "validate" -> :validate
+    "race" -> :race
+    other -> raise ArgumentError, "--mode must be validate|race, got #{inspect(other)}"
+  end
+
+compiler =
+  case Keyword.get(opts, :compiler, "vulkan") do
+    "vulkan" -> :vulkan
+    "exla" -> :exla
+    "none" -> :none
+    "auto" -> :auto
+    other -> raise ArgumentError, "--compiler must be vulkan|exla|none|auto, got #{inspect(other)}"
+  end
 
 PosteriorDBValidator.run(
-  parallel: parallel,
-  num_samples: num_samples,
-  num_warmup: num_warmup
+  [
+    mode: mode,
+    compiler: compiler,
+    num_samples: Keyword.get(opts, :samples, 1000),
+    num_warmup: Keyword.get(opts, :warmup, 1000),
+    seed: Keyword.get(opts, :seed, 42),
+    ncp: Keyword.get(opts, :ncp, false),
+    only: Keyword.get(opts, :only)
+  ] ++ if(opts[:parallel], do: [parallel: opts[:parallel]], else: [])
 )
