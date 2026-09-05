@@ -119,7 +119,14 @@ defmodule PosteriorDBValidator do
   defp guard_race!(_, _), do: :ok
 
   defp filter_only(posteriors, nil), do: posteriors
-  defp filter_only(posteriors, pat), do: Enum.filter(posteriors, &String.contains?(&1, pat))
+
+  # Comma-separated substrings, so a subset can be driven in one run. Needed
+  # for the noise-floor calibration, which has to compare the SAME set of
+  # models twice, and for the tiered runs in (f).
+  defp filter_only(posteriors, pats) do
+    wanted = pats |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+    Enum.filter(posteriors, fn p -> Enum.any?(wanted, &String.contains?(p, &1)) end)
+  end
 
   # --- Per-posterior validation ---
 
@@ -204,8 +211,23 @@ defmodule PosteriorDBValidator do
     rescue
       e ->
         wall_ms = System.monotonic_time(:millisecond) - t0
+
+        # Keep the stacktrace. "argument error" with no location is not a
+        # diagnosis, and an unactionable crash row is most of why the Vulkan
+        # arm looked like one undifferentiated failure instead of three.
+        trace = __STACKTRACE__ |> Enum.take(8) |> Exception.format_stacktrace()
+
         IO.puts("  CRASH #{String.pad_trailing(name, 48)}  #{wall_ms}ms  #{Exception.message(e)}")
-        %{name: name, status: :crash, wall_ms: wall_ms, error: Exception.message(e)}
+        IO.puts(trace)
+
+        %{
+          name: name,
+          status: :crash,
+          wall_ms: wall_ms,
+          error: Exception.message(e),
+          exception: inspect(e.__struct__),
+          stacktrace: trace
+        }
     end
   end
 
