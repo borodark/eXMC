@@ -29,6 +29,7 @@ defmodule PosteriorDBValidator do
     ncp = Keyword.get(opts, :ncp, false)
     only = Keyword.get(opts, :only)
     transcendentals = Keyword.get(opts, :transcendentals, :f32_cast)
+    chains = Keyword.get(opts, :chains, 4)
 
     parallel = resolve_parallel(mode, compiler, opts)
     guard_race!(mode, parallel)
@@ -65,7 +66,8 @@ defmodule PosteriorDBValidator do
         num_samples: num_samples,
         seed: seed,
         ncp: ncp,
-        transcendentals: transcendentals
+        transcendentals: transcendentals,
+        chains: chains
       )
 
     IO.puts(PDB.Provenance.banner(provenance))
@@ -78,7 +80,8 @@ defmodule PosteriorDBValidator do
       num_samples: num_samples,
       num_warmup: num_warmup,
       seed: seed,
-      ncp: ncp
+      ncp: ncp,
+      chains: chains
     ]
 
     results =
@@ -146,6 +149,7 @@ defmodule PosteriorDBValidator do
     num_warmup = Keyword.fetch!(opts, :num_warmup)
     seed = Keyword.fetch!(opts, :seed)
     ncp = Keyword.fetch!(opts, :ncp)
+    chains = Keyword.fetch!(opts, :chains)
 
     t0 = System.monotonic_time(:millisecond)
 
@@ -156,34 +160,52 @@ defmodule PosteriorDBValidator do
       # Build and sample
       {ir, init_values, param_map} = build_model(spec)
 
-      {trace, stats} =
-        Exmc.Sampler.sample(ir, init_values,
-          num_samples: num_samples,
-          num_warmup: num_warmup,
-          seed: seed,
-          ncp: ncp
-        )
+      # One chain per seed. R-hat needs at least two chains to exist at all,
+      # and a single chain cannot distinguish "the sampler is fine, this draw
+      # was unlucky" from "the sampler regressed" -- 33/33 PASS at one seed is
+      # one Bernoulli sample per model.
+      runs =
+        for i <- 0..(chains - 1) do
+          {trace, stats} =
+            Exmc.Sampler.sample(ir, init_values,
+              num_samples: num_samples,
+              num_warmup: num_warmup,
+              seed: seed + i,
+              ncp: ncp
+            )
 
-      # Compare against reference draws
-      comparisons = compare_draws(trace, ref_draws, param_map)
+          {reconstruct_eight_schools(trace, param_map), stats}
+        end
+
+      chain_traces = Enum.map(runs, &elem(&1, 0))
+      chain_stats = Enum.map(runs, &elem(&1, 1))
 
       wall_ms = System.monotonic_time(:millisecond) - t0
       wall_s = wall_ms / 1000
-      divergences = stats.divergences
+      divergences = chain_stats |> Enum.map(& &1.divergences) |> Enum.sum()
+      total_draws = chains * num_samples
+
+      pstats = PDB.Metrics.param_stats(chain_traces, Enum.map(param_map, fn {n, _} -> n end))
+      comparisons = compare_stats(pstats, ref_draws, param_map, divergences / max(total_draws, 1))
 
       # stats.sample_stats has always carried per-draw :n_steps, :tree_depth,
       # :divergent and :accept_prob. The old harness read only :divergences and
       # :step_size and threw the rest away, and never computed ESS at all --
       # which is why its pass criteria were structurally unable to see a
       # performance regression.
-      leapfrog = PDB.Metrics.leapfrog(stats)
-      ess = PDB.Metrics.ess_table(trace, Enum.map(param_map, fn {n, _} -> n end))
+      leapfrog = chain_stats |> Enum.map(&PDB.Metrics.leapfrog/1) |> Enum.sum()
 
       min_ess =
-        case ess |> Map.values() |> Enum.map(& &1.ess) do
+        case pstats |> Map.values() |> Enum.map(& &1.ess_total) do
           [] -> 0.0
           vs -> Enum.min(vs)
         end
+
+      max_rhat =
+        pstats |> Map.values() |> Enum.map(& &1.rhat) |> Enum.reject(&is_nil/1) |> then(fn
+          [] -> nil
+          vs -> Enum.max(vs)
+        end)
 
       passed = Enum.all?(comparisons, fn c -> c.pass end)
       status = if passed, do: :pass, else: :fail
@@ -193,7 +215,9 @@ defmodule PosteriorDBValidator do
         status: status,
         wall_ms: wall_ms,
         divergences: divergences,
-        step_size: stats.step_size,
+        chains: chains,
+        max_rhat: max_rhat,
+        step_size: chain_stats |> Enum.map(& &1.step_size) |> Enum.sum() |> Kernel./(chains),
         n_params: length(comparisons),
         comparisons: comparisons,
         leapfrog: leapfrog,
@@ -204,19 +228,21 @@ defmodule PosteriorDBValidator do
         leapfrog_per_sec_apparent: if(wall_s > 0, do: leapfrog / wall_s, else: nil),
         min_ess: min_ess,
         ess_per_sec: if(wall_s > 0, do: min_ess / wall_s, else: nil),
-        div_rate: divergences / max(num_samples, 1),
-        mean_accept: PDB.Metrics.mean_accept(stats),
-        mean_tree_depth: PDB.Metrics.mean_tree_depth(stats),
-        ess: ess,
+        div_rate: divergences / max(total_draws, 1),
+        mean_accept: PDB.Metrics.mean_accept(List.first(chain_stats)),
+        mean_tree_depth: PDB.Metrics.mean_tree_depth(List.first(chain_stats)),
+        ess: pstats,
         max_mean_err: comparisons |> Enum.map(& &1.mean_err) |> Enum.max(),
         max_sd_ratio: comparisons |> Enum.map(& &1.sd_ratio) |> Enum.max(),
       }
 
       status_str = if passed, do: "PASS", else: "FAIL"
-      IO.puts("  #{status_str}  #{String.pad_trailing(name, 46)}  " <>
-              "#{wall_ms}ms  ess=#{round(min_ess)}  lf=#{leapfrog}  " <>
-              "div=#{divergences}  eps=#{Float.round(stats.step_size, 4)}  " <>
-              "err=#{Float.round(result.max_mean_err, 3)}")
+      IO.puts("  #{status_str}  #{String.pad_trailing(name, 44)}  " <>
+              "#{wall_ms}ms  ess=#{round(min_ess)}  " <>
+              "rhat=#{if max_rhat, do: Float.round(max_rhat, 3), else: "n/a"}  " <>
+              "lf=#{leapfrog}  div=#{divergences}/#{total_draws}  " <>
+              "err=#{Float.round(result.max_mean_err, 2)}  " <>
+              "#{failed_gates(comparisons)}")
 
       result
     rescue
@@ -460,56 +486,132 @@ defmodule PosteriorDBValidator do
 
   # --- Draw comparison ---
 
-  defp compare_draws(trace, ref_draws, param_map) do
-    # For Eight Schools: reconstruct theta from NCP (theta = mu + tau * theta_trans)
-    trace = reconstruct_eight_schools(trace, param_map)
+  # --- (d) Statistical gates ------------------------------------------------
+  #
+  # The old criteria were two fixed constants: mean within 0.5 reference SD,
+  # SD within a factor of 2. Both are blind to the regression this suite is
+  # supposed to catch. A model degrading from ESS 400 to ESS 50 has lost 8x its
+  # sampling efficiency and still passes both comfortably, so the gate could
+  # not fail for a performance reason.
+  #
+  # These four are the standard MCMC set (Stan, ArviZ, NumPyro all report them)
+  # and they are complementary in a way worth stating, because two of them look
+  # redundant and are not:
+  #
+  #   rhat < 1.01           chains disagree -> not converged
+  #   ESS >= 100 per chain  efficiency, and the ONLY gate that catches a
+  #                         slowdown in mixing
+  #   |mean - ref| < 4 MCSE accuracy RELATIVE TO ACHIEVED PRECISION
+  #   div rate < 1%         geometry the sampler could not integrate
+  #
+  # The MCSE gate alone would be perverse as a regression detector: MCSE is
+  # sd/sqrt(ESS), so when ESS FALLS the tolerance WIDENS and a worse sampler
+  # gets an easier test. The ESS gate is what makes the pair sound -- it fails
+  # on the efficiency loss directly while MCSE checks that the mean is right
+  # given the precision actually achieved. Neither substitutes for the other.
+  # Thresholds are CALIBRATED AGAINST THE KNOWN-GOOD BASELINE, not taken from
+  # convention. A gate that the healthy reference arm cannot pass is
+  # permanently red and therefore detects nothing -- the same uselessness as a
+  # gate that can never fail, arrived at from the other side.
+  #
+  # Measured 2026-09-05, EXLA, 1000 warmup + 1000 sampling, 4 chains:
+  #
+  #   model              R-hat   ESS/chain   mcse_z       div rate
+  #   sblrc-blr          1.005   127-430     0.07-1.74     48/4000 = 1.2%
+  #   kilpisjarvi        1.003   157-234     1.27-1.68    141/4000 = 3.5%
+  #
+  # So 1.01 / 100 / 4.0 all clear with room. Divergences do NOT: Stan's
+  # convention of treating any divergence as suspect would fail both healthy
+  # models, so the threshold is set from the measurement at 5%, which still
+  # catches the failure it exists to catch -- the Vulkan arm on these same
+  # models runs 48% to 94%, an order of magnitude clear of the gate.
+  #
+  # Calibrated on two models. Re-derive from a full 33-model baseline run
+  # before treating 5% as settled.
+  @rhat_max 1.01
+  @ess_min_per_chain 100
+  @mcse_z_max 4.0
+  @div_rate_max 0.05
 
+  defp compare_stats(pstats, ref_draws, param_map, div_rate) do
     Enum.map(param_map, fn {exmc_name, pdb_name} ->
-      exmc_samples = trace[exmc_name] |> Nx.to_flat_list()
+      st = Map.get(pstats, exmc_name)
       ref_samples = ref_draws[pdb_name]
 
-      if ref_samples == nil do
-        %{param: pdb_name, pass: false, mean_err: 999.0, sd_ratio: 999.0,
-          note: "reference draws not found"}
-      else
-        exmc_mean = mean(exmc_samples)
-        exmc_sd = sd(exmc_samples)
-        ref_mean = mean(ref_samples)
-        ref_sd = sd(ref_samples)
+      cond do
+        ref_samples == nil ->
+          %{param: pdb_name, pass: false, mean_err: 999.0, sd_ratio: 999.0,
+            gates: %{reference: :fail}, note: "reference draws not found"}
 
-        # Mean error in units of reference SD
-        mean_err =
-          if ref_sd > 1.0e-10 do
-            abs(exmc_mean - ref_mean) / ref_sd
-          else
-            abs(exmc_mean - ref_mean)
-          end
+        st == nil ->
+          %{param: pdb_name, pass: false, mean_err: 999.0, sd_ratio: 999.0,
+            gates: %{trace: :fail}, note: "parameter missing from trace"}
 
-        # SD ratio
-        sd_ratio =
-          if ref_sd > 1.0e-10 do
-            exmc_sd / ref_sd
-          else
-            1.0
-          end
+        true ->
+          ref_mean = mean(ref_samples)
+          ref_sd = sd(ref_samples)
 
-        # Pass criteria:
-        # - Mean within 0.5 SD of reference mean
-        # - SD within factor of 2 of reference SD
-        pass = mean_err < 0.5 and sd_ratio > 0.5 and sd_ratio < 2.0
+          # Kept in reference-SD units so the column stays comparable with the
+          # historical reports, even though it is no longer what gates.
+          mean_err =
+            if ref_sd > 1.0e-10,
+              do: abs(st.mean - ref_mean) / ref_sd,
+              else: abs(st.mean - ref_mean)
 
-        %{
-          param: pdb_name,
-          pass: pass,
-          mean_err: mean_err,
-          sd_ratio: sd_ratio,
-          exmc_mean: exmc_mean,
-          exmc_sd: exmc_sd,
-          ref_mean: ref_mean,
-          ref_sd: ref_sd,
-        }
+          sd_ratio = if ref_sd > 1.0e-10, do: st.sd / ref_sd, else: 1.0
+
+          mcse_z =
+            cond do
+              is_nil(st.mcse) or st.mcse <= 1.0e-12 -> nil
+              true -> abs(st.mean - ref_mean) / st.mcse
+            end
+
+          gates = %{
+            # :skipped is NOT a pass. It means the gate could not be evaluated
+            # (one chain), and the banner says so at the top of every run.
+            rhat: if(is_nil(st.rhat), do: :skipped, else: gate(st.rhat < @rhat_max)),
+            ess: gate(st.ess_min_per_chain >= @ess_min_per_chain),
+            mean: if(is_nil(mcse_z), do: :skipped, else: gate(mcse_z < @mcse_z_max)),
+            sd: gate(sd_ratio > 0.5 and sd_ratio < 2.0),
+            divergences: gate(div_rate < @div_rate_max)
+          }
+
+          %{
+            param: pdb_name,
+            pass: gates |> Map.values() |> Enum.all?(&(&1 != :fail)),
+            gates: gates,
+            mean_err: mean_err,
+            sd_ratio: sd_ratio,
+            mcse_z: mcse_z,
+            rhat: st.rhat,
+            ess_total: st.ess_total,
+            ess_min_per_chain: st.ess_min_per_chain,
+            mcse: st.mcse,
+            exmc_mean: st.mean,
+            exmc_sd: st.sd,
+            ref_mean: ref_mean,
+            ref_sd: ref_sd
+          }
       end
     end)
+  end
+
+  defp gate(true), do: :pass
+  defp gate(false), do: :fail
+
+  # Which gates failed, for the one-line-per-model output. Naming them is the
+  # difference between "this model failed" and "this model failed because it
+  # never mixed".
+  defp failed_gates(comparisons) do
+    names =
+      comparisons
+      |> Enum.flat_map(fn c ->
+        c |> Map.get(:gates, %{}) |> Enum.filter(fn {_, v} -> v == :fail end) |> Enum.map(&elem(&1, 0))
+      end)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    if names == [], do: "", else: "[#{Enum.join(names, " ")}]"
   end
 
   # --- Reporting ---
@@ -557,10 +659,23 @@ defmodule PosteriorDBValidator do
           IO.puts("    Error: #{r[:error]}")
         else
           for c <- (r[:comparisons] || []), !c.pass do
-            IO.puts("    #{c.param}: mean_err=#{Float.round(c.mean_err, 3)}  " <>
-                    "sd_ratio=#{Float.round(c.sd_ratio, 3)}  " <>
-                    "exmc=#{Float.round(c.exmc_mean, 3)}±#{Float.round(c.exmc_sd, 3)}  " <>
-                    "ref=#{Float.round(c.ref_mean, 3)}±#{Float.round(c.ref_sd, 3)}")
+            failed =
+              c |> Map.get(:gates, %{}) |> Enum.filter(fn {_, v} -> v == :fail end)
+                |> Enum.map(&elem(&1, 0)) |> Enum.sort() |> Enum.join(",")
+
+            detail =
+              case c[:note] do
+                nil ->
+                  "rhat=#{fmt(c[:rhat], 3)} ess/chain=#{fmt(c[:ess_min_per_chain], 0)} " <>
+                    "mcse_z=#{fmt(c[:mcse_z], 2)} sd_ratio=#{fmt(c[:sd_ratio], 2)}  " <>
+                    "exmc=#{fmt(c[:exmc_mean], 3)}+/-#{fmt(c[:exmc_sd], 3)} " <>
+                    "ref=#{fmt(c[:ref_mean], 3)}+/-#{fmt(c[:ref_sd], 3)}"
+
+                note ->
+                  note
+              end
+
+            IO.puts("    #{c.param} [#{failed}]: #{detail}")
           end
         end
       end
@@ -591,8 +706,8 @@ defmodule PosteriorDBValidator do
 
     ## Summary
 
-    | Model | Status | Wall (s) | Min ESS | Leapfrog | Div | Step Size | Max Mean Err | Max SD Ratio |
-    |-------|--------|----------|---------|----------|-----|-----------|-------------|-------------|
+    | Model | Status | Wall (s) | Min ESS | Max R-hat | Leapfrog | Div | Div % | Step Size | Max Mean Err |
+    |-------|--------|----------|---------|-----------|----------|-----|-------|-----------|-------------|
     """ <>
     (results
      |> Enum.map(fn r ->
@@ -604,13 +719,25 @@ defmodule PosteriorDBValidator do
        max_sd = if r[:max_sd_ratio], do: Float.round(r.max_sd_ratio, 3), else: "-"
        ess = if r[:min_ess], do: round(r.min_ess), else: "-"
        lf = r[:leapfrog] || "-"
-       "| #{r.name} | #{status} | #{wall_s} | #{ess} | #{lf} | #{div} | #{eps} | #{max_me} | #{max_sd} |"
+       rhat = fmt(r[:max_rhat], 3)
+       dpct = if r[:div_rate], do: Float.round(r.div_rate * 100, 1), else: "-"
+       _ = max_sd
+       "| #{r.name} | #{status} | #{wall_s} | #{ess} | #{rhat} | #{lf} | #{div} | #{dpct} | #{eps} | #{max_me} |"
      end)
      |> Enum.join("\n")) <>
     "\n\n## Pass Criteria\n\n" <>
-    "- Mean within 0.5 SD of reference mean\n" <>
-    "- SD within factor of 2 (0.5x-2.0x) of reference SD\n" <>
-    "- Reference: Stan gold-standard draws (10 chains x 1000 draws)\n"
+    "Statistical, not fixed constants. The previous criteria (mean within 0.5\n" <>
+    "reference SD, SD within a factor of 2) could not fail for a performance\n" <>
+    "reason: a model losing 8x its sampling efficiency passed both.\n\n" <>
+    "- Split R-hat < #{@rhat_max} across #{provenance.chains} chains" <>
+    "#{if provenance.chains < 2, do: " — NOT EVALUATED, needs >= 2 chains", else: ""}\n" <>
+    "- ESS (bulk, rank-normalised) >= #{@ess_min_per_chain} per chain\n" <>
+    "- |mean − reference mean| < #{@mcse_z_max} x MCSE, where MCSE = sd/sqrt(ESS)\n" <>
+    "- Divergence rate < #{round(@div_rate_max * 100)}%\n" <>
+    "- SD within factor of 2 of reference SD (retained, secondary)\n\n" <>
+    "The MCSE gate widens as ESS falls, so it cannot detect a slowdown on its\n" <>
+    "own — the ESS gate is what does that. Both are required.\n\n" <>
+    "Reference: Stan gold-standard draws (10 chains x 1000 draws)\n"
 
     path = Path.join(@processed_dir, "validation_results.md")
     File.write!(path, md)
@@ -681,6 +808,13 @@ defmodule PosteriorDBValidator do
     path |> File.read!() |> Jason.decode!()
   end
 
+  # nil-safe rounding: a skipped or unavailable statistic prints as "n/a"
+  # rather than crashing the report that is supposed to explain the failure.
+  defp fmt(nil, _), do: "n/a"
+  defp fmt(v, 0) when is_number(v), do: to_string(round(v))
+  defp fmt(v, p) when is_number(v), do: to_string(Float.round(v * 1.0, p))
+  defp fmt(v, _), do: inspect(v)
+
   defp mean(list) when is_list(list) do
     Enum.sum(list) / length(list)
   end
@@ -705,7 +839,8 @@ end
       seed: :integer,
       ncp: :boolean,
       only: :string,
-      transcendentals: :string
+      transcendentals: :string,
+      chains: :integer
     ]
   )
 
@@ -734,6 +869,7 @@ PosteriorDBValidator.run(
     seed: Keyword.get(opts, :seed, 42),
     ncp: Keyword.get(opts, :ncp, false),
     only: Keyword.get(opts, :only),
+    chains: Keyword.get(opts, :chains, 4),
     transcendentals:
       case Keyword.get(opts, :transcendentals, "f32_cast") do
         "f32_cast" -> :f32_cast

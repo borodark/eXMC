@@ -42,7 +42,8 @@ defmodule PDB.Provenance do
       num_samples: Keyword.fetch!(opts, :num_samples),
       seed: Keyword.fetch!(opts, :seed),
       ncp: Keyword.fetch!(opts, :ncp),
-      transcendentals: inspect(Keyword.fetch!(opts, :transcendentals))
+      transcendentals: inspect(Keyword.fetch!(opts, :transcendentals)),
+      chains: Keyword.fetch!(opts, :chains)
     }
   end
 
@@ -60,6 +61,7 @@ defmodule PDB.Provenance do
       #{p.jit_describe}
       protocol      #{p.num_warmup} warmup + #{p.num_samples} sampling, seed=#{p.seed}, ncp=#{p.ncp}
       transcend.    #{p.transcendentals}
+      chains        #{p.chains}#{if p.chains < 2, do: " (R-hat CANNOT be computed -- needs >= 2)", else: ", seeds #{p.seed}..#{p.seed + p.chains - 1}"}
       parallel      #{p.parallel}#{if p.mode == "race" and p.parallel == 1, do: " (serialized — timings are meaningful)", else: ""}
     """
   end
@@ -156,6 +158,44 @@ defmodule PDB.Metrics do
        }}
     end)
   end
+
+  @doc """
+  Per-parameter convergence statistics across N chains.
+
+  Returns `%{param => %{rhat:, ess_total:, ess_min_per_chain:, mean:, sd:,
+  mcse:}}`, where `mean`/`sd` pool every draw from every chain and `mcse` is
+  `sd / sqrt(ess_total)`.
+
+  `rhat` is `nil` when there is only one chain. `Diagnostics.rhat/1` requires
+  at least two, and a gate that cannot be evaluated must say so rather than
+  pass by default -- the whole reason the old criteria were misleading is that
+  they could not fail for the reason anyone cared about.
+  """
+  def param_stats(chain_traces, exmc_names) do
+    exmc_names
+    |> Enum.filter(fn n -> Enum.all?(chain_traces, &Map.has_key?(&1, n)) end)
+    |> Map.new(fn name ->
+      per_chain = Enum.map(chain_traces, fn t -> t[name] |> Nx.to_flat_list() end)
+      pooled = List.flatten(per_chain)
+
+      ess_each = Enum.map(per_chain, &Exmc.Diagnostics.ess_bulk/1)
+      ess_total = Enum.sum(ess_each)
+      s = sd(pooled)
+
+      {name,
+       %{
+         rhat: if(length(per_chain) >= 2, do: Exmc.Diagnostics.rhat(per_chain), else: nil),
+         ess_total: Float.round(ess_total, 1),
+         ess_min_per_chain: Float.round(Enum.min(ess_each), 1),
+         mean: mean(pooled),
+         sd: s,
+         mcse: if(ess_total > 0, do: s / :math.sqrt(ess_total), else: nil)
+       }}
+    end)
+  end
+
+  defp mean([]), do: 0.0
+  defp mean(list), do: Enum.sum(list) / length(list)
 
   defp sd([]), do: 0.0
   defp sd([_]), do: 0.0
