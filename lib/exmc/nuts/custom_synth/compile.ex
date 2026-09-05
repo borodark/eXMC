@@ -8,8 +8,26 @@ defmodule Exmc.NUTS.CustomSynth.Compile do
   produced by `Exmc.NUTS.CustomSynth` and skip the template-render
   step.
 
-  Same cache directory as `Nx.Vulkan.Synthesis` — content hashes
-  collide cleanly because they're SHA-256 of the final GLSL text.
+  NOT the same cache directory as `Nx.Vulkan.Synthesis`, despite what this
+  doc claimed until 2026-09-05. That one uses `~/.nx_vulkan/spv`; we use
+  `@cache_dir` below. Content hashes would collide cleanly if they were
+  shared — they are SHA-256 of the final GLSL text — but they are not shared,
+  and believing otherwise sends you to clear the wrong directory.
+
+  The separation has a consequence worth knowing. Because this module shells
+  out to `glslangValidator` itself rather than routing through
+  `Nx.Vulkan.Synthesis.compile/1`, it does NOT get that path's SPIR-V
+  validation. glslangValidator can emit a CORRUPT binary and still exit 0:
+  SPIR-V's per-instruction word count is a 16-bit field, so a single
+  constant array of 65533+ elements wraps it silently. A corrupt artifact
+  then gets content-addressed into the cache and reused forever, because a
+  cache keyed on the INPUT cannot notice that the OUTPUT is bad.
+
+  Not reachable today — since captures moved to the extras SSBO
+  (docs/SHADER_CONSTANT_INLINING.md) nothing here emits a large constant
+  array at all, and the largest we ever emitted was ~1350 elements. Closing
+  it needs `Nx.Vulkan.Spirv.validate_file/1`, which lands in nx_vulkan
+  f2c0c69; we are on 91f29d3. Do it on the next bump.
   """
 
   @cache_dir Path.expand("~/.exmc/gpu_node/spv")
