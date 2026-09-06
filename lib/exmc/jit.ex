@@ -34,6 +34,37 @@ defmodule Exmc.JIT do
       config :exmc, :compiler, :exla     # force EXLA
       config :exmc, :compiler, :vulkan   # force Vulkan (GPU compute path)
       config :exmc, :compiler, :none     # disable JIT (pure Evaluator)
+
+  ## The Nx default backend is deliberately unset
+
+  exmc sets neither `:nx, :default_backend` nor `:nx, :default_defn_options`,
+  in any environment. Eager tensors allocate on `Nx.BinaryBackend` -- nx's own
+  default -- and the hot path says so out loud rather than relying on it:
+  `Exmc.NUTS.Leapfrog` and `Exmc.NUTS.MassMatrix` pass
+  `backend: Nx.BinaryBackend` on every scalar they build.
+
+  Device work is reached two ways, both explicit, neither through a default:
+  `Exmc.JIT.jit/2`, which names a compiler on every call, and direct NIF
+  dispatch (`Exmc.NUTS.Vulkan.Dispatch`) for the fused f64 chain shader.
+
+  This is a choice and it needs writing down because it looks exactly like an
+  omission. Upstream `Nx.Vulkan.jit/2` sets the global default as a side
+  effect; this module's Vulkan clause is that function with the side effect
+  removed. Someone reading the two side by side will assume a line was lost.
+  It was not.
+
+  Why: a global eager backend sends every scalar constant, every mass-matrix
+  accumulator and every adaptation counter across the device boundary, one
+  round trip each, for values three floats wide. And the tempting setter is
+  the wrong one -- `Nx.default_backend/1` writes the PROCESS DICTIONARY, so
+  setting it and then fanning out over chains leaves workers on the global
+  default while the log claims otherwise (docs/NX_BACKEND_HANDLING.md P5).
+
+  What it costs, stated so it is never quoted as something else: the per-op
+  Vulkan arm is `Nx.Defn.Evaluator` over `Nx.BinaryBackend`. An interpreter,
+  on the CPU. Correct, slow, and not a GPU number. `describe/0` prints the
+  observed Nx axes beside the derived ones so this stays observed rather than
+  inferred.
   """
 
   @doc """
@@ -48,10 +79,47 @@ defmodule Exmc.JIT do
         fun
 
       Nx.Vulkan ->
-        # VulkanoBackend implements compute callbacks (binary/unary
-        # SPV ops + host fallbacks). Evaluator dispatches each defn
-        # op through the default backend, which is set globally to
-        # VulkanoBackend at application boot.
+        # This arm is an INTERPRETER over whatever backend the argument
+        # tensors already carry, and in this project that is
+        # `Nx.BinaryBackend` -- the CPU. It is not per-op GPU dispatch.
+        #
+        # The comment that stood here said the default backend "is set
+        # globally to VulkanoBackend at application boot". That described the
+        # function this one was copied FROM, not this one.
+        # `Nx.Vulkan.jit/2` is this exact line preceded by
+        # `ensure_default_backend!()`, which flips `:nx, :default_backend` to
+        # VulkanoBackend so tensors created inside the traced function land on
+        # the device. We copied the body and dropped that call -- deliberately,
+        # see the moduledoc -- and the comment kept describing the version
+        # with it.
+        #
+        # What is actually true: `:exmc` declares no `mod:` in mix.exs, so
+        # there is no application boot to set anything; nothing in config/
+        # sets `:nx, :default_backend`; and the only
+        # `Nx.global_default_backend/1` call in the tree is one `setup_all` in
+        # test/exmc/jit_vulkan_test.exs. So `Nx.default_backend()` is nx's own
+        # default. `Nx.Defn.Evaluator` takes creation ops and constants from
+        # `Nx.default_backend()` and dispatches every other op on the
+        # argument's own backend, so VulkanoBackend is never asked for
+        # anything on this path.
+        #
+        # MEASURED on super-io, 2026-09-06, `MIX_ENV=test EXMC_COMPILER=vulkan`:
+        #
+        #   compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend
+        #   precision=:f64 perop_fallback=true
+        #   nx_default_backend={Nx.BinaryBackend, []} nx_defn_options=[]
+        #   out_backend=Nx.BinaryBackend
+        #
+        # `out_backend` is the decisive read, not the banner: the jitted
+        # result is a BinaryBackend tensor, which can only happen if every op
+        # went through BinaryBackend's callbacks. The control arm
+        # (`EXMC_COMPILER=none`) has derived and observed AGREEING, so the
+        # disagreement above is signal and not an artifact of the fields.
+        #
+        # The cost of believing the old comment is on record: the Vulkan
+        # benchmark arm ran two models 40x and 140x slower than EXLA and it
+        # read as "the GPU is slow", when there was no fusing compiler and no
+        # GPU on the path at all. See docs/NX_BACKEND_HANDLING.md P0.
         Nx.Defn.jit(fun, [{:compiler, Nx.Defn.Evaluator} | opts])
 
       compiler ->
@@ -148,15 +216,6 @@ defmodule Exmc.JIT do
   end
 
   @doc """
-  Working float precision for the detected compiler.
-
-  Returns `:f64` for EXLA/Vulkan/Evaluator. Override via
-  `config :exmc, :force_precision, :f32` for the validator's
-  matched-precision mode (otherwise it compares f32 Vulkan against f64 EXLA,
-  masking shader correctness behind precision-gap artifacts for fat-tailed
-  distributions).
-  """
-  @doc """
   A one-line description of what this process will actually compute with.
 
   Everything here is resolved at call time from global state, which is why it
@@ -168,17 +227,73 @@ defmodule Exmc.JIT do
   saved most of a day on 2026-08-23, when a missing LD_LIBRARY_PATH made this
   host silently Vulkan-only and nine extra test failures looked like a code
   regression.
+
+  ## The line has two halves, and they are different kinds of claim
+
+  `compiler=`, `backend=` and `precision=` are DERIVED: `backend/0` maps the
+  detected compiler to the backend that compiler would imply, and never reads
+  Nx. `nx_default_backend=` and `nx_defn_options=` are OBSERVED --
+  `Nx.default_backend/0` and `Nx.Defn.default_options/0`, i.e. what this
+  process will actually allocate on and compile with.
+
+  They sit side by side because on the Vulkan arm they DISAGREE, and the
+  banner used to print only the half that was wrong. Derived says
+  `Nx.Vulkan.VulkanoBackend`; observed says `{Nx.BinaryBackend, []}`, because
+  nothing in this project sets `:nx, :default_backend`. Config says what you
+  asked for; these two say what you have, and when they disagree the second is
+  what ran.
+
+  ## `perop_fallback=` predicts whether an unsupported model raises
+
+  `config/test.exs` sets `:allow_vulkan_perop_sampling` only when
+  `EXMC_COMPILER` names a compiler explicitly. So on a Vulkan-only host that
+  AUTO-DETECTS, the flag is false and a model `CustomSynth` refuses raises
+  `SynthUnsupportedError` instead of degrading to per-op sampling.
+
+  Measured on mac-248 (FreeBSD, GT 750M, Vulkan-only), same tree, same file:
+  `mix test test/custom_dist_test.exs` gives 16 tests / 1 failure under
+  auto-detect and 16 / 0 under `EXMC_COMPILER=vulkan`. The old banner showed
+  the cause -- `(configured: nil)` -- and hid the consequence, so the failure
+  read as a code regression. It is not: that model has been `:unsupported`
+  since 5b99e02af.
+
+  ## Both observed reads are process-local
+
+  `Nx.default_backend/1` and `Nx.Defn.default_options/1` write the PROCESS
+  DICTIONARY, so this line describes the process that called it and no other.
+  `test/test_helper.exs` sets both and then prints this from the same process,
+  so under `mix test` the observed fields report what the HELPER process has,
+  not what an ExUnit test process, a `Task` worker, or a sampling chain gets.
+  Read it at face value under `mix run`; read it with that caveat under
+  `mix test`.
   """
   @spec describe() :: String.t()
   def describe do
     configured = Application.get_env(:exmc, :compiler)
+    perop = Application.get_env(:exmc, :allow_vulkan_perop_sampling, false)
 
     "compiler=#{inspect(detect_compiler())} " <>
       "(configured: #{inspect(configured)}) " <>
       "backend=#{inspect(backend())} " <>
-      "precision=#{inspect(precision())}"
+      "precision=#{inspect(precision())} " <>
+      "perop_fallback=#{inspect(perop)} " <>
+      "nx_default_backend=#{inspect(Nx.default_backend())} " <>
+      "nx_defn_options=#{inspect(Nx.Defn.default_options())}"
   end
 
+  @doc """
+  Working float precision for the detected compiler.
+
+  Returns `:f64` for EXLA/Vulkan/Evaluator. Override via
+  `config :exmc, :force_precision, :f32` for the validator's
+  matched-precision mode (otherwise it compares f32 Vulkan against f64 EXLA,
+  masking shader correctness behind precision-gap artifacts for fat-tailed
+  distributions).
+
+  (This `@doc` used to sit ABOVE `describe/0`'s, where two consecutive `@doc`
+  attributes meant the first was discarded and `precision/0` shipped
+  undocumented.)
+  """
   def precision do
     case Application.get_env(:exmc, :force_precision) do
       :f32 -> :f32
