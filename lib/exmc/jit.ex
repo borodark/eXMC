@@ -140,7 +140,27 @@ defmodule Exmc.JIT do
       :exla -> demand(EXLA, :exla)
       :vulkan -> demand(Nx.Vulkan, :vulkan)
       :none -> nil
+      other -> raise ArgumentError, unknown_compiler_message(other)
     end
+  end
+
+  # config/runtime.exs validates EXMC_COMPILER and raises on a typo. This
+  # clause covers the other door: `Application.put_env(:exmc, :compiler, ...)`
+  # at runtime, which several harnesses and `Exmc.NUTS.Vulkan.Validator` do
+  # legitimately, and which no config file can police.
+  #
+  # Without it an unrecognised value fell through to a bare CaseClauseError
+  # naming only the value -- so `EXMC_COMPILER=vulcan` reported a pattern-match
+  # failure in a case statement rather than a misspelled backend.
+  defp unknown_compiler_message(other) do
+    """
+    Unknown :exmc, :compiler setting: #{inspect(other)}
+
+    Expected one of :vulkan, :exla, :none, :auto, or nil for auto-detection.
+
+    Set via `config :exmc, :compiler`, the EXMC_COMPILER environment variable
+    (handled in config/runtime.exs), or Application.put_env/3.
+    """
   end
 
   @doc """

@@ -35,20 +35,14 @@ end
 #
 # (EMLX / Apple Metal is postponed until real hardware is available —
 #  see the `Exmc.JIT` moduledoc.)
-case System.get_env("EXMC_COMPILER") do
-  backend when backend in [nil, ""] ->
-    :ok
-
-  "vulkan" ->
-    config :exmc, compiler: :vulkan
-
-    # Non-synthesisable models (observed-data likelihoods, deep hierarchies)
-    # normally trip the Plan B' guard under Vulkan. For a full-suite backend
-    # sweep we let them fall through to per-op GPU dispatch (VulkanoBackend)
-    # instead of raising, so the whole suite exercises the Vulkan path.
-    # Chain-shader-eligible models still take the fused f64 shader.
-    config :exmc, allow_vulkan_perop_sampling: true
-
-  name ->
-    config :exmc, compiler: String.to_atom(name)
-end
+# The EXMC_COMPILER switch MOVED to config/runtime.exs (2026-09-06).
+#
+# It lived here, and `config/config.exs` imports this file only when
+# `config_env() == :test` -- so under `mix run` (which is :dev) it was inert and
+# the benchmark suite silently ran EXLA while reporting a Vulkan arm.
+# runtime.exs is loaded in every environment, which is the property this needed
+# and this file cannot provide.
+#
+# `config :exla, default_client: :host` above STAYS here: it must keep its
+# @freebsd? guard and its test scoping, or every FreeBSD run reintroduces the
+# "you have configured application :exla but it is not available" block.
