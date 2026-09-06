@@ -147,7 +147,7 @@ defmodule Exmc.NUTS.CustomSynth do
   which is every conjugate model built through `Builder.obs` and so the
   entire class the batch coordinator exists to serve.
 
-  Returns `{:ok, {:synthesised, sha, layout, push_spec, spv_path, <<>>}}`.
+  Returns `{:ok, {:synthesised, sha, layout, push_spec, spv_path, <<>>, <<>>}}`.
   """
   @spec synthesise_batched(IR.t(), keyword()) ::
           {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
@@ -239,6 +239,37 @@ defmodule Exmc.NUTS.CustomSynth do
         end
       end)
 
+    # A capture that cannot be read is a likelihood that silently vanishes.
+    #
+    # `Glsl.register_capture/1` always emits `obs_inv_mass[pc.n_obs + pc.d +
+    # <off> + j]`, and `j` exists ONLY inside a `/*REDUCE_SUM*/` loop bounded
+    # by `pc.n_obs`. So captures with `n_obs == 0` are provably unreachable:
+    # the loop runs zero times, every captured vector is ignored, and the
+    # model reports a log-density with no likelihood term at all -- sampling
+    # the prior while claiming to sample the posterior.
+    #
+    # Found 2026-09-05 on the poker model. It carries its observations as
+    # closure captures rather than as observed nodes or `Builder.data/2`, so
+    # `n_obs` is sized to 0 while four captures of 100 elements each sit in
+    # the extras buffer at offsets 0/100/200/300. Before the likelihood was
+    # rewritten to rank-1 the emitter refused it outright over `:stack` and
+    # the model fell back to the host -- slow, but right. Making it emittable
+    # turned a slow-and-correct model into a fast-and-wrong one, which is the
+    # worse trade.
+    #
+    # Refusing sends it back to the host exactly as before. The real fix is to
+    # bound each REDUCE_SUM marker by the length of the vectors it actually
+    # reduces rather than by the observation-buffer size -- `obs_spans/1`
+    # already does per-marker ranges for multiple observed nodes, so the
+    # machinery exists. Recorded in docs/SHADER_CONSTANT_INLINING.md.
+    # Narrowed once MultiRvCustomSpec learned to bound a marker by the
+    # captures it reads: a capture-driven reduction with n_obs == 0 is now
+    # CORRECT and must not be refused. What remains indefensible is a loop
+    # still bounded by `pc.n_obs` when there are no observations to iterate --
+    # that reduction is provably empty and its term silently vanishes.
+    if n_obs == 0 and String.contains?(glsl, "j < pc.n_obs") do
+      {:unsupported, :empty_obs_axis_reduction}
+    else
     k = Keyword.get(opts, :K, 32)
     eps = Keyword.get(opts, :eps, 0.05)
 
@@ -268,6 +299,7 @@ defmodule Exmc.NUTS.CustomSynth do
         sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
         {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin, captures_bin}}
       end
+    end
     end
   end
 

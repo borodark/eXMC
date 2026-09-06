@@ -110,6 +110,29 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpecTest do
       assert large_cap == 1000 * (2 + 1) * 8
     end
 
+    test "a capture-driven reduction is bounded by the capture, not the empty obs axis" do
+      ir = Exmc.Rewrite.apply(linreg_ir(50, 2), [])
+      {:ok, components} = Exmc.NUTS.CustomSynth.extract_components(ir)
+      {:ok, glsl, _captures} = MultiRvCustomSpec.render(components)
+
+      # n_obs is 0 for this model. `standard_rv_node?/1` returns false for a
+      # Custom RV, so the scalar `Builder.obs` attached to it never reaches the
+      # `observed` list and `observed_n_obs/1` returns 0 -- while the design
+      # matrix and response sit in the extras buffer as rank-1 captures.
+      #
+      # A loop bounded by `pc.n_obs` therefore runs ZERO times: the entire
+      # likelihood term vanishes, the shader returns the prior, and the sampler
+      # reports it as a posterior. No crash, no error, no divergence.
+      # Measured on posteriordb sblrc-blr: max mean error 55.085 against EXLA's
+      # 0.13, which is what a prior looks like when you score it as a posterior.
+      #
+      # This fixture has rendered the full shader since the size test above was
+      # written; it only ever asserted byte_size on it. Two lines would have
+      # caught the defect on the day it became reachable.
+      refute glsl =~ "j < pc.n_obs"
+      assert glsl =~ "j < 50u"
+    end
+
     test "shader size still scales with the number of TERMS, which is correct" do
       {two_beta, _} = render_sizes(50, 2)
       {four_beta, _} = render_sizes(50, 4)

@@ -24,6 +24,12 @@ defmodule Exmc.Poker.OpponentModel do
   ## Returns
     {ir, data} where data contains pre-built tensors for the likelihood
   """
+  # f64 one-hot for a fixed observed action. Built in plain Elixir so it is a
+  # constant tensor rather than a traced :equal.
+  defp action_indicator(actions, k) do
+    Nx.tensor(Enum.map(actions, fn a -> if a == k, do: 1.0, else: 0.0 end), type: :f64)
+  end
+
   def build(observations) do
     num_players = length(observations)
 
@@ -33,6 +39,13 @@ defmodule Exmc.Poker.OpponentModel do
         %{
           hs: Nx.tensor(obs.hand_strengths, type: :f64),
           acts: Nx.tensor(obs.actions, type: :s64),
+          # One-hot indicators precomputed as DATA, outside the traced
+          # closure. Computing them inside would emit :equal, and the GLSL
+          # emitter has no comparison ops -- see
+          # ActionModel.log_prob_of_action/8.
+          is_fold: action_indicator(obs.actions, 0),
+          is_call: action_indicator(obs.actions, 1),
+          is_raise: action_indicator(obs.actions, 2),
           n: length(obs.hand_strengths)
         }
       end)
@@ -92,12 +105,19 @@ defmodule Exmc.Poker.OpponentModel do
           agg = Nx.exp(Nx.max(Nx.min(log_agg, Nx.tensor(3.0)), Nx.tensor(-3.0)))
           bluff = Nx.sigmoid(Nx.max(Nx.min(logit_bluff, Nx.tensor(10.0)), Nx.tensor(-10.0)))
 
-          # Action log-probs for all hands of this player
-          log_probs =
-            Exmc.Poker.ActionModel.log_action_probs_nx(vpip, pfr, agg, bluff, pd.hs)
-
+          # Rank-1 throughout, so this composes into the fused chain shader
+          # instead of falling through to the per-op Evaluator.
           selected =
-            Exmc.Poker.ActionModel.gather_log_probs(log_probs, pd.acts)
+            Exmc.Poker.ActionModel.log_prob_of_action(
+              vpip,
+              pfr,
+              agg,
+              bluff,
+              pd.hs,
+              pd.is_fold,
+              pd.is_call,
+              pd.is_raise
+            )
 
           Nx.add(ll, Nx.sum(selected))
         end

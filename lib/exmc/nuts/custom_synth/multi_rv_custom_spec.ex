@@ -669,7 +669,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
       spans = obs_spans(components)
 
       {log_p_loops, log_p_expr} =
-        transform_reduce_sum(log_p_glsl_raw, "_lpacc", spans, obs_index)
+        transform_reduce_sum(log_p_glsl_raw, "_lpacc", spans, obs_index, captures)
 
       grad_by_idx =
         grad_entries_raw
@@ -700,7 +700,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
           # precisely so a permutation cannot pass unnoticed — with identical
           # observations a mirrored assignment gives bit-identical answers.
           {loops, expr} =
-            transform_reduce_sum(summed, "_gacc#{i}_", reverse_spans(spans), obs_index)
+            transform_reduce_sum(summed, "_gacc#{i}_", reverse_spans(spans), obs_index, captures)
 
           {i, {loops, expr}}
         end
@@ -1017,8 +1017,8 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   # stay in per-instance coordinates either way, so spans compose with it
   # unchanged: a span is a property of the model's observed nodes, and the
   # offset is a property of which instance is reading them.
-  defp transform_reduce_sum(glsl, prefix, spans \\ :full, obs_index \\ "j") do
-    do_transform_rs(glsl, prefix, [], 0, spans, obs_index)
+  defp transform_reduce_sum(glsl, prefix, spans \\ :full, obs_index \\ "j", captures \\ []) do
+    do_transform_rs(glsl, prefix, [], 0, spans, obs_index, captures)
   end
 
   defp reverse_spans(:full), do: :full
@@ -1081,6 +1081,72 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   # the same GLSL it always did and stays reusable across dataset sizes. A span
   # bakes in constants, which is correct: the offsets ARE a property of the
   # model's observed nodes, not of the data length.
+  # A reduce loop must iterate over the vectors it actually reduces.
+  #
+  # `pc.n_obs` is the length of the OBSERVATION BUFFER, and for a
+  # likelihood whose data arrives as closure captures that is not the same
+  # number -- it is zero. `Builder.obs(ir, "y", "lik", Nx.tensor(0.0))`
+  # contributes a scalar, so the observation axis is empty while the captured
+  # vectors are 100 or 1192 long. Every such model synthesised a loop bounded
+  # by 0: the likelihood term evaluated to exactly nothing, the shader
+  # returned the PRIOR, and the sampler reported it as a posterior. No error,
+  # no divergence, a confident wrong answer. Measured 2026-09-05 on
+  # posteriordb under `compiler: :vulkan` -- R-hat 7.5, max mean error 37-55,
+  # divergence rates of 45-94% against EXLA's 0.13 and 2.3% on the same models
+  # and seeds.
+  #
+  # So the bound comes from the captures the marker reads. Their offsets are
+  # already correct (`pc.n_obs + pc.d + off` is `0 + d + off` when the
+  # observation region is empty); only the iteration count was wrong. Markers
+  # that read no captures keep the observation-buffer bound, which is right
+  # for models whose data really does arrive through `ir.data` or observed
+  # nodes.
+  #
+  # Emitted as a literal rather than a push field because the shader is
+  # content-addressed per model, exactly as the per-node span bounds already
+  # are.
+  defp reduce_bounds(inner, captures, spans, n) do
+    case capture_reduce_len(inner, captures) do
+      nil -> {loop_lo(spans, n), loop_hi(spans, n)}
+      len -> {"0u", "#{len}u"}
+    end
+  end
+
+  defp capture_reduce_len(_inner, []), do: nil
+
+  defp capture_reduce_len(inner, captures) do
+    offsets =
+      ~r/obs_inv_mass\[pc\.n_obs \+ pc\.d \+ (\d+) \+ j\]/
+      |> Regex.scan(inner)
+      |> Enum.map(fn [_, off] -> String.to_integer(off) end)
+      |> Enum.uniq()
+
+    case offsets do
+      [] ->
+        nil
+
+      _ ->
+        lengths =
+          offsets
+          |> Enum.map(fn off ->
+            Enum.find_value(captures, fn c -> c.offset == off && c.length end)
+          end)
+          |> Enum.uniq()
+
+        case lengths do
+          [len] when is_integer(len) ->
+            len
+
+          other ->
+            # One reduction cannot range over vectors of two different
+            # lengths. Raising degrades to :unsupported and the host, rather
+            # than picking one and being wrong on the rest.
+            raise "transform_reduce_sum: captures in one marker disagree on length: " <>
+                    "#{inspect(other)} at offsets #{inspect(offsets)}"
+        end
+    end
+  end
+
   defp loop_lo(:full, _n), do: "0u"
   defp loop_lo(spans, n) when is_list(spans), do: "#{elem(Enum.at(spans, n), 0)}u"
 
@@ -1091,7 +1157,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     "#{off + cnt}u"
   end
 
-  defp do_transform_rs(glsl, prefix, loops_acc, n, spans, obs_index) do
+  defp do_transform_rs(glsl, prefix, loops_acc, n, spans, obs_index, captures) do
     marker = "/*REDUCE_SUM*/("
 
     case :binary.match(glsl, marker) do
@@ -1130,7 +1196,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
             loop_block = """
             double #{accum} = 0.0lf;
-            for (uint j = #{loop_lo(spans, n)}; j < #{loop_hi(spans, n)}; j++) {
+            for (uint j = #{elem(reduce_bounds(inner, captures, spans, n), 0)}; j < #{elem(reduce_bounds(inner, captures, spans, n), 1)}; j++) {
                 double obs_j = obs_inv_mass[#{obs_index}];
             #{cse_binds}
                 #{accum} += (#{inner_cse});
@@ -1141,7 +1207,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
             after_ = binary_part(glsl, close_paren + 1, byte_size(glsl) - close_paren - 1)
             new_glsl = before <> accum <> after_
 
-            do_transform_rs(new_glsl, prefix, [loop_block | loops_acc], n + 1, spans, obs_index)
+            do_transform_rs(new_glsl, prefix, [loop_block | loops_acc], n + 1, spans, obs_index, captures)
         end
     end
   end

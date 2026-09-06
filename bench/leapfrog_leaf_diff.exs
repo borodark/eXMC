@@ -36,7 +36,14 @@ ir =
   |> Builder.obs("x3_obs", "x3", Nx.tensor(4.2))
 
 {:ok, meta} = CustomSynth.synthesise(ir)
-{:synthesised, sha, layout, push_spec, spv_path, obs_bin} = meta
+# 7-tuple since captures moved to the extras SSBO. This file destructured the
+# old 6-tuple for a day after that change: every TEST was updated, this bench
+# was not, and `mix test` never runs it. It is the ONLY harness in the repo
+# that dispatches a synthesised shader and compares logp/grad element-wise
+# against the host -- so the one instrument that could have caught the
+# zero-likelihood reduce-bound defect was itself un-runnable, on the very
+# commit that made that defect reachable. Grep the whole repo, not test/.
+{:synthesised, sha, layout, push_spec, spv_path, obs_bin, _captures_bin} = meta
 
 IO.puts("""
 device : #{inspect(Nx.Vulkan.NativeV.device_name())}
