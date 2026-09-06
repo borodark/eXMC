@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+## 0.4.0 (2026-09-06) — A Backend That Says What It Ran
+
+The headline is not a feature. It is that the fused Vulkan chain path was
+returning wrong posteriors, silently, and now does not — and that the harness
+which should have caught it can now state what produced its numbers.
+
+**Three defects on the Vulkan path, all silent, all fixed.**
+
+1. *Shader size scaled with the DATA.* Closure-captured rank-1 tensors were
+   emitted as `const double[]` literals, so SPIR-V grew with `n_obs * n_beta`.
+   Synthesised shaders reached 2.15 MB against ~8 KB for a hand-written one, and
+   past ~1300 inlined elements the driver refused to create the compute
+   pipeline. 21 of 33 posteriordb models could not run at all. Captures now live
+   in the extras SSBO; SPIR-V is byte-identical across a 20x change in `n_obs`.
+
+2. *A non-finite trajectory crashed instead of diverging.* The recursive Elixir
+   path had always routed non-finite values to the divergent fallback; the NIF
+   path handed the chain binaries to `build_subtree_bin/9` unchecked, where a
+   non-finite f64 is `badarg`. A routine "reject this trajectory" became a hard
+   crash depending only on tree depth.
+
+3. *The reduce loop was bounded by an empty observation axis.* This is the one
+   that mattered. Loops were emitted as `j < pc.n_obs`, but a likelihood whose
+   data arrives as closure captures does not populate that buffer — `n_obs` was
+   0, the loop ran ZERO times, the likelihood evaluated to nothing, and the
+   sampler returned the PRIOR while reporting it as a posterior. No crash, no
+   error, no divergence. 32 of 33 posteriordb models. On `sblrc-blr`: max mean
+   error **55.085 before, 0.12 after**, against EXLA's 0.13 — with an identical
+   7/300 divergence count.
+
+**The benchmark harness could not have caught any of it, and now can.**
+`benchmark/posteriordb` had no compiler selection at all: it ran under `mix run`,
+where `EXMC_COMPILER` was inert, so its "33/33 PASS" was an EXLA result that
+never said so. It now names its compiler, records full provenance (both shas, a
+dirty flag, resolved backend, precision) into a versioned JSON artifact, and
+gates on statistics rather than two fixed constants — R-hat, ESS, MCSE and a
+divergence rate calibrated against the healthy baseline instead of convention.
+The old criteria had certified a model with **R-hat 1.845** as PASS.
+
+**And the banner stopped lying.** `Exmc.JIT.describe/0` printed a backend
+*derived* from the detected compiler while never asking Nx anything. It now
+prints derived and observed side by side; on the Vulkan arm they disagree, which
+is how we learned the per-op path is an interpreter on the CPU.
+
 ### Fixed
 
 - **The shader cache handed out empty SPIR-V modules under concurrency.**
