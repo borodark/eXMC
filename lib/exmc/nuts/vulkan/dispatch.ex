@@ -229,8 +229,34 @@ defmodule Exmc.NUTS.Vulkan.Dispatch do
     )
   end
 
+  # Routed through ChainTrace rather than straight to the NIF.
+  #
+  # Outside `ChainTrace.record/1` or `replay/3` this is exactly
+  # `NativeV.leapfrog_chain_synth_f64/6` -- one `Process.get`, then the same
+  # call with the same arguments and the same return. So the swap is permanent
+  # and costs nothing in normal sampling.
+  #
+  # What it buys: the host-side half of a NUTS draw can be MEASURED instead of
+  # derived. Record every dispatch's returned bytes once, then replay them with
+  # the dispatch made free; the replay's wall time is the host half. No
+  # subtraction, which is what wrecked two previous estimates of this split --
+  # one of them produced physically impossible negative values.
+  #
+  # Replaying the RECORDED bytes rather than synthetic ones is the whole trick.
+  # The trajectory grows until a U-turn, and the U-turn test reads the positions
+  # and momenta the dispatch returned. Hand back zeros or plausible noise and
+  # the sampler walks a different tree to a different depth -- you would be
+  # timing a workload that never runs, and it would look like a clean result.
+  #
+  # CAVEAT, because it is silent: the record/replay state lives in the PROCESS
+  # DICTIONARY. `Sampler.sample_chains` fans out through `Task.async_stream`
+  # (sampler.ex:119) and `Tree.with_supervision` uses `Task.async`
+  # (tree.ex:1276), and neither inherits it. A recording taken across either
+  # boundary under-captures without saying so, and an under-captured trace
+  # looks exactly like a fast host half. Record on a single chain, in one
+  # process.
   defp leapfrog_f64(q_bin, p_bin, extras_bin, push, k, spv_path) do
-    Nx.Vulkan.NativeV.leapfrog_chain_synth_f64(q_bin, p_bin, extras_bin, push, k, spv_path)
+    Nx.Vulkan.ChainTrace.dispatch_f64(q_bin, p_bin, extras_bin, push, k, spv_path)
   end
 
   defp bins_to_chain_tensors({q_b, p_b, grad_b, logp_b}, k, d, _wire_type) do
