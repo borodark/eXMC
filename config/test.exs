@@ -15,14 +15,46 @@ config :exmc, test_config_loaded: true
 #
 # Run EXLA on the GPU instead: CUDA_VISIBLE_DEVICES=0 mix test
 #
-# Guarded on the platform because exla is not a dependency on FreeBSD — the
-# `xla` archive ships darwin and linux-gnu targets only, see the `@freebsd?`
-# conditional in mix.exs and b536a40. Configuring an application that is not
-# available is not an error, but Mix prints a nine-line "you have configured
-# application :exla ... but the application is not available" block on every
-# single test run, and a warning nobody can act on is one people learn to read
-# past. This became visible only when b2f462c made this file load at all.
-unless match?({:unix, :freebsd}, :os.type()) do
+# Guarded on whether exla IS HERE, not on which OS this is.
+#
+# Configuring an absent application is not an error, but Mix prints a nine-line
+# "you have configured application :exla ... but the application is not
+# available" block on every single test run, and a warning nobody can act on is
+# one people learn to read past. That is what needs suppressing.
+#
+# This used to read `unless match?({:unix, :freebsd}, :os.type())`, which is a
+# PROXY for the real condition. The proxy came from mix.exs, where the OS check
+# is correct and load-bearing: the `xla` archive ships darwin and linux-gnu
+# targets only, so on FreeBSD declaring exla at all breaks `mix deps.get`
+# before a single module compiles (see the @freebsd? conditional and b536a40).
+# But mix.exs has ALREADY made that decision by the time this file is read, and
+# re-deriving it here means the same fact is expressed twice, in two different
+# ways, free to drift.
+#
+# It is also wrong in cases nobody had hit yet. The proxy says "not FreeBSD,
+# therefore exla" — which is false on any Linux host that resolved without it,
+# on macOS, and on any future target the archive does not cover. The honest
+# predicate has no OS in it: is the module on the code path?
+#
+# The predicate has to be one that is TRUE AT CONFIG-LOAD TIME, and the two
+# obvious candidates are not. Measured on this host, by instrumenting this file:
+#
+#   Code.ensure_loaded?(EXLA)       = false   <- module not on the path yet
+#   Application.spec(:exla, :vsn)   = nil     <- applications not loaded yet
+#   Mix.Project.deps_paths()[:exla] = true    <- the dependency list, which IS
+#                                                resolved by now
+#
+# The first two are false here even on a host where exla is present and working
+# — config runs before modules are loadable and before any application is
+# loaded. Guarding on either silently drops the setting on EVERY platform, which
+# is a quieter failure than the warning it was meant to suppress: I tried
+# `Application.spec/2` first and `default_client` came back nil.
+#
+# `Mix.Project.deps_paths/0` reads the resolved dependency list, which is what
+# mix.exs's @freebsd? conditional actually decides. Safe here because
+# config/test.exs is build-time only and never evaluated in a release, where
+# Mix is absent.
+if Map.has_key?(Mix.Project.deps_paths(), :exla) do
   config :exla, default_client: :host
 end
 
