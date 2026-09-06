@@ -663,9 +663,20 @@ defmodule PosteriorDBValidator do
   # 0.03. That is an accurate posterior on a healthy sampler, so the gate was
   # wrong, not the model.
   #
-  # 10% gives ~1.7x headroom over the worst healthy model while still catching
-  # what it exists to catch: the Vulkan arm runs 45-94% on these models, 4.5-9x
-  # clear of the gate.
+  # 10% gives ~1.7x headroom over the worst healthy model.
+  #
+  # This comment used to add "and the Vulkan arm runs 45-94% on these models,
+  # 4.5-9x clear of the gate". WITHDRAWN 2026-09-06. Those rates were produced
+  # by a shader whose reduce loop was bounded by pc.n_obs while the data lived
+  # in captures, so n_obs was 0, the likelihood evaluated to nothing, and the
+  # sampler was exploring the prior. They measured a defect, not a backend.
+  # With the bound fixed, the same model gives 7/300 divergences -- IDENTICAL to
+  # EXLA on the same seed.
+  #
+  # The threshold itself is unaffected: it was derived from the EXLA baseline
+  # table above, which was never touched by that defect. What is gone is the
+  # claim about how much margin separates it from a failing backend, which is
+  # now simply unmeasured.
   #
   # Calibrated on the 6-model fast tier, one per family. Re-derive if the full
   # 33 turn up a healthy model above 6%.

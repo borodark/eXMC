@@ -1,5 +1,17 @@
 # posteriordb Validation Results
 
+> **Provenance (added 2026-09-06).** This file was produced BEFORE the harness
+> could name its compiler — that landed 2026-09-05. It records no backend, no
+> device, no commit. The arm was EXLA (the only one available to the harness
+> then, via `JIT.auto_detect/0`), and the scripted path forces
+> `CUDA_VISIBLE_DEVICES=""`, so CPU if `run_validation.sh` was the route.
+> It is NOT a Vulkan result, and the pass criteria it reports are the old fixed
+> constants — mean within 0.5 reference SD, SD within a factor of 2 — which
+> cannot fail on a convergence or efficiency regression. Re-running kilpisjarvi
+> under the current gates gives R-hat 1.845 at 300 draws, i.e. no convergence,
+> where this table records PASS. Treat every row as a historical EXLA figure
+> under superseded criteria.
+
 **Date:** 2026-02-19T06:27:22.588173Z
 **Pass rate:** 33/33 (100.0%)
 **Protocol:** 1000 warmup + 1000 sampling, seed=42, ncp=false

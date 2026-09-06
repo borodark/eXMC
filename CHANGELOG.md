@@ -215,8 +215,13 @@ with `EXMC_COMPILER=vulkan`. Runs anywhere Vulkan does, including FreeBSD and Mo
 - `push_too_large`: models whose priors exceed the 128-byte f64 push-constants block now
   degrade to per-op sampling (with a warning) instead of crashing at dispatch.
 - f64 `@data_sentinel` (matches the post-EMLX default precision).
-- Validation: posteriordb **33/33** on EXLA-GPU; Vulkan fallback verified on the FreeBSD
+- Validation: posteriordb **33/33** on EXLA; Vulkan fallback verified on the FreeBSD
   GT 650M (mac-247); clean-room `mix deps.get` resolves nx 0.13 + nx_vulkan.
+  (2026-09-06 correction: this said "EXLA-GPU". The device is not recorded
+  anywhere in the artifact, and the scripted path — `run_validation.sh:81` —
+  forces `CUDA_VISIBLE_DEVICES=""`, i.e. CPU. So the arm was EXLA and the
+  device is unknown. The suite gained a compiler switch and provenance only on
+  2026-09-05; every figure predating that names no backend.)
 - Requires nx_vulkan `main` (Nx-0.13-compatible).
 
 Story / release notes: [*A Posterior on Any GPU*](https://www.dataalienist.com/blog-a-posterior-on-any-gpu.html).

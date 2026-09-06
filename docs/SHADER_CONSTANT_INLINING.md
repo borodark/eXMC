@@ -7,12 +7,25 @@ roughly 1300 inlined elements the NVIDIA driver refuses to create the compute
 pipeline.
 
 This was invisible until `benchmark/posteriordb` was made to name its compiler.
-Its "33/33 PASS" is an EXLA-CPU result; nothing had ever run that suite on the
-GPU.
+Its "33/33 PASS" is an EXLA result, and the suite had never been run against the
+synthesised chain-shader path at all. Precisely: the artifact records no backend
+and no device, so the arm is inferred rather than read; the scripted path
+(`run_validation.sh:81`) forces `CUDA_VISIBLE_DEVICES=""`, which makes it
+EXLA-CPU whenever that script was the route.
 
 ## Evidence
 
 `--compiler vulkan` on the 33 posteriordb models: **1 PASS / 10 FAIL / 22 CRASH**.
+
+> **Read this census with 2026-09-06 hindsight.** The 22 crashes are the
+> pipeline ceiling this document is about, and they stand. The FAIL column does
+> not: those models were running a shader whose reduce loop was bounded by an
+> empty observation axis, so the likelihood evaluated to nothing and the
+> sampler explored the prior. The single PASS is `eight_schools`, and it passed
+> because its data folds to scalar GLSL literals and emits no reduce marker at
+> all — it is the one model of the 33 that the second defect could not reach.
+> That makes this census a confirmation of the diagnosis rather than an
+> anomaly, but the FAIL rows measure a bug, not a backend.
 21 of the 22 crashes are the same error, from `ComputePipeline::new`
 (`nx_vulkan/native/nx_vulkan_vulkano/src/lib.rs:139-144`):
 
@@ -194,16 +207,50 @@ Three distinct failures were found under `--compiler vulkan`. This plan addresse
 **one**.
 
 - **Pipeline size** — 21 models. This document.
-- **Inf/NaN out of the chain shader** — at 300/300, `sblrc-blr`, `sblri-blr`,
-  `mesquite-mesquite` and `mesquite-logmesquite_logvash` die in
-  `Exmc.NUTS.NativeTree.build_subtree_bin/9` with `badarg`. The dumped binaries
-  decode to `0x7FF0000000000000` (+Inf) and `0x7FFFFFFFE0000000` (NaN) in the
-  gradient and momentum. These models are *small* — `n_obs x n_beta` of 322-500,
-  far under the pipeline threshold — so this is a separate numerical bug and
-  will survive this fix untouched.
-- **Step-size collapse** (`eps -> 0.0`, ESS ~3). Partly a short-warmup artifact:
-  `earnings-earn_height` shows the same collapse under **EXLA** at 50/50. Needs a
-  full-protocol run before any of it is attributed to Vulkan.
+- **Inf/NaN out of the chain shader** — ~~a separate numerical bug that will
+  survive this fix untouched~~. **RETRACTED 2026-09-06. There was no separate
+  bug.**
+
+  The original observation was real: at 300/300, `sblrc-blr`, `sblri-blr`,
+  `mesquite-mesquite` and `mesquite-logmesquite_logvash` died in
+  `Exmc.NUTS.NativeTree.build_subtree_bin/9` with `badarg`, and the dumped
+  binaries decoded to `0x7FF0000000000000` (+Inf) and `0x7FFFFFFFE0000000` (NaN).
+  The reasoning from it was not. All four are capture-bearing models, so every
+  one of them was running a shader whose reduce loop was bounded by an empty
+  observation axis — no likelihood term at all. The sampler adapted a step size
+  to a density that was missing its data, wandered into a region no real
+  posterior would have taken it to, and overflowed the f32 boundary cast there.
+
+  Re-run with the reduce bound fixed, same protocol and seed, all four complete
+  with correct posteriors and **zero crashes**:
+
+  | model | max mean err | divergences |
+  | --- | ---: | ---: |
+  | `sblrc-blr` | 0.12 | 7/300 |
+  | `sblri-blr` | 0.16 | 6/300 |
+  | `mesquite-mesquite` | 0.16 | 20/300 |
+  | `mesquite-logmesquite_logvash` | 0.10 | 24/300 |
+
+  against an EXLA reference of 0.13 on `sblrc-blr`.
+
+  Two things survive the retraction, and they are worth separating. The
+  **f32 boundary cast is real** — nx_vulkan measured it independently and
+  arithmetically: `exp_d(x)` is `double(exp(float(x)))`, which overflows at
+  `ln(f32_max) = 88.7228`, and at half that for the `exp(float(2q))` families.
+  It is a genuine range limit, it was simply not what these four models were
+  hitting. And the **NIF-path finite guard is still correct**: a non-finite
+  trajectory is an ordinary "reject this trajectory" in HMC, and turning it into
+  a `badarg` was a real defect on its own terms, whatever drove the value
+  non-finite. Fixing the likelihood removed the cause; the guard remains the
+  right handling.
+- **Step-size collapse** (`eps -> 0.0`, ESS ~3). Two causes, now separated. The
+  short-warmup half is real and backend-independent: `earnings-earn_height`
+  collapses the same way under **EXLA** at 50/50, and 300 draws is not a viable
+  protocol either — `kilpisjarvi` gives R-hat 1.845 at 300 against 1.003 at
+  1000. The Vulkan-specific half was the missing likelihood: adaptation cannot
+  find a sensible step size for a density that has no data term. At the full
+  protocol with the bound fixed, the Vulkan arm's divergence rates match EXLA's
+  on the same models and seeds.
 
 Fixing the pipeline ceiling is what makes the other two *measurable* — today they
 are hidden behind 21 models that never reach the sampler.
