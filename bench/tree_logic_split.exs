@@ -37,12 +37,9 @@
 #   mix run bench/tree_logic_split.exs
 #   BASE=200 TOP=800 REPS=3 mix run bench/tree_logic_split.exs
 
-case System.get_env("EXMC_COMPILER") do
-  "vulkan" -> Application.put_env(:exmc, :compiler, :vulkan)
-  "exla" -> Application.put_env(:exmc, :compiler, :exla)
-  "none" -> Application.put_env(:exmc, :compiler, :none)
-  _ -> :ok
-end
+# EXMC_COMPILER is applied by config/runtime.exs in every environment. This
+# file used to re-apply it because the switch was test-only and inert under
+# `mix run`; that is no longer true.
 
 alias Exmc.Builder
 alias Exmc.Dist.Normal

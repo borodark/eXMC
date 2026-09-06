@@ -57,20 +57,22 @@ replicates = String.to_integer(System.get_env("REPLICATES") || "5")
 warmup = String.to_integer(System.get_env("WARMUP") || "6000")
 k = String.to_integer(System.get_env("K") || "32")
 
-# EXMC_COMPILER is honoured by `config/test.exs` ONLY, i.e. under MIX_ENV=test.
-# `mix run` is MIX_ENV=dev, where the variable is inert — so this file has to
-# apply it itself or its own "re-run with EXMC_COMPILER=vulkan" advice is a lie.
+# This file used to apply EXMC_COMPILER itself, because the switch lived in
+# `config/test.exs` and `mix run` is MIX_ENV=dev, where it was inert. The
+# comment said so, and said this script "has to apply it itself or its own
+# re-run advice is a lie". Both were true when written.
 #
-# It read as true on two hosts for unrelated reasons: super-io's EXLA is
-# unusable without LD_LIBRARY_PATH and mac-248 has no EXLA at all, so
-# auto_detect/0 fell through to Nx.Vulkan on both. On the Jetson, where EXLA
-# genuinely works, the same command selected EXLA and the guard below caught it.
-case System.get_env("EXMC_COMPILER") do
-  "vulkan" -> Application.put_env(:exmc, :compiler, :vulkan)
-  "exla" -> Application.put_env(:exmc, :compiler, :exla)
-  "none" -> Application.put_env(:exmc, :compiler, :none)
-  _ -> :ok
-end
+# `config/runtime.exs` now honours the variable in every environment, so the
+# block is gone and the guard below is the only thing left — it verifies the
+# resolved compiler rather than trusting that the request took.
+#
+# Keeping the archaeology, because it is the reason the guard exists: the old
+# arrangement read as WORKING on two hosts for unrelated reasons. super-io's
+# EXLA is unusable without LD_LIBRARY_PATH and mac-248 has no EXLA at all, so
+# `auto_detect/0` fell through to Nx.Vulkan on both and the inert variable
+# looked honoured. On the Jetson, where EXLA genuinely works, the same command
+# selected EXLA and the guard caught it. Two hosts agreeing is not
+# confirmation when they agree for a reason unrelated to the question.
 
 compiler = Exmc.JIT.detect_compiler()
 
