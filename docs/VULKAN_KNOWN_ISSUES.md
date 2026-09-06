@@ -170,6 +170,75 @@ EXMC_COMPILER=vulkan mix test \
   --include vulkan_known_failure
 ```
 
+## 4. `LevelSetIntegrationTest` — no fused shader, so the interpreter carries it
+
+**Status:** open. Tagged `:vulkan_known_failure`, excluded on the Vulkan arm.
+**Test:** `test/level_set_integration_test.exs` — "recovers circular inclusion
+on 6x6 grid".
+**Symptom:** `ExUnit.TimeoutError` at 300 s. Not a wrong answer, not a crash —
+too slow.
+
+### Mechanism
+
+Two refusals stacked, and the first one hides the second.
+
+`Exmc.NUTS.CustomSynth.extract_components/1` returns
+`{:error, :multiple_custom_nodes}`: the model has two `Dist.Custom` RVs, the
+N(0,2)+Laplacian prior on `phi` and the Heat2D likelihood, and that function
+handles at most one. So it never reaches GLSL at all.
+
+Lifting that guard would not help. The likelihood calls
+`Heat2D.solve(kappa, iterations: 30)`, which `Enum.reduce`-unrolls 30 rank-2
+Jacobi stencil steps, each built from `Nx.concatenate` and rank-2 `Nx.slice`.
+`Exmc.NUTS.CustomSynth.Glsl` is a scalar / rank-≤1 emitter and rejects any
+rank-2 literal outright.
+
+With no fused shader, `Exmc.JIT.jit/2`'s Vulkan clause is
+`Nx.Defn.Evaluator` — an interpreter — and cost is op count times per-op
+overhead, nothing else. Measured directly:
+
+| Jacobi iterations | 5 | 10 | 30 |
+| --- | --- | --- | --- |
+| gradient eval | 16.3 ms | 26.5 ms | 83.3 ms |
+
+Exactly linear, ~2.7 ms per unrolled step.
+
+### Measured cost
+
+| host | EXLA | Vulkan (interpreted) | full fixture, 800 iterations |
+| --- | --- | --- | --- |
+| super-io (RTX 3060 Ti) | ~24 ms/it | 2165 ms/it | **~29 min** |
+| Jetson (Tegra X1) | ~45 ms/it | 6280 ms/it | **~84 min** |
+
+Against a 300 s timeout and a suite that takes ~20 minutes in total.
+
+### Four remedies, all closed by measurement
+
+1. **Shrink the fixture.** `iterations: 30 → 10` plus `500+300 → 150+100` is
+   ~10x, which brings super-io to ~175 s — but leaves the Jetson at ~500 s,
+   still over. It also halves the signal behind a sign-pattern assertion
+   (`center_mean > corner_mean`), which is exactly the kind that goes flaky.
+2. **Raise the timeout.** Defensible on super-io alone; 84 minutes on the
+   Jetson for one test is not.
+3. **Route it to the CPU backend.** Measured dead: per-op `BinaryBackend` is
+   2950 ms/it on super-io against Vulkan's 2165, and 10279 vs 6280 on the
+   Jetson. The GPU is *winning* here. Per-op is slow because it is interpreted,
+   not because it is on a device.
+4. **Hand-write a shader.** The forward Jacobi stencil is a natural GPU
+   workload, but the chain path needs the GRADIENT, so this means hand-writing
+   the adjoint of a 30-step solve — high wrongness risk with a silent failure
+   mode.
+
+### What would actually fix it
+
+An array-capable emitter: rank-2 tensors, `concatenate`, strided rank-2 slice.
+The emitter's own comment calls this "Mission III Layer 2". That is a project,
+not a fix, and it is the honest reason this entry exists rather than a patch.
+
+Note the cost is *not* GPU dispatch. Both remedy 3's numbers and the ±36% spread
+between per-op Vulkan and a pure CPU backend say the same thing: the missing
+piece is a fusing compiler, not a faster device.
+
 ## Related: f32 precision tolerance failures (NOT in this file)
 
 Tests tagged `:requires_f64` (currently `gaussian_random_walk_test.exs`

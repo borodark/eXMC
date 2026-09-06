@@ -4,6 +4,20 @@ defmodule Exmc.LevelSetIntegrationTest do
   @moduletag :level_set_integration
   @moduletag timeout: 300_000
 
+  # Excluded on the Vulkan arm only. See docs/VULKAN_KNOWN_ISSUES.md #4.
+  #
+  # Not precision noise and not a flake: this model cannot reach the fused
+  # chain shader, so on Vulkan it runs through Nx.Defn.Evaluator op by op, and
+  # the wall clock is the unrolled op count times the interpreter overhead. It
+  # needs ~29 minutes on an RTX 3060 Ti and ~84 on the Jetson, against a 300 s
+  # timeout and a 20-minute suite.
+  #
+  # This is the tag this codebase treats with suspicion -- a test that passes
+  # by not running -- so the doc entry names the mechanism, the measurements
+  # and the four remedies that were tried and closed, rather than saying
+  # "known issue".
+  @moduletag :vulkan_known_failure
+
   alias Exmc.{Builder, NUTS.Sampler}
   alias Exmc.Dist
   alias Exmc.Physics.{LevelSet, Heat2D}
