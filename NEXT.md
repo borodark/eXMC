@@ -8,6 +8,119 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-07, the host half MEASURED on Kepler, and the serial reduce
+
+Two results, both from mac-248 (GT 750M, headless, 8 cores, idle). The first
+closes an outstanding gap in this document. The second is a defect the first
+one found by accident and is much the more important of the two.
+
+`bench/chain_trace_split.exs`, at `5deaf60da`, nx_vulkan `7af37b3`.
+
+### 1. The Jetson decomposition was a subtraction. This one is not.
+
+This file has carried, since 2026-09-01, a split of one dispatch into ~29%
+GPU / ~25% CPU-in-NIF / ~46% CPU-outside, obtained by subtracting a benchmark
+median from a wall-clock average — and its own admission that **neither Kepler
+had ever had the two halves separated at all**. Both are now addressed.
+
+Three instruments, none computed from the others:
+
+| | what it is |
+|---|---|
+| `wall` | a real `sample_compiled` run's wall clock |
+| `in chain/8` | `Dispatch.dispatch_micros/0` from that same run — a timer around the call |
+| `host` | `ChainTrace.replay/3`'s wall clock, every dispatch served from recorded bytes |
+
+Because none is derived from another, `host + in-chain ~= wall` is evidence
+rather than arithmetic. Measured, single chain, 2000 draws + 500 warmup,
+medians of 7, three independent passes:
+
+| model | dispatches | in chain/8 | host | us/dispatch | Closure A |
+|---|---|---|---|---|---|
+| scalar obs, d=1 | 2700 | **42.6%** | **55.8%** | 188.1 | -1.6% |
+| scalar obs, d=1 | 2700 | **42.6%** | **55.9%** | 189.3 | -1.5% |
+| scalar obs, d=1 | 2700 | 42.9% | 61.0% | 187.8 | +3.9% |
+| n_obs=64, d=2 | 622 | **92.8%** | **5.1%** | 33813.5 | -2.1% |
+
+Every closure is inside that run's own wall spread (8-12% for the scalar
+model, 0.8% for the observed one), and the busy-wait reconstruction agrees
+to 0.0-5.4%. Pass 3 is the noisy one — its replay spread was 5.1% against
+2.1-2.2% for the others; read passes 1 and 2.
+
+**Read `in chain/8` correctly.** It is marshalling, allocation, submit, fence,
+readback *and* GPU compute. It is not a GPU-utilisation figure and must never
+be quoted as one. Separating that pair needs an instrument inside the NIF,
+which we do not have.
+
+The scalar result lands near the Jetson's subtraction-derived one but leans
+the other way: 43/56 in-call/outside here against the Jetson's implied 54/46.
+That is one more reason not to have trusted the subtraction.
+
+### The instrument has a self-inflicted bias, and it is 25%
+
+The replay runs later, hotter, and in a process holding the whole trace live.
+A control arm repeats the timed run under exactly those conditions, and it
+found something the arm was not built for: **holding a 2.64 MiB trace slows
+the NIF CALL down by 25%** (507.8 -> 634.5 ms in-chain), not just the tree
+logic. Allocator pressure from a large live refc-binary set reaches inside
+the dispatch.
+
+So the control's tax must be taken on the *host portion*, not the wall — the
+in-chain part is already inside `in_chain_ms`, and subtracting the wall delta
+counts it twice. That error drove Closure A to -11% across two passes, which
+is how it was caught: the correction overshot by more than the raw error it
+was correcting.
+
+Consistency check the numbers pass on their own: the control is 25-27% for a
+188 us dispatch and **-0.0%** for a 33.8 ms one, where the same absolute cost
+is invisible. Anyone recording a long trace should expect the recorded run to
+be slower than the run they meant to measure.
+
+### 2. THE FINDING — the fused chain shader does not parallelise over observations
+
+The observed model spends 93% of its wall inside `chain/8` at 33.8 ms per
+dispatch, against 188 us for the scalar one. 180x. That is not a plausible
+cost for 64 observations on any GPU, so: sweep `n_obs`, K=8, d=2, median of 3
+x 200 dispatches, same host.
+
+| n_obs | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|---|---|---|---|---|
+| us/dispatch | 348 | 484 | 750 | 1288 | 2312 | 4407 | 8588 | 17309 | 33685 |
+| SPIR-V bytes | 41992 | 41992 | 41992 | 41992 | 41992 | 41992 | 41992 | 41992 | 41992 |
+
+**`cost ~= 215 + 131 * n_obs` us, to within 2% over eight doublings.** Every
+doubling of the data doubles the dispatch. Per leapfrog step that is
+~16 us *per observation*.
+
+The SPIR-V is byte-identical across all nine sizes, so this is not the
+pipeline-ceiling defect returning — `21700c04a` holds, the data is in the
+extras SSBO and the shader does not grow. It is the `/*REDUCE_SUM*/` marker
+expanding to a **serial GLSL for-loop**: one invocation walks the whole
+observation axis while the other 639 cores idle. The chain shader parallelises
+over the K leapfrog steps and over d, and not at all over n_obs.
+
+This is the same shape as the per-op finding already in this file — "the fix
+is fusion or batching, not widening a gate" — one level further in. The fusion
+happened; the reduce stayed scalar.
+
+**Consequences.**
+
+* Every posteriordb model with a real likelihood is on this curve. The
+  sblrc-class fixes made the answers right; they did not make this fast.
+* A "GPU-bound, 93% in the dispatch" reading of the observed model is
+  technically true and completely misleading. The card is idle.
+* It reframes the optimisation queue. Readback batching and fence costs are
+  ~200 us of fixed overhead; at n_obs=256 there is 33.5 ms of serial loop
+  sitting next to them.
+
+**Not yet established:** whether a tree/workgroup reduction over the 256
+declared invocations is straightforward here, and what it does to the f64
+determinism the equivalence gates depend on — a different summation order is
+a different answer at the 1e-15 level those gates assert. That question is
+the next piece of work, not a conclusion of this one.
+
+---
+
 ## Status 2026-09-02 — the f64 batched chain shader is written and verified
 
 The blocker is gone. `MultiRvCustomSpec.render_batched/1` now emits f64, every
