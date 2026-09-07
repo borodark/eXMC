@@ -272,6 +272,48 @@ if info.dispatches != recorded_dispatches or info.dispatches != n_dispatch do
 end
 
 # ---------------------------------------------------------------------------
+# Phase 3b — the control arm, and why Closure A needs one.
+#
+# `host_ms` below is a real run's wall clock with the dispatch removed, but it
+# is also a run taken LATER, on a hotter CPU, in a process now holding the
+# whole trace live on its heap. Both of those cost time that has nothing to do
+# with the host half, and both inflate `host_ms` in the same direction — so a
+# Closure A that OVERSHOOTS is exactly what they would produce, and cannot be
+# told apart from a genuine fourth term without measuring them.
+#
+# So: repeat Phase 2 verbatim, here, with the trace held. The difference from
+# the clean wall is what the position in the run and the live trace cost a
+# workload whose host half is already known. Subtracting it from `host_ms` is
+# not a fudge — it is the same measurement under the same conditions, which is
+# the only kind of subtraction this file allows.
+#
+# It does NOT separate the two mechanisms from each other. A multi-MiB live
+# binary set that every minor GC must scan, and a CPU that has dropped off
+# turbo after a minute of sustained load, are both in this number, and telling
+# them apart needs an instrument this file does not have.
+
+held =
+  Enum.map(1..replicates, fn r ->
+    {wall, n, in_chain} = measure_real.()
+
+    if n != n_dispatch do
+      halt.(
+        "ABORTED — control run #{r} made #{n} dispatches, the clean runs made #{n_dispatch}."
+      )
+    end
+
+    IO.puts(
+      "  held #{r}:  #{Float.round(wall, 1)} ms wall   " <>
+        "#{Float.round(in_chain, 1)} ms in chain/8"
+    )
+
+    {wall, in_chain}
+  end)
+
+wall_held_ms = median_by.(held, &elem(&1, 0))
+trace_tax_ms = wall_held_ms - wall_ms
+
+# ---------------------------------------------------------------------------
 # Phase 4 — host_ms, by replay.
 
 replay_samples =
@@ -339,13 +381,24 @@ IO.puts("""
     wall            #{Float.round(wall_ms, 1)} ms          spread #{spread.(Enum.map(real, &elem(&1, 0)))}%
     in chain/8      #{Float.round(in_chain_ms, 1)} ms   #{pct.(in_chain_ms)}%   spread #{spread.(Enum.map(real, &elem(&1, 2)))}%
     host (replay)   #{Float.round(host_ms, 1)} ms   #{pct.(host_ms)}%   spread #{spread.(replay_samples)}%
+    host corrected  #{Float.round(host_ms - trace_tax_ms, 1)} ms   #{pct.(host_ms - trace_tax_ms)}%
 
     #{n_dispatch} dispatches   #{Float.round(delay_us, 1)} us per dispatch inside chain/8
 
+  CONTROL — what do the position in the run, and the live trace, cost?
+
+    clean wall #{Float.round(wall_ms, 1)} ms   ->   held wall #{Float.round(wall_held_ms, 1)} ms   \
+= #{Float.round(trace_tax_ms, 1)} ms  (#{pct.(trace_tax_ms)}%)
+
+    Same run, same dispatch count, taken after the recording with the trace
+    live. Whatever this is, it is in `host` too, and it is not the host half.
+
   CLOSURE A — do the two independent halves add up to the wall clock?
 
-    host + in-chain = #{Float.round(host_ms + in_chain_ms, 1)} ms   vs wall #{Float.round(wall_ms, 1)} ms   \
-error #{err.(host_ms + in_chain_ms)}%
+    raw        host + in-chain = #{Float.round(host_ms + in_chain_ms, 1)} ms   \
+vs wall #{Float.round(wall_ms, 1)} ms   error #{err.(host_ms + in_chain_ms)}%
+    corrected  (host - control) + in-chain = #{Float.round(host_ms - trace_tax_ms + in_chain_ms, 1)} ms   \
+vs wall #{Float.round(wall_ms, 1)} ms   error #{err.(host_ms - trace_tax_ms + in_chain_ms)}%
 
   CLOSURE B — does replaying with the cost put back reconstruct the run?
 
@@ -362,12 +415,16 @@ delivered #{Float.round(achieved_us, 1)} us  (#{fidelity}%)
 
   HOW TO READ THIS
 
-  Read the closures BEFORE the split. Both errors within the wall spread means
-  the two halves account for the run and the percentages above are a real
-  decomposition. Either closure outside it means there is a term none of the
-  three instruments contains — most likely something the busy-wait does not
-  simulate, such as work the driver does asynchronously between dispatches —
-  and the split should not be quoted until that term is named.
+  Read the closures BEFORE the split, and read CORRECTED before RAW. A raw
+  Closure A that overshoots by about the control IS the control, and the
+  corrected line is the answer. A corrected Closure A still outside the wall
+  spread means there is a term none of the four instruments contains, and no
+  split should be quoted until that term is named.
+
+  Closure B has no corrected line on purpose: the control measures a whole
+  run and there is no principled way to attribute it per dispatch. Read B for
+  the fidelity line, and for whether the cost is uniform across dispatches —
+  the sign and rough size of its error should track A's RAW line.
 
   A large `in chain/8` share is NOT a GPU-bound run. That number is
   marshalling, allocation, submit, fence and readback as well as GPU compute,
