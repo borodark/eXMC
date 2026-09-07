@@ -1018,7 +1018,8 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   # unchanged: a span is a property of the model's observed nodes, and the
   # offset is a property of which instance is reading them.
   defp transform_reduce_sum(glsl, prefix, spans \\ :full, obs_index \\ "j", captures \\ []) do
-    do_transform_rs(glsl, prefix, [], 0, spans, obs_index, captures)
+    {markers, glsl} = collect_rs(glsl, prefix, [], 0, spans, obs_index, captures)
+    {render_reduce_loops(markers, obs_index), glsl}
   end
 
   defp reverse_spans(:full), do: :full
@@ -1157,7 +1158,12 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     "#{off + cnt}u"
   end
 
-  defp do_transform_rs(glsl, prefix, loops_acc, n, spans, obs_index, captures) do
+  # Collect every marker as `{bounds, accum, inner}` in emission order, WITHOUT
+  # rendering or CSE-ing it. Rendering is deferred to `render_reduce_loops/2`
+  # so that markers sharing a trip count can be fused into one loop; CSE is
+  # deferred with it, because a per-marker pass cannot see the redundancy
+  # BETWEEN markers, which is where nearly all of it lives.
+  defp collect_rs(glsl, prefix, acc, n, spans, obs_index, captures) do
     marker = "/*REDUCE_SUM*/("
 
     case :binary.match(glsl, marker) do
@@ -1173,7 +1179,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
                   "#{length(spans)} observed node(s); cannot attribute obs slices"
         end
 
-        {Enum.reverse(loops_acc), glsl}
+        {Enum.reverse(acc), glsl}
 
       {start, marker_len} ->
         open_paren = start + marker_len - 1
@@ -1187,29 +1193,148 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
             inner = binary_part(glsl, open_paren + 1, close_paren - open_paren - 1)
             accum = "#{prefix}#{n}"
 
-            # In-loop common-subexpression elimination: the per-obs body is
-            # emitted with heavy redundancy (a softmax denominator can recur
-            # thousands of times). Hoist repeated subexpressions into locals
-            # computed once per obs iteration — correct because obs_j and all
-            # bindings share this one loop scope.
-            {cse_binds, inner_cse} = cse_loop_body(inner)
+            # A nested marker was moved into `inner` wholesale and the scan
+            # never revisits it, so it would reach glslangValidator as a
+            # literal comment-and-paren and fail there with no reference to
+            # the model. It is not known whether the emitter can produce
+            # nested sums; find out from this raise rather than from a GLSL
+            # syntax error.
+            if String.contains?(inner, "/*REDUCE_SUM*/") do
+              raise "transform_reduce_sum: nested REDUCE_SUM marker inside marker #{n} " <>
+                      "(#{accum}); the outer loop body would carry an unexpanded marker"
+            end
 
-            loop_block = """
-            double #{accum} = 0.0lf;
-            for (uint j = #{elem(reduce_bounds(inner, captures, spans, n), 0)}; j < #{elem(reduce_bounds(inner, captures, spans, n), 1)}; j++) {
-                double obs_j = obs_inv_mass[#{obs_index}];
-            #{cse_binds}
-                #{accum} += (#{inner_cse});
-            }
-            """
+            # Once, not twice: `reduce_bounds/4` runs a regex scan over the
+            # body via `capture_reduce_len/2`, and the old code called it
+            # separately for the lo and the hi of one loop header.
+            bounds = reduce_bounds(inner, captures, spans, n)
 
             before = binary_part(glsl, 0, start)
             after_ = binary_part(glsl, close_paren + 1, byte_size(glsl) - close_paren - 1)
             new_glsl = before <> accum <> after_
 
-            do_transform_rs(new_glsl, prefix, [loop_block | loops_acc], n + 1, spans, obs_index, captures)
+            collect_rs(
+              new_glsl,
+              prefix,
+              [{bounds, accum, inner} | acc],
+              n + 1,
+              spans,
+              obs_index,
+              captures
+            )
         end
     end
+  end
+
+  # --- Loop fusion ---------------------------------------------------------
+  #
+  # `CustomSynth.Glsl` emits one marker per `sum` node, and reverse-mode AD of
+  # a multi-parameter log-density produces many. Rendering each as its own
+  # `for` loop made the shader walk the observation axis once per marker and
+  # load `obs_inv_mass[j]` once per marker per observation — MEASURED on
+  # mac-248 at 3 loops for `y ~ N(mu, 1)`, 15 for `y ~ N(mu, sigma)` and
+  # **165** for `y ~ T(df, mu, sigma)`, with bodies averaging ~4 arithmetic
+  # ops. Dispatch cost tracked the loop count, not the model size:
+  # `cost ~= 215 + 131*n_obs` us at d=2, and 716 us/obs at d=3.
+  #
+  # Markers that share a trip count are fused into ONE loop with one `obs_j`
+  # load and one accumulator per marker.
+  #
+  # This is BIT-IDENTICAL, and that is the reason it goes in ahead of the
+  # obs-axis parallelism this module's docstring has queued as "R2.2.1": each
+  # accumulator still visits the same `j` in the same order over the same
+  # values, so nothing is reassociated and the f64 result is unchanged to the
+  # last bit. A workgroup tree reduction would change the summation order and
+  # needs the equivalence tolerances re-derived first.
+  #
+  # Fusion is also what finally lets the CSE pass do its job. `@cse_min_len 18`
+  # against ~4-op bodies found nothing to hoist; run over the fused body it
+  # sees the repetition across accumulators that it was calibrated for.
+  defp render_reduce_loops([], _obs_index), do: []
+
+  defp render_reduce_loops(markers, obs_index) do
+    if fusable?(markers) do
+      markers
+      |> group_by_bounds()
+      |> Enum.map(fn {bounds, entries} -> reduce_loop(bounds, entries, obs_index) end)
+    else
+      # Conservative fallback: one loop per marker, exactly as before. Taken
+      # when some body reads another marker's accumulator, where fusing would
+      # hand it a PARTIAL sum instead of a finished one.
+      Enum.map(markers, fn {bounds, accum, inner} ->
+        reduce_loop(bounds, [{accum, inner}], obs_index)
+      end)
+    end
+  end
+
+  # Safe to fuse only if no marker's body reads another marker's accumulator.
+  # `collect_rs/7` rewrites each marker to its accumulator name in the
+  # SURROUNDING text, so sibling markers are independent by construction — but
+  # that is a property of the emitter, not a guarantee, and reading a partial
+  # sum would be a finite, plausible, wrong answer rather than a crash.
+  #
+  # Compares identifier sets rather than running a regex per pair: at 165
+  # markers the pairwise form is 27k regex compiles, and a substring test
+  # would match `_gacc0_1` inside `_gacc0_10`.
+  defp fusable?(markers) do
+    accums = MapSet.new(markers, fn {_bounds, accum, _inner} -> accum end)
+
+    Enum.all?(markers, fn {_bounds, own, inner} ->
+      inner
+      |> identifiers()
+      |> MapSet.delete(own)
+      |> MapSet.disjoint?(accums)
+    end)
+  end
+
+  defp identifiers(text) do
+    ~r/[A-Za-z_][A-Za-z0-9_]*/
+    |> Regex.scan(text)
+    |> List.flatten()
+    |> MapSet.new()
+  end
+
+  # Group by trip count, preserving first-appearance order. Markers with
+  # different bounds — per-node obs spans, or a capture-derived length — form
+  # separate groups and keep their own loops, which is correct: they iterate
+  # over different data.
+  defp group_by_bounds(markers) do
+    {order, groups} =
+      Enum.reduce(markers, {[], %{}}, fn {bounds, accum, inner}, {order, groups} ->
+        seen = Map.get(groups, bounds, [])
+        order = if seen == [], do: [bounds | order], else: order
+        {order, Map.put(groups, bounds, [{accum, inner} | seen])}
+      end)
+
+    order
+    |> Enum.reverse()
+    |> Enum.map(fn bounds -> {bounds, Enum.reverse(Map.fetch!(groups, bounds))} end)
+  end
+
+  # One loop, N accumulators, one obs_j load.
+  #
+  # CSE runs over the joined `+=` STATEMENTS rather than over a bare
+  # expression. That is safe because `group_freqs/1` only ever proposes
+  # balanced `(...)` groups found by paren matching, so a hoisted candidate is
+  # always a complete parenthesised subexpression and can never span a `;`.
+  # With a single entry it reduces to the pre-fusion output: the extra
+  # `(#{inner})` group appears once and `shortest_repeat/1` requires count > 1.
+  defp reduce_loop({lo, hi}, entries, obs_index) do
+    decls = Enum.map_join(entries, "\n", fn {accum, _inner} -> "double #{accum} = 0.0lf;" end)
+
+    adds =
+      Enum.map_join(entries, "\n", fn {accum, inner} -> "    #{accum} += (#{inner});" end)
+
+    {cse_binds, adds_cse} = cse_loop_body(adds)
+
+    """
+    #{decls}
+    for (uint j = #{lo}; j < #{hi}; j++) {
+        double obs_j = obs_inv_mass[#{obs_index}];
+    #{cse_binds}
+    #{adds_cse}
+    }
+    """
   end
 
   # --- In-loop common-subexpression elimination -------------------
