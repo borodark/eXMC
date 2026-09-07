@@ -187,8 +187,15 @@ defmodule Exmc.MixProject do
   #
   # The path deps `override: true` so exla's own `{:nx, path: "../nx"}` resolves
   # to the same tree.
+  #
+  # THREE components, not two. `~> 0.13` admits 0.14 and 0.15 -- Elixir's
+  # `~>` only pins the last component given, so the two-component form is a
+  # major-series wildcard on a library whose 0.x minors are breaking changes.
+  # `~> 0.13.1` admits 0.13.x and nothing beyond. nx_vulkan pins the same way
+  # and the two must agree, or a `mix deps.get` here resolves an nx that its
+  # NIF was not built against.
   defp nx_dep, do: nx_dep(System.get_env("NX_PATH"))
-  defp nx_dep(nil), do: {:nx, "~> 0.13"}
+  defp nx_dep(nil), do: {:nx, "~> 0.13.1"}
   defp nx_dep(path), do: {:nx, path: Path.join(path, "nx"), override: true}
 
   # `runtime: false` keeps exla off the boot path — it stays on the code path
