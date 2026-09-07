@@ -1,6 +1,8 @@
 # Fusing the observation-axis loops
 
-**Status:** planned, not started. Written 2026-09-07 against `95b3a06b1`.
+**Status:** IMPLEMENTED in `f2ae139d7`. Plan written 2026-09-07 against
+`95b3a06b1`; §4 below replaced with the measured result, which refuted the
+prediction it originally contained.
 **Measured on:** mac-248 (GT 750M, headless, idle), nx_vulkan `7af37b3`.
 
 The fused f64 chain shader re-walks the observation axis once per `Nx.sum`
@@ -169,28 +171,84 @@ of this.
 
 ---
 
-## 4. Expected effect — stated as a prediction, to be falsified
+## 4. Measured effect — and the prediction it refuted
 
-Fusion does not remove arithmetic. It removes L-1 of every L global loads of
-`obs_j`, and L-1 loop overheads, and it lets CSE run once over a body large
-enough to have something to hoist.
+This section predicted: "If the cost is load-dominated, the slope falls by
+close to L (15x for the d=2 model, 165x for the Student-t)."
 
-If the cost is load-dominated, the slope falls by close to L (15x for the d=2
-model, 165x for the Student-t). If it is arithmetic-dominated, it barely moves
-and the CSE hoisting is the only gain. The flat ~1.1 us per op-observation
-across two models of very different loop counts is weak evidence for the
-former, and it is weak because op count and loop count are correlated in that
-data.
+**Wrong, by an order of magnitude.** Paired on mac-248, same box, same
+session, only the exmc commit differing — `745376bb5` (unfused) against
+`f2ae139d7` (fused), slope in us per observation, taken over n_obs in
+{16, 64, 256}:
 
-**Do not report a speedup without re-running the sweep in §5.** A prediction
-this file makes is not a result.
+| model | loops | before | after | speedup |
+|---|---|---|---|---|
+| `y ~ N(mu, 1)`, d=1 | 3 -> 3 | 2.3 | 2.4 | 1.0x (control) |
+| `y ~ N(mu, sigma)`, d=2 | 15 -> 5 | 130.8 | 72.5 | **1.80x** |
+| `y ~ T(df, mu, sigma)`, d=3 | 165 -> 7 | 715.2 | 391.1 | **1.83x** |
 
----
+23.6x fewer traversals bought 1.83x. The d=1 arm is a genuine control: its
+three loops live in three different template holes and cannot merge, and it
+did not move.
+
+### The 2x2 that says why, instead of leaving it to inference
+
+`config :exmc, glsl_cse: false` toggles the CSE pass, so fusion and CSE can be
+crossed rather than attributed by reading static op counts. Slopes, us/obs:
+
+| d=3 | CSE on | CSE off |
+|---|---|---|
+| unfused (165 loops) | 715.1 | 728.8 |
+| fused (7 loops) | 389.9 | 488.7 |
+
+| d=2 | CSE on | CSE off |
+|---|---|---|
+| unfused (15 loops) | 130.6 | 130.8 |
+| fused (5 loops) | 72.6 | 73.2 |
+
+Reading the cells:
+
+* **CSE on the unfused shader is worth nothing** — 1.9% at d=3, 0.2% at d=2.
+  That is the `@cse_min_len 18` diagnosis in §2 confirmed directly: with ~4-op
+  bodies there is nothing long enough to hoist.
+* **Fusion alone** (CSE off, both arms) is **1.49x** at d=3 and **1.79x** at
+  d=2. This is the loop overhead and the L-1 redundant `obs_j` loads, and it
+  is the larger half.
+* **CSE after fusion** adds **1.25x** at d=3 and **nothing** (0.8%) at d=2 —
+  even though it removes 31% of d=2's static ops (117 -> 81). The SPIR-V
+  compiler was evidently already eliminating those; at d=3's 671 ops it is
+  not, and source-level hoisting starts to pay.
+
+So the honest decomposition is: most of the win is fusion itself, a further
+quarter at large op counts is CSE that fusion unlocks, and **the arithmetic
+that remains is the floor** — fusion removes traversals, not operations, and
+after it the per-op cost is ~0.92 us against ~1.09 before.
+
+An intermediate inference of mine, that CSE was the dominant mechanism because
+static op counts fell 31-39%, was also wrong and is recorded here for the same
+reason as §1's two: the op count moved and the clock did not.
+
+### What this means for the queue
+
+The remaining cost is arithmetic executed by one invocation while 255 idle, so
+§6's obs-axis parallelism is now the whole of the remaining opportunity rather
+than a second-order term. It was worth doing fusion first anyway — it is
+bit-identical and it took ~1.8x off every observed model on the way — but it
+does not substitute for it.
 
 ## 5. Verification
 
 The failure mode for this class is a finite, plausible, wrong log-density, so
 "the tests pass" is not evidence. In order:
+
+**Done for this change:** step 2 (bit-identity, 18 goldens, all matching),
+step 3 (the sweep, above), step 4 (SPIR-V fell: d=2 41992 -> 35392, d=3
+568456 -> 492552) and the local half of step 5 (super-io Vulkan arm 688/1,
+the same Cauchy KS failure that predates the change; an `ess/1` flake on an
+unseeded `:rand.normal()` passed 3/3 on re-run). **Step 1 was NOT done** —
+the goldens are a one-shot external check, not a gate in the suite, and
+promoting `leapfrog_leaf_diff.exs` remains open. Step 5's fleet and
+posteriordb arms remain open.
 
 1. **A gate that can fail, first.** `bench/leapfrog_leaf_diff.exs` is the only
    shader-vs-host numerical harness and it computes `ok_q/ok_p/ok_g/ok_lp` and

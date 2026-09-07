@@ -134,8 +134,23 @@ is *between* the loops, where the pass does not look.
 So the first fix is fusion, which is **bit-identical** (same j, same order, per
 accumulator) and needs neither new tolerances nor barriers in divergent control
 flow. Obs-axis parallelism is second, and it is the half that changes summation
-order. Planned in `docs/OBS_LOOP_FUSION.md`, with the prerequisite that
-`bench/leapfrog_leaf_diff.exs` become a test that can actually fail first.
+order. Planned in `docs/OBS_LOOP_FUSION.md`.
+
+**LANDED in `f2ae139d7`**, and the plan's own prediction was wrong. Loops fell
+3->3 (d=1, its floor), 15->5 and 165->7; SPIR-V fell 41992->35392 and
+568456->492552; all 18 golden digests matched **exactly**, so the bit-identity
+claim holds. But 23.6x fewer traversals bought **1.83x**, not the "close to L"
+the plan predicted. A 2x2 against `config :exmc, glsl_cse: false` says why:
+CSE on the unfused shader is worth 0.2-1.9% (the `@cse_min_len` diagnosis,
+confirmed), fusion alone is 1.49-1.79x, and CSE *after* fusion adds 1.25x at
+d=3 and nothing at d=2. The arithmetic is the floor — fusion removes
+traversals, not operations.
+
+That makes obs-axis parallelism the whole of the remaining opportunity rather
+than a second-order term: what is left is arithmetic run by one invocation
+while 255 idle. Promoting `bench/leapfrog_leaf_diff.exs` into a test that can
+fail is still open, and is a prerequisite for THAT change, which is not
+bit-identical.
 
 Two hypotheses were tested and refuted along the way; §1 of that document
 records them so they are not re-derived.
