@@ -311,7 +311,19 @@ held =
   end)
 
 wall_held_ms = median_by.(held, &elem(&1, 0))
-trace_tax_ms = wall_held_ms - wall_ms
+in_chain_held_ms = median_by.(held, &elem(&1, 1))
+
+# MEASURED, and it is why this is computed on the host portion and not on the
+# wall: holding the trace slows THE DISPATCH DOWN TOO. On mac-248, in-chain
+# went 509.6 -> 637.2 ms between the clean and held runs, 25% on the NIF call
+# itself, presumably allocator pressure from a multi-MiB live refc-binary set.
+#
+# So about a third of the control's wall delta lands inside chain/8, where
+# `in_chain_ms` already accounts for it. Subtracting the whole wall delta from
+# `host_ms` double-counts that third and drives Closure A to -11%, which is
+# how this was found: the correction overshot by more than the raw error it
+# was correcting. Take the host portion of each control run instead.
+host_tax_ms = wall_held_ms - in_chain_held_ms - (wall_ms - in_chain_ms)
 
 # ---------------------------------------------------------------------------
 # Phase 4 — host_ms, by replay.
@@ -381,24 +393,32 @@ IO.puts("""
     wall            #{Float.round(wall_ms, 1)} ms          spread #{spread.(Enum.map(real, &elem(&1, 0)))}%
     in chain/8      #{Float.round(in_chain_ms, 1)} ms   #{pct.(in_chain_ms)}%   spread #{spread.(Enum.map(real, &elem(&1, 2)))}%
     host (replay)   #{Float.round(host_ms, 1)} ms   #{pct.(host_ms)}%   spread #{spread.(replay_samples)}%
-    host corrected  #{Float.round(host_ms - trace_tax_ms, 1)} ms   #{pct.(host_ms - trace_tax_ms)}%
+    host corrected  #{Float.round(host_ms - host_tax_ms, 1)} ms   #{pct.(host_ms - host_tax_ms)}%
 
     #{n_dispatch} dispatches   #{Float.round(delay_us, 1)} us per dispatch inside chain/8
 
   CONTROL — what do the position in the run, and the live trace, cost?
 
-    clean wall #{Float.round(wall_ms, 1)} ms   ->   held wall #{Float.round(wall_held_ms, 1)} ms   \
-= #{Float.round(trace_tax_ms, 1)} ms  (#{pct.(trace_tax_ms)}%)
+    wall      #{Float.round(wall_ms, 1)} -> #{Float.round(wall_held_ms, 1)} ms
+    in chain  #{Float.round(in_chain_ms, 1)} -> #{Float.round(in_chain_held_ms, 1)} ms   \
+(#{Float.round((in_chain_held_ms - in_chain_ms) / in_chain_ms * 100, 1)}% — the NIF call itself)
+    host      #{Float.round(wall_ms - in_chain_ms, 1)} -> \
+#{Float.round(wall_held_ms - in_chain_held_ms, 1)} ms   \
+= #{Float.round(host_tax_ms, 1)} ms  (#{pct.(host_tax_ms)}%)
 
     Same run, same dispatch count, taken after the recording with the trace
-    live. Whatever this is, it is in `host` too, and it is not the host half.
+    live. Only the host line is subtracted from `host`: the in-chain line is
+    already inside `in_chain_ms`, and taking the wall delta instead would
+    count it twice. Read the in-chain line as a result in its own right — a
+    large live binary set makes the dispatch measurably slower, which is a
+    fact about the instrument that anyone recording a long run should know.
 
   CLOSURE A — do the two independent halves add up to the wall clock?
 
     raw        host + in-chain = #{Float.round(host_ms + in_chain_ms, 1)} ms   \
 vs wall #{Float.round(wall_ms, 1)} ms   error #{err.(host_ms + in_chain_ms)}%
-    corrected  (host - control) + in-chain = #{Float.round(host_ms - trace_tax_ms + in_chain_ms, 1)} ms   \
-vs wall #{Float.round(wall_ms, 1)} ms   error #{err.(host_ms - trace_tax_ms + in_chain_ms)}%
+    corrected  (host - control) + in-chain = #{Float.round(host_ms - host_tax_ms + in_chain_ms, 1)} ms   \
+vs wall #{Float.round(wall_ms, 1)} ms   error #{err.(host_ms - host_tax_ms + in_chain_ms)}%
 
   CLOSURE B — does replaying with the cost put back reconstruct the run?
 
