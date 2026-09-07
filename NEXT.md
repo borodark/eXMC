@@ -113,11 +113,32 @@ happened; the reduce stayed scalar.
   ~200 us of fixed overhead; at n_obs=256 there is 33.5 ms of serial loop
   sitting next to them.
 
-**Not yet established:** whether a tree/workgroup reduction over the 256
-declared invocations is straightforward here, and what it does to the f64
-determinism the equivalence gates depend on — a different summation order is
-a different answer at the 1e-15 level those gates assert. That question is
-the next piece of work, not a conclusion of this one.
+**The mechanism is loop fission, not just a serial loop** — established after
+the above was written, and it changes what to fix first. Sweeping the model
+instead of the data, slope over n_obs in {16,64,256}:
+
+| model | obs loops emitted | ops in them | us/obs | us per op-obs |
+|---|---|---|---|---|
+| `y ~ N(mu, 1)`, d=1 | 3 | 16 | 2.4 | 0.15 |
+| `y ~ N(mu, sigma)`, d=2 | 15 | 117 | 130.7 | 1.12 |
+| `y ~ T(df, mu, sigma)`, d=3 | 165 | 671 | 716.5 | 1.07 |
+
+`CustomSynth.Glsl` emits one `/*REDUCE_SUM*/` per `sum` node in the autodiffed
+log-density and `do_transform_rs/7` gives each its own complete `for` loop, so
+a three-parameter Student-t walks the observation axis **165 times** and loads
+`obs_inv_mass[j]` 165 times per observation. Bodies average ~4 ops, all 15
+loops of the d=2 model carry identical bounds, and `cse_loop_body/1` cannot
+help because its `@cse_min_len 18` sees each tiny body alone — the redundancy
+is *between* the loops, where the pass does not look.
+
+So the first fix is fusion, which is **bit-identical** (same j, same order, per
+accumulator) and needs neither new tolerances nor barriers in divergent control
+flow. Obs-axis parallelism is second, and it is the half that changes summation
+order. Planned in `docs/OBS_LOOP_FUSION.md`, with the prerequisite that
+`bench/leapfrog_leaf_diff.exs` become a test that can actually fail first.
+
+Two hypotheses were tested and refuted along the way; §1 of that document
+records them so they are not re-derived.
 
 ---
 
