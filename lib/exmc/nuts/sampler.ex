@@ -92,7 +92,20 @@ defmodule Exmc.NUTS.Sampler do
   Same interface as `sample_chains/3` but skips compilation.
   """
   def sample_chains_compiled(compiled, num_chains, opts \\ []) when num_chains >= 1 do
-    vectorized = Keyword.get(opts, :vectorized, num_chains > 1)
+    # DEFAULT FALSE, deliberately. This used to be `num_chains > 1`, so the
+    # vectorized path was what every multi-chain caller got without asking.
+    #
+    # Two reasons it should not be. It froze chains outright until the Phase 2
+    # fix in `sample_chains_vectorized_compiled/3` (see the comment there);
+    # and even correct, sharing one warmup means every chain starts from that
+    # warmup's endpoint, so the chains are not over-dispersed and R-hat loses
+    # most of its power to detect non-convergence. A default that silently
+    # weakens the convergence diagnostic is the wrong default for a library
+    # whose users read R-hat.
+    #
+    # It remains available as `vectorized: true` for callers who want one
+    # warmup instead of N and are not relying on R-hat.
+    vectorized = Keyword.get(opts, :vectorized, false)
 
     if vectorized and num_chains > 1 do
       sample_chains_vectorized_compiled(compiled, num_chains, opts)
@@ -1128,7 +1141,8 @@ defmodule Exmc.NUTS.Sampler do
   Plus all options from `sample/3` (`:num_warmup`, `:num_samples`, `:seed`, etc.).
   """
   def sample_chains(ir, num_chains, opts \\ []) when num_chains >= 1 do
-    vectorized = Keyword.get(opts, :vectorized, num_chains > 1)
+    # See sample_chains_compiled/3 for why this defaults to false.
+    vectorized = Keyword.get(opts, :vectorized, false)
 
     if vectorized and num_chains > 1 do
       sample_chains_vectorized(ir, num_chains, opts)
@@ -1226,7 +1240,7 @@ defmodule Exmc.NUTS.Sampler do
 
         warmup_state = %{q: q0, logp: logp0, grad: grad0, rng: rng0, divergences: 0}
 
-        {_warmup_state, epsilon_final, inv_mass, chol_cov} =
+        {warmed_state, epsilon_final, inv_mass, chol_cov} =
           run_warmup(
             active_step_fn,
             warmup_state,
@@ -1240,17 +1254,57 @@ defmodule Exmc.NUTS.Sampler do
             nil
           )
 
-        # --- Phase 2: Initialize N chains with different seeds ---
+        # --- Phase 2: Initialize N chains from WARMUP'S ENDPOINT ---
+        #
+        # This used to call `init_position(pm, init_values, ...)` again, which
+        # put every chain back on the starting point while Phase 3 sampled
+        # with the epsilon and inv_mass warmup had adapted to the typical set.
+        # The adaptation was applied to a state the adaptation never saw.
+        #
+        # It froze chains outright. Reported by the pathmc_ex session and
+        # reproduced here on pure BinaryBackend (so: not a GPU path), a
+        # 40-observation Gaussian regression gave, same IR and same init, only
+        # the flag differing:
+        #
+        #   vectorized: true    step 0.311  energy0 3248.73  accept0 7.2e-144
+        #   vectorized: false   step 0.310  energy0   -0.19  accept0 0.996
+        #
+        # Step size and inv_mass are healthy in BOTH. It is the starting
+        # ENERGY that is wrong, so every proposal is rejected and every draw
+        # equals the init value. Nothing is flagged divergent, because the
+        # energy is finite -- just enormous. The reporter saw one run at
+        # 600/600 divergent and another at 0/600 with the same frozen trace.
+        #
+        # The predicate is init distance relative to POSTERIOR WIDTH, not the
+        # likelihood type. Warmup adapts inv_mass to the posterior scale
+        # (~1.6e-4 for that model), so eps*inv_mass moves ~0.0016 per
+        # iteration and beta 0 -> 2 is unreachable. A far init on a plain
+        # Normal walks back fine; a tight likelihood started at its mode
+        # samples fine. Any regression test for this MUST start far from the
+        # mode or it passes vacuously.
+        #
+        # Every chain therefore now starts where warmup finished, which is the
+        # state the metric describes. `init_values` keeps its meaning: where
+        # WARMUP starts.
+        #
+        # THE COST, which is why `vectorized` is no longer the default: the
+        # chains are no longer over-dispersed with respect to each other, and
+        # R-hat's power to detect non-convergence comes from over-dispersed
+        # starts. Sharing one warmup and keeping independent starting points
+        # are not both available without a second adaptation pass per chain.
+        # Callers who need R-hat as a diagnostic should use the parallel path;
+        # this one trades that for a single warmup.
         chain_seeds = Enum.map(0..(num_chains - 1), fn i -> base_seed + i * 7919 end)
 
         chain_states =
           Enum.map(chain_seeds, fn seed ->
-            rng = :rand.seed_s(:exsss, seed)
-            {q, rng} = init_position(pm, init_values, d, rng, ncp_info)
-            {logp, grad} = vag_fn.(q)
-            logp = Nx.backend_copy(logp, Nx.BinaryBackend)
-            grad = Nx.backend_copy(grad, Nx.BinaryBackend)
-            %{q: q, logp: logp, grad: grad, rng: rng, divergences: 0}
+            %{
+              q: warmed_state.q,
+              logp: warmed_state.logp,
+              grad: warmed_state.grad,
+              rng: :rand.seed_s(:exsss, seed),
+              divergences: 0
+            }
           end)
 
         # --- Phase 3: Sample all chains sequentially (no XLA contention) ---
