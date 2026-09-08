@@ -322,7 +322,7 @@ defmodule Exmc.NUTS.CustomSynth do
   @spec extract_components(IR.t()) ::
           {:ok, %{priors: list(), observed: list(), custom: tuple() | nil, layout: [atom()]}}
           | {:error, atom()}
-  def extract_components(%IR{nodes: nodes}) do
+  def extract_components(%IR{nodes: nodes} = ir) do
     # An RV `rv_id` is *observed* when some node carries
     # `{:obs, rv_id, value, meta}`.  Observed RVs are not free
     # parameters — they contribute a likelihood term but stay out
@@ -391,7 +391,7 @@ defmodule Exmc.NUTS.CustomSynth do
 
           true ->
             {:ok,
-             build_components(priors, observed, {node_id(node), custom_struct, custom_params})}
+             build_components(ir, priors, observed, {node_id(node), custom_struct, custom_params})}
         end
 
       [] ->
@@ -404,7 +404,7 @@ defmodule Exmc.NUTS.CustomSynth do
         if priors == [] do
           {:error, :no_rvs}
         else
-          {:ok, build_components(priors, observed, nil)}
+          {:ok, build_components(ir, priors, observed, nil)}
         end
 
       _ ->
@@ -414,7 +414,9 @@ defmodule Exmc.NUTS.CustomSynth do
     end
   end
 
-  defp build_components(priors, observed, custom) do
+  defp build_components(ir, priors, observed, custom) do
+    slots = build_slots(ir)
+
     %{
       priors:
         Enum.map(priors, fn {id, node} ->
@@ -423,10 +425,44 @@ defmodule Exmc.NUTS.CustomSynth do
         end),
       observed: observed,
       custom: custom,
-      # Only latents go in the layout — observed RVs are not sampled.
-      layout: Enum.map(priors, fn {id, _} -> id end)
+      # ONE ENTRY PER q SLOT, not per RV name.
+      #
+      # `layout` is the q-vector order and `d = length(layout)` is the shader's
+      # thread count, so a `shape: {2}` RV must contribute two entries. It used
+      # to contribute one: the trace template was
+      # `Nx.template({length(layout)}, :f64)`, so a vector RV arrived at the
+      # closure as a SCALAR and `p.beta[0]` raised "cannot use the tensor[index]
+      # syntax on scalar tensor" — while `Exmc.PointMap` had correctly given it
+      # two slots. Two coordinate systems for one q vector, which is the same
+      # class of defect as the NCP/centred mismatch fixed in compiler.ex.
+      #
+      # Names are `id` for a scalar RV and `id[k]` for element k of a vector
+      # one. They are diagnostic labels; the AUTHORITY is `slots`.
+      layout: Enum.flat_map(slots, &slot_names/1),
+      slots: slots
     }
   end
+
+  # Derived from `Exmc.PointMap.build/1` rather than recomputed here, and that
+  # is the point: the synth path and the host sampler must agree on where each
+  # RV lives in q, and agreement by construction beats agreement by two
+  # implementations of the same rule. PointMap also resolves the UNCONSTRAINED
+  # length and shape (a `:stick_breaking` RV has a different unconstrained size
+  # than constrained), which a local reimplementation would have to mirror.
+  #
+  # Restricted to ids this component set actually samples: PointMap is built
+  # from the whole IR, and an observed RV is not a free parameter.
+  defp build_slots(%IR{} = ir) do
+    ir
+    |> Exmc.PointMap.build()
+    |> Map.fetch!(:entries)
+    |> Enum.map(fn e ->
+      %{id: e.id, offset: e.offset, length: e.length, shape: e.shape}
+    end)
+  end
+
+  defp slot_names(%{id: id, length: 1}), do: [id]
+  defp slot_names(%{id: id, length: n}), do: Enum.map(0..(n - 1), &"#{id}[#{&1}]")
 
   # A standard-family RV node (not a Custom likelihood). Matches both the
   # bare 3-tuple `{:rv, mod, params}` and the 4-tuple

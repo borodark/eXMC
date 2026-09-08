@@ -465,6 +465,93 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
     "(" <> Enum.map_join(1..n, " * ", fn _ -> "(#{a_s})" end) <> ")"
   end
 
+  # --- Nx.dot over a constant design matrix and a parameter vector ---
+  #
+  # `Nx.dot(X, beta)` with X a captured `{n, p}` tensor and beta a `{p}`
+  # parameter vector is THE regression idiom, and it was refused twice over:
+  # `:dot` had no clause at all, and a rank-2 capture returns
+  # `{:error, {:unsupported_rank, 2}}` because the extras SSBO is flat.
+  #
+  # Both go away by unrolling the contraction. p is known at synthesis time, so
+  #
+  #     dot(X, beta)[j]  ==  X[j,0]*beta_0 + ... + X[j,p-1]*beta_{p-1}
+  #
+  # and each `X[.., k]` is a rank-1 column the existing capture machinery
+  # already handles. The SSBO stays flat, no rank-2 support is needed, and the
+  # result is an ordinary obs-axis scalar expression in `j` — exactly what the
+  # REDUCE_SUM loop consumes.
+  #
+  # Only the `[1], [], ..., [0], []` axis signature is matched: contract X's
+  # last axis with beta's only axis, no batching. Anything else falls through
+  # to the catch-all and is refused rather than silently contracted along the
+  # wrong axis.
+  defp do_emit(:dot, [a, [1], [], b, [0], []], layout) do
+    with {:ok, m} <- const_matrix(a),
+         {:ok, elems} <- emit_param_vec(b, layout) do
+      {_n, p} = m.shape
+
+      if length(elems) == p do
+        terms =
+          elems
+          |> Enum.with_index()
+          |> Enum.map(fn {e, k} -> "(#{register_capture(m[[.., k]])} * #{e})" end)
+
+        {:ok, "(" <> Enum.join(terms, " + ") <> ")"}
+      else
+        {:error, {:dot_shape_mismatch, p, length(elems)}}
+      end
+    end
+  end
+
+  # --- inner product over the OBSERVATION axis ---
+  #
+  # Reverse-mode AD of `dot(X, beta)` produces, for each parameter k, the
+  # contraction `sum_j X[j,k] * r_j` — two rank-1 operands contracted to a
+  # scalar. That is an obs-axis reduction, so it emits as the same
+  # `/*REDUCE_SUM*/` marker `Nx.sum` does, over the product of the two
+  # operands' per-`j` expressions.
+  #
+  # Both operands must be rank 1. A rank-2 operand here would be a contraction
+  # this clause has no right to guess the axis order of, and falls through to
+  # the catch-all.
+  defp do_emit(:dot, [%T{shape: {n}} = a, [0], [], %T{shape: {n}} = b, [0], []], layout) do
+    with {:ok, a_s} <- emit(a, layout),
+         {:ok, b_s} <- emit(b, layout) do
+      {:ok, "/*REDUCE_SUM*/((#{a_s}) * (#{b_s}))"}
+    end
+  end
+
+  defp const_matrix(%T{data: %Expr{op: :tensor, args: [%T{shape: {_n, _p}} = t]}}), do: {:ok, t}
+  defp const_matrix(_other), do: {:error, {:unsupported_op, :dot}}
+
+  # A PARAMETER-AXIS vector: statically many scalar GLSL expressions, one per
+  # free coordinate. Distinct from the observation axis, which stays implicit —
+  # an obs-axis value is a single expression in `j`.
+  #
+  # This is how a `shape: {2}` RV reaches the emitter at all.
+  # `MultiRvCustomSpec.slot_slice/2` builds it as `Nx.stack([q[off], q[off+1]])`
+  # precisely because the emitter is otherwise scalar-valued and a
+  # multi-element `Nx.slice` has no representation in it.
+  defp emit_param_vec(%T{data: %Expr{op: :stack, args: [elems, _axis]}}, layout)
+       when is_list(elems) do
+    elems
+    |> Enum.reduce_while({:ok, []}, fn e, {:ok, acc} ->
+      case emit(e, layout) do
+        {:ok, str} -> {:cont, {:ok, [str | acc]}}
+        err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      err -> err
+    end
+  end
+
+  defp emit_param_vec(%T{data: %Expr{op: :reshape, args: [t | _]}}, layout),
+    do: emit_param_vec(t, layout)
+
+  defp emit_param_vec(_other, _layout), do: {:error, {:unsupported_op, :param_vec}}
+
   defp do_emit(:remainder, [a, b], layout) do
     with {:ok, a_s} <- emit(a, layout),
          {:ok, b_s} <- emit(b, layout) do

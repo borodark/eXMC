@@ -202,7 +202,21 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
         {id, mod, normalize_params(params), value, meta}
       end)
 
-    q_index = layout |> Enum.with_index() |> Enum.into(%{})
+    # id -> SLOT ENTRY (offset/length/shape), not id -> index. A `shape: {2}`
+    # RV owns two coordinates, and `q[i]` cannot express that. `slots` comes
+    # from `Exmc.PointMap.build/1` via `extract_components/1`, so the offsets
+    # here are the same ones the host sampler writes.
+    #
+    # `components.slots` is absent only for a components map hand-built by a
+    # test that predates it; fall back to one slot per layout entry, which is
+    # exactly the old behaviour for the all-scalar models those tests use.
+    slots =
+      Map.get(components, :slots) ||
+        layout |> Enum.with_index() |> Enum.map(fn {id, i} ->
+          %{id: id, offset: i, length: 1, shape: {}}
+        end)
+
+    q_index = Map.new(slots, fn slot -> {slot.id, slot} end)
 
     # Nx 0.12 rejects closures that mix defn Expr with a non-Expr
     # backend tensor. Under the D88 f64 Vulkano default, `params`
@@ -236,7 +250,12 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     #
     # NOT the layout order. `layout` is the q-vector order and must keep
     # matching Exmc.PointMap; this is purely an evaluation order.
-    order = resolution_order!(layout, ncp_info)
+    # RV IDS, not layout entries. `layout` is one name per q slot since vector
+    # RVs (`beta[0]`, `beta[1]`), and reference resolution is per RV: an NCP
+    # edge names an RV, and `resolve_rv_values/5` looks each id up in
+    # `q_index`. Feeding it layout names raised
+    # `KeyError: key "beta[0]" not found`.
+    order = resolution_order!(Enum.map(slots, & &1.id), ncp_info)
 
     # Every reference must name a sampled coordinate, checked at build time so
     # an unresolvable one is a clear error at synthesis rather than a
@@ -250,21 +269,41 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
       prior_lp =
         Enum.reduce(priors, Nx.tensor(0.0), fn {id, mod, params}, acc ->
-          idx = Map.fetch!(q_index, id)
-          z = q[idx]
+          slot = Map.fetch!(q_index, id)
           transform = Map.fetch!(transforms_by_id, id)
           # An RV's own density is always evaluated at its OWN coordinate,
           # never at the NCP reconstruction: after the rewrite its params are
           # N(0,1), so this is the z-density, and the reconstruction appears
           # only where other nodes refer to it.
-          x = Exmc.Transform.apply(transform, z)
           # This is the line the hierarchical case turned on. The params map
           # went to logpdf raw, so `%{mu: "mu"}` handed Nx a BitString and the
           # trace died before any GLSL existed.
           resolved = resolve_params(params, obs, resolved_rvs)
-          logp = mod.logpdf(x, resolved)
-          jac = Exmc.Transform.log_abs_det_jacobian(transform, z)
-          Nx.add(acc, Nx.add(logp, jac))
+          # UNROLLED over the RV's coordinates in Elixir, one scalar term per
+          # slot, rather than evaluated on the vector and summed.
+          #
+          # The host writes `Nx.sum(dist.logpdf(vm[id], resolved))`
+          # (Compiler.node_term/4) and that is right for it. Here the sum would
+          # be TRACED, and the emitter turns a `sum` node into a
+          # `/*REDUCE_SUM*/` marker — a loop over the OBSERVATION axis. A
+          # parameter-axis sum emitted as an obs-axis loop is not slow, it is
+          # wrong: it multiplies the prior by n_obs.
+          #
+          # An earlier attempt applied `Nx.sum` unconditionally and the shader
+          # goldens caught it — q, p and grad stayed byte-identical while logp
+          # moved, and only for n_obs > 1, because the gradient trace
+          # simplifies the redundant sum away and the forward one does not.
+          #
+          # `slot.length` is known when the closure is BUILT, so the unroll is
+          # an ordinary Elixir loop and every term reaching the emitter is
+          # scalar. For length 1 this is exactly the old single-term code.
+          Enum.reduce(0..(slot.length - 1), acc, fn k, inner_acc ->
+            z_k = q[slot.offset + k]
+            x_k = Exmc.Transform.apply(transform, z_k)
+            logp = mod.logpdf(x_k, resolved)
+            jac = Exmc.Transform.log_abs_det_jacobian(transform, z_k)
+            Nx.add(inner_acc, Nx.add(logp, jac))
+          end)
         end)
 
       observed_lp =
@@ -341,7 +380,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
   # Returns %{id => constrained tensor} for every sampled coordinate.
   defp resolve_rv_values(order, q, q_index, transforms_by_id, ncp_info) do
     Enum.reduce(order, %{}, fn id, acc ->
-      z = q[Map.fetch!(q_index, id)]
+      z = slot_slice(q, Map.fetch!(q_index, id))
 
       value =
         case Map.get(ncp_info, id) do
@@ -358,6 +397,24 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
 
       Map.put(acc, id, value)
     end)
+  end
+
+  # A one-slot RV stays a SCALAR (`q[off]`, not a {1} tensor). That is not
+  # cosmetic: every existing model is all-scalar, and slicing them to rank-1
+  # would change every emitted expression and every shader hash for no reason.
+  defp slot_slice(q, %{offset: off, length: 1, shape: {}}), do: q[off]
+
+  # STACK of per-element scalar indices, not `Nx.slice`. The emitter is
+  # scalar-valued -- every `emit/2` returns one GLSL expression -- and a
+  # multi-element slice has no representation in it (`{:error,
+  # :multi_element_slice}`). `q[off + k]` for each k is d scalar reads the
+  # emitter already handles, and `Nx.stack` reassembles them into the shape the
+  # user's closure expects.
+  defp slot_slice(q, %{offset: off, length: n, shape: shape}) do
+    0..(n - 1)
+    |> Enum.map(fn k -> q[off + k] end)
+    |> Nx.stack()
+    |> Nx.reshape(shape)
   end
 
   defp ref_value(v, resolved_rvs) when is_binary(v), do: Map.fetch!(resolved_rvs, v)
@@ -1481,14 +1538,28 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     |> Enum.join("\n")
   end
 
+  # Checks RV IDS, not layout entries. Since vector RVs, `layout` carries one
+  # name per q SLOT — `beta[0]`, `beta[1]` — which are labels rather than ids
+  # and are not in `priors` by construction. Strip the element suffix and check
+  # the id that remains, so the guard still catches what it was written for: a
+  # layout naming an RV the prior set does not contain.
   defp validate_layout(priors, layout) do
     ids = MapSet.new(priors, fn {id, _, _} -> id end)
 
-    case Enum.find(layout, &(not MapSet.member?(ids, &1))) do
+    case Enum.find(layout, &(not MapSet.member?(ids, slot_base_id(&1)))) do
       nil -> :ok
       missing -> {:error, {:layout_id_not_in_priors, missing}}
     end
   end
+
+  defp slot_base_id(name) when is_binary(name) do
+    case String.split(name, "[", parts: 2) do
+      [base, _rest] -> base
+      [base] -> base
+    end
+  end
+
+  defp slot_base_id(name), do: name
 
   @doc """
   For each prior, trace `mod.logpdf(x, params)` + its gradient
