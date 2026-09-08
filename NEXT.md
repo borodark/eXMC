@@ -8,6 +8,88 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-07 (later), fleet + posteriordb at the fused shader
+
+Verification of `f1e9b2207` (fusion + nx_vulkan `bc54f34`) across all four
+hosts and posteriordb. **No wrong answers anywhere. Every failure is a clock.**
+
+### Fleet, `EXMC_COMPILER=vulkan mix test`
+
+| host | GPU | result | failures |
+|---|---|---|---|
+| super-io | RTX 3060 Ti, Linux | 688 / **1** | Cauchy KS (pre-dates today) |
+| mac-247 | GT 650M, FreeBSD | 688 / **1** | `PokerTest`, 300 s timeout |
+| mac-248 | GT 750M, FreeBSD | 688 / **0** | — |
+| Jetson | Tegra X1, aarch64 | 688 / **2** | `PokerTest` + `IntegrationTest`, timeouts |
+
+Every failure is a `TimeoutError` or a marginal statistical gate. None is a
+wrong number.
+
+**The two timeout classes are different mechanisms and the stack traces say
+so** — this is the distinction to keep, because the fix is different for each:
+
+* **mac-247's `PokerTest`** times out *inside* `Dispatch.chain_synth_vulkano/8`.
+  That is the serial-reduce cost on the fleet's weakest card, and it is what
+  `docs/OBS_LOOP_FUSION.md` §6 is about.
+* **Both Jetson failures** time out in `Nx.Defn.Evaluator` over
+  `Nx.BinaryBackend` and `Nx.Defn.Grad` — the per-op HOST interpreter. Those
+  models are not reaching the fused shader on that box at all. Per DECISION
+  94 the per-op Vulkan arm is an interpreter on the CPU, so this is the
+  Jetson's weak CPU, not its GPU.
+
+Open, and not chased today: **why `PokerTest` synthesises to a shader on
+mac-247 and falls back to the interpreter on the Jetson.** Same tree, same
+commit, same lock. That difference is a finding waiting to happen.
+
+`mac-247` ran 688/2 once and 688/1 on a clean re-run, so one of its failures
+is flaky. The Jetson build needed `~/.asdf/shims` and `~/.cargo/bin` on the
+PATH — a non-interactive ssh gets neither, and `mix`/`cargo` "not found" is
+what a fleet script sees first.
+
+### posteriordb, fast tier, super-io
+
+| model | n_obs | n_beta | Vulkan | EXLA |
+|---|---|---|---|---|
+| eight_schools_noncentered | hier. | — | PASS 480 s | PASS 283 s |
+| mesquite-logmesquite_logvolume | 46 | 2 | PASS 297 s | PASS 269 s |
+| sblri-blr | 100 | 5 | PASS 768 s | PASS 285 s |
+| kidiq-kidscore_momhs | 434 | 2 | PASS 994 s | PASS 287 s |
+| nes2000-nes | 476 | 9 | **timeout** | PASS 328 s |
+| earnings-earn_height | 1192 | 2 | **timeout** | PASS 338 s |
+
+**Vulkan 4/6, EXLA 6/6 — and the failures are wall-clock, not accuracy.**
+Where both arms finish, Vulkan matches or beats EXLA on error (0.04/0.02/0.03/
+0.03 against 0.03/0.05/0.01/0.03) with R-hat <= 1.002 everywhere.
+
+The shape is the point. **EXLA is flat in `n_obs`** — 269 to 338 s as the
+observation axis goes 46 -> 1192, because it vectorises the reduction.
+**Vulkan is monotone in it** and runs out of clock. That is the cleanest
+demonstration of the serial reduce this project has, and it is a better
+argument for the parallelism work than the microbenchmarks were: two real
+posteriors are currently unsamplable on the GPU arm for no reason but the
+loop.
+
+The full tier under Vulkan is therefore not runnable end to end today. That is
+not new breakage — it is the same defect, seen at the scale it actually bites.
+
+### Two harness defects, both mine, both found by this run
+
+* `Task.async_stream` defaulted to `on_timeout: :exit`, so ONE slow posterior
+  killed the whole stream and the `{:exit, reason} -> %{status: :crash}` clause
+  written to record exactly that **could never fire**. A full-tier run reported
+  one PASS and then died. Fixed to `:kill_task` in `4c658c0d7`.
+* `ordered: false` meant a crashed element could not be named — both timeouts
+  logged as `unknown (crash)`. Fixed with `ordered: true` + a zip in
+  `45c7b7566`.
+* `exmc_dirty` counted UNTRACKED files, so a stray `?? .claude/` stamped a run
+  `(DIRTY)` and invalidated the comparability the field exists to certify.
+  `-uno` in `4c658c0d7`.
+
+The first of those is the project's recurring failure mode — a check written,
+and nothing letting it fire.
+
+---
+
 ## Status — 2026-09-07, the host half MEASURED on Kepler, and the serial reduce
 
 Two results, both from mac-248 (GT 750M, headless, 8 cores, idle). The first
