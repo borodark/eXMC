@@ -11,8 +11,16 @@ defmodule Exmc.Dist.Custom do
 
       logpdf = fn x, params ->
         mu = params.mu
-        Nx.negate(Nx.multiply(0.5, Nx.pow(Nx.subtract(x, mu), 2)))
+        z = Nx.subtract(x, mu)
+        Nx.negate(Nx.multiply(0.5, Nx.multiply(z, z)))
       end
+
+  Squaring is written `Nx.multiply(z, z)` rather than `Nx.pow(z, 2)` on
+  purpose. Both are correct on the host, and `Nx.pow` with a constant integer
+  exponent now unrolls to the same multiplication in the fused f64 shader —
+  but this example is what people copy, and the explicit form never depends on
+  that unrolling being available. A non-constant exponent still refuses to
+  synthesise (`{:error, {:unsupported_op, :pow}}`) and takes the host path.
 
       dist = Exmc.Dist.Custom.new(logpdf, support: :real)
       ir = Builder.rv(ir, "x", Exmc.Dist.Custom, Map.put(%{mu: Nx.tensor(0.0)}, :__dist__, dist))

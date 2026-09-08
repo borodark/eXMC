@@ -387,17 +387,82 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
     end
   end
 
-  binary_ops_fn = [:min, :max, :pow, :atan2]
+  binary_ops_fn = [:min, :max, :atan2]
 
   for op <- binary_ops_fn do
-    glsl_fn = if op == :pow, do: "pow", else: to_string(op)
-
     defp do_emit(unquote(op), [a, b], layout) do
       with {:ok, a_s} <- emit(a, layout),
            {:ok, b_s} <- emit(b, layout) do
-        {:ok, "#{unquote(glsl_fn)}(#{a_s}, #{b_s})"}
+        {:ok, "#{unquote(to_string(op))}(#{a_s}, #{b_s})"}
       end
     end
+  end
+
+  # --- Nx.pow ---
+  #
+  # `pow` is NOT emitted, and this is not a style choice.
+  #
+  # GLSL.std.450's `Pow` is declared on `float` only; there is no `double`
+  # overload, and the whole chain shader is f64. So `Nx.pow(x, 2)` produced
+  # GLSL that glslangValidator rejected outright --
+  #
+  #     'pow' : no matching overloaded function found
+  #
+  # -- which killed the shader for any Gaussian log-density written the
+  # obvious way, `(x - mu)^2` being how everyone writes it. Including us: the
+  # `Exmc.Dist.Custom` moduledoc taught exactly that form. Found by the
+  # pathmc_ex session, whose likelihoods all used it, with a five-cell probe
+  # that isolated it from two other suspected causes.
+  #
+  # A `pow_d(x, y) = exp_d(y * log_d(x))` helper, the obvious mirror of the
+  # exp_d/log_d ones next door, would be WRONG here and worse than the error
+  # it replaces: `log` of a negative number is NaN, and the base is a residual
+  # `(x - mu)` that is negative about half the time. That trades a compile
+  # error for a silent NaN, which is the exact trade this project keeps
+  # finding and undoing.
+  #
+  # So: a constant integer exponent unrolls to multiplication, which is exact,
+  # sign-correct and needs no helper. Anything else refuses, and the model
+  # takes the host path -- correct, slower -- rather than reaching a shader
+  # that would be undefined for negative bases. GLSL's own `pow` is undefined
+  # for x < 0 too, so refusing loses nothing that was ever well-defined.
+  @max_pow_unroll 8
+
+  defp do_emit(:pow, [a, b], layout) do
+    with {:ok, a_s} <- emit(a, layout) do
+      case integer_exponent(b) do
+        {:ok, n} when n >= 0 and n <= @max_pow_unroll ->
+          {:ok, unroll_pow(a_s, n)}
+
+        {:ok, n} when n < 0 and -n <= @max_pow_unroll ->
+          {:ok, "(1.0lf / #{unroll_pow(a_s, -n)})"}
+
+        _ ->
+          {:error, {:unsupported_op, :pow}}
+      end
+    end
+  end
+
+  # Matched on the EXPRESSION TREE rather than on emitted text: a constant
+  # reaches `do_emit(:constant, ...)` as a number and comes back formatted, so
+  # parsing the string back would be re-deriving what we already had.
+  defp integer_exponent(%T{data: %Expr{op: :constant, args: [n]}}) when is_integer(n),
+    do: {:ok, n}
+
+  defp integer_exponent(%T{data: %Expr{op: :constant, args: [n]}}) when is_float(n) do
+    if n == Float.round(n), do: {:ok, trunc(n)}, else: :error
+  end
+
+  defp integer_exponent(_), do: :error
+
+  defp unroll_pow(_a_s, 0), do: "1.0lf"
+  defp unroll_pow(a_s, 1), do: "(#{a_s})"
+
+  # x^n as n factors. The text repeats, which looks wasteful and is not: the
+  # CSE pass over the fused obs-loop body hoists a repeated subexpression into
+  # one local, so `(r) * (r)` costs one binding and one multiply.
+  defp unroll_pow(a_s, n) when n > 1 do
+    "(" <> Enum.map_join(1..n, " * ", fn _ -> "(#{a_s})" end) <> ")"
   end
 
   defp do_emit(:remainder, [a, b], layout) do
