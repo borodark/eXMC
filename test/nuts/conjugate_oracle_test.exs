@@ -34,6 +34,24 @@ defmodule Exmc.NUTS.ConjugateOracleTest do
   these draw counts it carries several percent of sampling error of its own,
   and a standalone run reads ~1.05 against a true value of 1.0. Gating it
   tightly would buy flakes, not coverage.
+
+  There is a stronger reason than sampling error, contributed by the pathmc_ex
+  session after they mutation-checked their copy of this oracle. The posterior
+  covariance
+
+      Sn = (S0^-1 + X'X / sigma^2)^-1
+
+  contains no `y` at all. So **any error that only moves the mean leaves the
+  analytic sd exactly unchanged, and the sd-ratio check has zero detection
+  power against that entire class.** All of the discrimination here lives in
+  the bias assertion; the ratio is a scale sanity check and must not be read
+  as a gate.
+
+  The consequence for anyone extending these tests: a mutation that shifts the
+  response validates the bias assertion and says nothing about the sd one.
+  Covering the sd side needs a perturbation that changes `X'X` or sigma —
+  scaling a predictor column would do it — which is a separate mutation, not a
+  stronger version of the same one.
   """
   use ExUnit.Case, async: false
 
