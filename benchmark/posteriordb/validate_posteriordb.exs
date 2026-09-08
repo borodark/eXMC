@@ -104,11 +104,18 @@ defmodule PosteriorDBValidator do
           # died, because a single posterior with a large observation axis
           # ran past 30 minutes on the serial-reduce shader.
           on_timeout: :kill_task,
-          ordered: false
+          # ordered: true so a crashed element can be NAMED. With ordered:
+          # false the stream yields results in completion order and an
+          # {:exit, _} carries no way back to its input, so every timeout
+          # was recorded as `unknown (crash) Error: :timeout` -- true, and
+          # useless for triage. Observed 2026-09-07: two of six fast-tier
+          # posteriors timed out and the report could not say which.
+          ordered: true
         )
+        |> Enum.zip(posteriors)
         |> Enum.map(fn
-          {:ok, result} -> result
-          {:exit, reason} -> %{name: "unknown", status: :crash, error: inspect(reason)}
+          {{:ok, result}, _name} -> result
+          {{:exit, reason}, name} -> %{name: name, status: :crash, error: inspect(reason)}
         end)
         |> Enum.sort_by(& &1.name)
       end
