@@ -75,8 +75,17 @@ defmodule PDB.Provenance do
     end
   end
 
+  # TRACKED changes only. `--porcelain` alone counts untracked files, so a
+  # stray directory that no build reads -- `.claude/`, an editor scratch dir,
+  # a downloaded fixture -- stamped every report DIRTY and invalidated the
+  # comparability the field exists to certify. Observed 2026-09-07: a full
+  # posteriordb run recorded `(DIRTY)` for `?? .claude/`.
+  #
+  # `-uno` is the fix rather than a `.gitignore` entry, because the question
+  # this field answers is "does the code that ran match the sha", and an
+  # untracked file is not that code.
   defp dirty?(dir) do
-    case System.cmd("git", ["-C", dir, "status", "--porcelain"], stderr_to_stdout: true) do
+    case System.cmd("git", ["-C", dir, "status", "--porcelain", "-uno"], stderr_to_stdout: true) do
       {out, 0} -> String.trim(out) != ""
       _ -> nil
     end

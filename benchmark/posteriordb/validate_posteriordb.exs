@@ -96,6 +96,14 @@ defmodule PosteriorDBValidator do
           fn name -> validate_one(name, Keyword.put(run_opts, :arm, compiler)) end,
           max_concurrency: parallel,
           timeout: 1_800_000,
+          # :kill_task, not the default :exit. With the default, ONE model
+          # over the timeout kills the whole stream and the caller exits --
+          # so the `{:exit, reason}` clause below could never fire, and 32
+          # finished-or-runnable models were thrown away with it. Observed
+          # 2026-09-07: a full-tier Vulkan run reported one PASS and then
+          # died, because a single posterior with a large observation axis
+          # ran past 30 minutes on the serial-reduce shader.
+          on_timeout: :kill_task,
           ordered: false
         )
         |> Enum.map(fn
