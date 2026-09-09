@@ -8,6 +8,90 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-09, fleet + posteriordb at 371785ff5 (vector RVs)
+
+super-io excluded by request; the three remote hosts only.
+
+### Fleet, `EXMC_COMPILER=vulkan mix test`
+
+707 tests, up from 699 — the eight new slot-layout and vector-RV tests.
+
+| host | GPU | result | failures |
+|---|---|---|---|
+| mac-248 | GT 750M | **707 / 0** | — |
+| mac-247 | GT 650M | 707 / **1** | `PokerTest`, 300 s timeout |
+| Jetson | Tegra X1 | 707 / **2** | `PokerTest` + `IntegrationTest`, timeouts |
+
+**Identical failures to the `f1e9b2207` run**, so the vector-RV work introduced
+no fleet regressions, and the new tests pass on all three. The two timeout
+classes are unchanged and still distinct: mac-247's is inside
+`chain_synth_vulkano`, the Jetson's are in the host interpreter.
+
+### posteriordb, fast tier, Vulkan arm
+
+| host | PASS | CRASH | completed |
+|---|---|---|---|
+| Jetson | 2 / 6 | 4 | mesquite, eight_schools |
+| mac-248 | 1 / 6 | 5 | mesquite |
+| mac-247 | 1 / 6 | 5 | mesquite |
+| (super-io, 2026-09-07) | 4 / 6 | 2 | + sblri, kidiq |
+
+**Every crash is `:timeout`. Zero accuracy failures on any host.** Where a
+model completes the numbers are good — R-hat <= 1.001, error <= 0.05,
+identical `ess`/`lf`/`div` across hosts for the same model (mesquite: ess 2018,
+lf 25582, div 36/4000 on both Keplers).
+
+So the pass rate is a clock, and it is monotone in GPU capability: 4/6 on the
+Ampere, 2/6 on the Tegra, 1/6 on both Keplers. Only the smallest observation
+axis (mesquite, n_obs=46) survives everywhere. This is the serial-reduce
+ceiling in `docs/OBS_LOOP_FUSION.md` §6 seen at fleet scale — fusion bought
+1.8x and the remaining cost is arithmetic run by one invocation while 255 idle.
+
+Two harness fixes from 2026-09-07 earned their place here:
+
+* every crashed posterior is NAMED. The previous run could only report
+  `unknown (crash)`, which is true and useless; `ordered: true` plus a zip
+  (`45c7b7566`) means the table above can say WHICH five timed out.
+* `on_timeout: :kill_task` (`4c658c0d7`) is why there is a table at all — under
+  the old default the first timeout would have killed the whole stream and
+  reported one PASS.
+
+### The fixtures are not in git, and that is deliberate
+
+`benchmark/posteriordb/posteriordb_processed/` is gitignored — 28 MB of
+regenerable reference draws — so no fleet host had it and the harness found
+nothing to run. Staged as a tarball to each host. That is data, not code: the
+code under test still comes from `origin`, so the provenance the harness
+records is unaffected. Anyone re-running this on a fresh host has to do the
+same thing or the run silently has nothing to do.
+
+### A correction, and a process note
+
+I told this project's user, and told the pathmc_ex session, that pathmc models
+would now reach the shader because "they capture their data". **Wrong.** They
+capture the design matrix X; the response y arrives through `Builder.obs` as
+the Custom closure's first argument, and those are different things.
+
+Their real models get bare `:unsupported`, refused BEFORE the new guard,
+because `PathMC.Compile.Exmc` never emits `Nx.dot` — it sums over slots, and
+that is load-bearing: a design-matrix column for a transformed term does not
+exist until its parameter is drawn, so `adstock(tv, decay=theta)` cannot be
+folded into a matrix at all. The `dot` clause covers an idiom that library
+structurally cannot use for its interesting models.
+
+The realistic ceiling on that line of work is therefore narrower than claimed:
+single-equation, no-transform models only, and only after the observation
+buffer is populated from the Custom RV's own observed value.
+
+The process point, because it is now the third instance in one week: I reasoned
+about a plausible reconstruction instead of running the real artifact. The
+other two were emitter clauses written from an assumed axis signature that
+matched nothing, fixed only by enumerating the actual `dot` nodes. Probe the
+artifact, not a lookalike — and when the artifact belongs to another project,
+ask that project to run it.
+
+---
+
 ## Status — 2026-09-07 (later), fleet + posteriordb at the fused shader
 
 Verification of `f1e9b2207` (fusion + nx_vulkan `bc54f34`) across all four
