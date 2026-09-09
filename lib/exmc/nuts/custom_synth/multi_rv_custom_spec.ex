@@ -326,7 +326,24 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
          resolved_rvs
        ) do
     resolved = resolve_params(params_map, obs, resolved_rvs)
-    logpdf_fn.(Nx.tensor(0.0), resolved)
+    # `obs`, not `Nx.tensor(0.0)`.
+    #
+    # `Exmc.Compiler` hands a Custom likelihood the real observations as its
+    # first argument. This path handed it a constant zero, so the SAME closure
+    # meant two different things on the two paths, and a closure written
+    # `fn observed, params -> ... Nx.subtract(observed, mu) ...` silently
+    # computed its residual against zero.
+    #
+    # It stayed hidden because the convention in this repo's own fixtures --
+    # and in benchmark/posteriordb -- is `fn _x, params ->` with the data
+    # CAPTURED, which is insensitive to what the first argument is. Vector-RV
+    # support exposed it: models that read the argument had previously been
+    # refused at detect and fell back to the host, where it was correct.
+    #
+    # Caught by test/nuts/conjugate_oracle_test.exs, whose fixture reads the
+    # argument. Its composed density was off by 10.88 RELATIVE and its
+    # gradient by 74376; with `obs` the gradient matches the host exactly.
+    logpdf_fn.(obs, resolved)
   end
 
   # A SCALAR observation is inlined as a constant; only a vector one reads the

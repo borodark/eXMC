@@ -270,6 +270,50 @@ defmodule Exmc.NUTS.CustomSynth do
     if n_obs == 0 and String.contains?(glsl, "j < pc.n_obs") do
       {:unsupported, :empty_obs_axis_reduction}
     else
+      # SIBLING GUARD, same defect class from the other direction: a loop that
+      # READS the observation region when there are no observations behind it.
+      #
+      # `compose_custom_term/3` hands the Custom likelihood the traced `obs`
+      # parameter, so a closure written `fn observed, params -> ...` emits
+      # `double obs_j = obs_inv_mass[j];` and uses it. But a Custom-likelihood
+      # model has an EMPTY obs buffer: `observed_obs_bin/1` walks only
+      # standard-family observed nodes, and `Builder.obs(ir, "Y_obs", "Y", y)`
+      # against a Custom RV contributes none. The extras buffer is then
+      # `inv_mass | captures` with nothing at index j, so those reads land in
+      # the inv-mass and capture regions and the residual is computed against
+      # garbage.
+      #
+      # MEASURED on the conjugate oracle, whose fixture reads its first
+      # argument: obs_bin = 0 doubles, captures = 80, loop `j < 40u`, and the
+      # sampled chain came out FROZEN (sd exactly 0.0) where the host path
+      # gives 0.045. The GLSL itself was correct; the buffer under it was not.
+      #
+      # This only became reachable when vector RVs and `dot` started
+      # synthesising models that had previously been refused earlier and fell
+      # back to the host. Refusing here puts them back on that path -- slower
+      # and right -- rather than shipping a fast wrong answer.
+      #
+      # The real fix is to populate the obs buffer from the Custom RV's own
+      # observed value, which also needs obs_size/1, the spans and the push
+      # `n_obs` to agree. That is a larger change than this guard and is not
+      # attempted here.
+      #
+      # Models that CAPTURE their data (the convention in this repo's fixtures
+      # and throughout benchmark/posteriordb, written `fn _x, params ->`) emit
+      # no such read and are unaffected.
+      # Checks for a USE of obs_j, not for the read itself. Every reduce loop
+      # emits `double obs_j = obs_inv_mass[...];` unconditionally whether the
+      # body needs it or not, so testing for that substring flagged
+      # capture-style models too -- it fired on this file's own passing
+      # fixtures the first time. Strip the declarations, then look.
+      obs_axis_used? =
+        glsl
+        |> String.replace(~r/double obs_j = obs_inv_mass\[[^\]]*\];/, "")
+        |> String.contains?("obs_j")
+
+      if n_obs == 0 and obs_axis_used? do
+        {:unsupported, :custom_reads_empty_obs_axis}
+      else
     k = Keyword.get(opts, :K, 32)
     eps = Keyword.get(opts, :eps, 0.05)
 
@@ -299,7 +343,8 @@ defmodule Exmc.NUTS.CustomSynth do
         sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
         {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin, captures_bin}}
       end
-    end
+      end
+      end
     end
   end
 

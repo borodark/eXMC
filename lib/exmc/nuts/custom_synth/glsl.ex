@@ -680,6 +680,54 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
   # For other slice patterns (arbitrary stride / length / rank>1
   # source), bail — those need real array emission, which is
   # Mission III Layer 2.
+  # --- one component of a parameter-axis contraction ---
+  #
+  # This is the gradient half of `dot(X, beta)`, and the shape was MEASURED
+  # rather than assumed after two guesses missed. Reverse-mode AD of a
+  # likelihood in `dot(X, beta)` produces, at the leaf:
+  #
+  #   add{2} <- put_slice{2} <- pad{1} <- broadcast{1} <- squeeze{} <- slice{1}
+  #                                                                     |
+  #                            dot{2} [negate{40}, [0], [], tensor{40,2}, [0], []]
+  #
+  # `emit_scatter_value/2` strips pad/broadcast/squeeze and lands on the slice,
+  # whose source is a rank-1 contracted with a rank-2 along axis 0 — the whole
+  # {p} parameter vector at once, in a position where the emitter expects a
+  # scalar. The generic `:slice` clause below then called `emit/2` on the dot
+  # and got `{:unsupported_op, :dot}`.
+  #
+  # Taking the slice and the contraction TOGETHER is what makes it emittable:
+  # component k is `sum_j v[j] * X[j,k]`, an ordinary observation-axis
+  # reduction over the product of an obs-axis expression and one rank-1 column
+  # of the captured matrix. No parameter-vector value ever has to exist.
+  #
+  # Both operand orders are matched because the contraction is symmetric and
+  # unambiguous: whichever side is rank 2 supplies the columns.
+  defp do_emit(:slice, [%T{data: %Expr{op: :dot, args: dot_args}} = _src, starts, lens, strides], layout)
+       when is_list(dot_args) do
+    with true <- all_ones?(strides) || {:error, :strided_slice},
+         true <- all_ones?(lens) || {:error, :multi_element_slice},
+         {:ok, k} <- single_start_idx(starts),
+         {:ok, vec, mat} <- param_contraction(dot_args),
+         {:ok, m} <- const_matrix(mat),
+         {:ok, v_s} <- emit(vec, layout) do
+      {:ok, "/*REDUCE_SUM*/((#{v_s}) * (#{register_capture(m[[.., k]])}))"}
+    else
+      {:error, _} = e -> e
+      _ -> {:error, {:unsupported_slice_shape, lens, strides}}
+    end
+  end
+
+  # A rank-1 contracted with a rank-2 on axis 0 of each, in either order.
+  # Returns {vector_expr, matrix_expr}.
+  defp param_contraction([%T{shape: {n}} = v, [0], [], %T{shape: {n, _p}} = m, [0], []]),
+    do: {:ok, v, m}
+
+  defp param_contraction([%T{shape: {n, _p}} = m, [0], [], %T{shape: {n}} = v, [0], []]),
+    do: {:ok, v, m}
+
+  defp param_contraction(_other), do: {:error, {:unsupported_op, :dot}}
+
   defp do_emit(:slice, [tensor, start_indices, lengths, strides], layout) do
     with true <- all_ones?(strides) || {:error, :strided_slice},
          true <- all_ones?(lengths) || {:error, :multi_element_slice},
