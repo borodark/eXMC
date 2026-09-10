@@ -231,11 +231,22 @@ defmodule Exmc.NUTS.CustomSynth do
     # observed entries, concatenating obs binaries in iteration order.
     observed = Map.get(components, :observed, [])
 
+    custom_obs = Map.get(components, :custom_obs)
+
+    # A model with BOTH standard observed nodes and a Custom carrying its own
+    # observations would concatenate two regions into one flat buffer, and
+    # `obs_spans/1` returns `:full` whenever a Custom is present -- so the
+    # Custom's marker would loop the whole thing and read the standard nodes'
+    # values as if they were its own. Refuse rather than attribute by guess.
+    # Not reachable from any fixture here today; recorded because it is the
+    # shape the next model of this kind would take.
+    mixed_obs_sources? = observed != [] and not is_nil(custom_obs)
+
     n_obs =
       Keyword.get_lazy(opts, :n_obs, fn ->
         case ir.data do
           %Nx.Tensor{shape: {n}} -> n
-          _ -> observed_n_obs(observed)
+          _ -> observed_n_obs(observed) + custom_n_obs(custom_obs)
         end
       end)
 
@@ -314,6 +325,42 @@ defmodule Exmc.NUTS.CustomSynth do
       if n_obs == 0 and obs_axis_used? do
         {:unsupported, :custom_reads_empty_obs_axis}
       else
+      # THE MIXED-BOUND CHECK, and it is the one thing populating the obs
+      # buffer makes newly dangerous.
+      #
+      # `reduce_bounds/4` bounds a marker that reads captures by the CAPTURE
+      # length, baked as a literal, because captures carry no runtime length.
+      # A marker that reads `obs_j` as well -- `obs_j - (col0*b0 + col1*b1)`,
+      # which is the ordinary regression residual -- then has two candidate
+      # trip counts: that literal, and `pc.n_obs`. MEASURED: such a marker
+      # exists and gets the literal.
+      #
+      # While the obs buffer was empty the question could not arise. Now that
+      # it is populated the two must AGREE, or the loop runs off the end of one
+      # region and into the next -- silently, since both live in the same flat
+      # extras buffer.
+      #
+      # They agree whenever the response and the design-matrix columns have the
+      # same length, which is every well-formed regression. Refusing the rest
+      # costs a host fallback and keeps the failure loud.
+      mixed_bound_mismatch? =
+        ~r/for \(uint j = 0u; j < (\d+)u; j\+\+\) \{(.*?)\n\s*\}/s
+        |> Regex.scan(glsl)
+        |> Enum.any?(fn [_full, literal, body] ->
+          uses_obs? =
+            body
+            |> String.replace(~r/double obs_j = obs_inv_mass\[[^\]]*\];/, "")
+            |> String.contains?("obs_j")
+
+          uses_obs? and String.to_integer(literal) != n_obs
+        end)
+
+      if mixed_obs_sources? do
+        {:unsupported, :both_standard_and_custom_observations}
+      else
+      if mixed_bound_mismatch? do
+        {:unsupported, :obs_capture_length_mismatch}
+      else
     k = Keyword.get(opts, :K, 32)
     eps = Keyword.get(opts, :eps, 0.05)
 
@@ -332,7 +379,7 @@ defmodule Exmc.NUTS.CustomSynth do
           t |> Nx.as_type(:f64) |> Nx.to_binary()
 
         _ ->
-          observed_obs_bin(observed)
+          observed_obs_bin(observed) <> custom_obs_bin(custom_obs)
       end
 
     if length(components.layout) > 256 do
@@ -342,6 +389,8 @@ defmodule Exmc.NUTS.CustomSynth do
       with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
         sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
         {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin, captures_bin}}
+      end
+      end
       end
       end
       end
@@ -435,8 +484,26 @@ defmodule Exmc.NUTS.CustomSynth do
             {:error, :no_free_rvs_in_custom_only_model}
 
           true ->
+            # PROTOTYPE (obs-buffer work): the Custom RV's own observed value.
+            # It has been sitting in `observed_ids` all along -- that map is
+            # built from every `{:obs, rv_id, value, meta}` node without
+            # filtering by RV type -- and was dropped only because the later
+            # `standard_rv_node?` split excludes Custom nodes. So the data was
+            # never missing, just unreferenced.
+            custom_obs =
+              case Map.get(observed_ids, node_id(node)) do
+                {value, _meta} -> value
+                _ -> nil
+              end
+
             {:ok,
-             build_components(ir, priors, observed, {node_id(node), custom_struct, custom_params})}
+             build_components(
+               ir,
+               priors,
+               observed,
+               {node_id(node), custom_struct, custom_params},
+               custom_obs
+             )}
         end
 
       [] ->
@@ -449,7 +516,7 @@ defmodule Exmc.NUTS.CustomSynth do
         if priors == [] do
           {:error, :no_rvs}
         else
-          {:ok, build_components(ir, priors, observed, nil)}
+          {:ok, build_components(ir, priors, observed, nil, nil)}
         end
 
       _ ->
@@ -459,7 +526,7 @@ defmodule Exmc.NUTS.CustomSynth do
     end
   end
 
-  defp build_components(ir, priors, observed, custom) do
+  defp build_components(ir, priors, observed, custom, custom_obs \\ nil) do
     slots = build_slots(ir)
 
     %{
@@ -484,7 +551,12 @@ defmodule Exmc.NUTS.CustomSynth do
       # Names are `id` for a scalar RV and `id[k]` for element k of a vector
       # one. They are diagnostic labels; the AUTHORITY is `slots`.
       layout: Enum.flat_map(slots, &slot_names/1),
-      slots: slots
+      slots: slots,
+      # The Custom likelihood's observations. Distinct from `observed`, which
+      # holds STANDARD-family observed RVs whose logpdf compose_logp_defn sums
+      # itself; a Custom's density is written by the user and this value is
+      # only ever data for it.
+      custom_obs: custom_obs
     }
   end
 
@@ -530,6 +602,20 @@ defmodule Exmc.NUTS.CustomSynth do
 
   # Total observation count across all observed RVs — sums the flat
   # length of each entry's obs value (scalar obs counts as 1).
+  # A Custom likelihood's observations, for the shared obs buffer.
+  #
+  # A scalar contributes nothing: `Builder.obs(ir, "y", "lik", Nx.tensor(0.0))`
+  # is the idiom for "this Custom has no observation axis of its own, its data
+  # is in the closure", and giving that a slot would put a stray 0.0 at index 0
+  # and shift every capture offset by one.
+  defp custom_n_obs(%Nx.Tensor{shape: {n}}), do: n
+  defp custom_n_obs(_), do: 0
+
+  defp custom_obs_bin(%Nx.Tensor{shape: {_n}} = t),
+    do: t |> Nx.as_type(:f64) |> Nx.to_binary()
+
+  defp custom_obs_bin(_), do: <<>>
+
   defp observed_n_obs([]), do: 0
 
   defp observed_n_obs(observed) do
