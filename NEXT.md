@@ -8,6 +8,50 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-10 (later), fleet at d410b183a — obs buffer populated
+
+First fleet run through `scripts/fleet_verify.sh`, which landed with the
+obs-buffer work. 713 tests, up from 707 with the six obs-buffer guard tests.
+
+| host | GPU | result | failures |
+|---|---|---|---|
+| mac-248 | GT 750M | **713 / 0** | — |
+| mac-247 | GT 650M | 713 / **1** | `PokerTest`, timeout |
+| Jetson | Tegra X1 | 713 / **2** | `PokerTest` + `IntegrationTest`, timeouts |
+
+Identical to the `371785ff5` and `144d441db` runs. Populating the observation
+buffer from the Custom RV's own observed value, and the two refusals it made
+necessary, changed nothing on any host — which is the intended result, since
+every fleet fixture either captures its data or has no Custom likelihood at
+all. The six new tests pass everywhere.
+
+`SUITE EXIT` was 2, 0 and 2, and each run printed its `### SUMMARY` line — so
+the non-vacuity gate ran rather than merely existing, which is the thing the
+previous two runs could not say.
+
+### The script did its job, including the part that had been guesswork
+
+`epmd` was found on both layouts without a per-host special case: FreeBSD ports
+put it on PATH at `/usr/local/lib/erlang27/bin/epmd`, the Jetson needs the
+search under `~/.asdf/installs/erlang`. Two DistributedTest failures that were
+twice mistaken for a code regression have now not recurred on a run where
+nothing was done by hand.
+
+The timeout was budgeted from the Jetson (~62 min) rather than from the
+Keplers (~20). The previous attempt used 50 min and produced a log with
+failure blocks and no summary — the exact shape the non-vacuity check flags,
+which an outer kill prevents it from ever reporting. That asymmetry is now in
+the script's header.
+
+### Not run: posteriordb
+
+Unchanged NIF, byte-identical goldens, and the 2026-09-09 fleet run established
+that every non-completion there is a 30-minute timeout rather than an accuracy
+failure. `scripts/fleet_verify.sh --pdb` runs it whenever it is wanted, and
+gates on the fixture count so a host missing them cannot pass by doing nothing.
+
+---
+
 ## Status — 2026-09-10, fleet re-verified at 144d441db (nx_vulkan 9a8427c)
 
 | host | GPU | result | failures |
