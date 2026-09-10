@@ -1,0 +1,137 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-06T03:42:44.537016Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 1000,
+    "num_warmup": 1000,
+    "ncp": false,
+    "transcendentals": ":f32_cast",
+    "chains": 4,
+    "tier": "fast",
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "d9e248b147bd9b97fb404a585e0330e1462645a5",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "322ae2237ee1fb242536ab89d048aaf8a25c704c",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "error": "no match of right hand side value: {:error, :vulkan_init_failed, \"Device::new: initialization of an object could not be completed for implementation-specific reasons\"}",
+      "name": "earnings-earn_height",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:181: Exmc.NUTS.Vulkan.Dispatch.chain_synth_vulkano/8\n    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:98: Exmc.NUTS.Vulkan.Dispatch.chain/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:567: Exmc.NUTS.Tree.ensure_available/3\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:438: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n",
+      "exception": "MatchError",
+      "wall_ms": 654393,
+      "comparisons": []
+    },
+    {
+      "error": "Out of memory while trying to allocate 16.01MiB.",
+      "name": "earnings-earn_height",
+      "status": "crash",
+      "stacktrace": "    (exla 0.13.1) EXLA.NIF.mlir_compile(#Reference<0.559444927.3572105217.37505>, #Reference<0.559444927.3602513921.29267>, [%EXLA.Typespec{type: {:u, 8}, shape: {8}}, %EXLA.Typespec{type: {:f, 64}, shape: {3}}], 1, 1, true, 0)\n    (exla 0.13.1) lib/exla/mlir/module.ex:114: EXLA.MLIR.Module.compile/5\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n    (exla 0.13.1) lib/exla/defn.ex:456: anonymous fn/11 in EXLA.Defn.compile/7\n    (exla 0.13.1) lib/exla/mlir/context_pool.ex:10: anonymous fn/3 in EXLA.MLIR.ContextPool.checkout/1\n    (nimble_pool 1.1.0) lib/nimble_pool.ex:462: NimblePool.checkout!/4\n    (exla 0.13.1) lib/exla/defn/locked_cache.ex:43: EXLA.Defn.LockedCache.run/2\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n",
+      "exception": "RuntimeError",
+      "wall_ms": 1327,
+      "comparisons": []
+    },
+    {
+      "error": "Out of memory while trying to allocate 16.00MiB.",
+      "name": "eight_schools-eight_schools_noncentered",
+      "status": "crash",
+      "stacktrace": "    (exla 0.13.1) EXLA.NIF.mlir_compile(#Reference<0.559444927.3572105217.37505>, #Reference<0.559444927.3572105217.38687>, [%EXLA.Typespec{type: {:u, 8}, shape: {8}}, %EXLA.Typespec{type: {:f, 64}, shape: {10}}, %EXLA.Typespec{type: {:f, 64}, shape: {10}}, %EXLA.Typespec{type: {:f, 64}, shape: {10}}, %EXLA.Typespec{type: {:f, 64}, shape: {}}, %EXLA.Typespec{type: {:f, 64}, shape: {10}}], 1, 1, true, 0)\n    (exla 0.13.1) lib/exla/mlir/module.ex:114: EXLA.MLIR.Module.compile/5\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n    (exla 0.13.1) lib/exla/defn.ex:456: anonymous fn/11 in EXLA.Defn.compile/7\n    (exla 0.13.1) lib/exla/mlir/context_pool.ex:10: anonymous fn/3 in EXLA.MLIR.ContextPool.checkout/1\n    (nimble_pool 1.1.0) lib/nimble_pool.ex:462: NimblePool.checkout!/4\n    (exla 0.13.1) lib/exla/defn/locked_cache.ex:43: EXLA.Defn.LockedCache.run/2\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n",
+      "exception": "RuntimeError",
+      "wall_ms": 2330,
+      "comparisons": []
+    },
+    {
+      "error": "no match of right hand side value: {:error, :vulkan_init_failed, \"Device::new: initialization of an object could not be completed for implementation-specific reasons\"}",
+      "name": "eight_schools-eight_schools_noncentered",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:181: Exmc.NUTS.Vulkan.Dispatch.chain_synth_vulkano/8\n    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:98: Exmc.NUTS.Vulkan.Dispatch.chain/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:567: Exmc.NUTS.Tree.ensure_available/3\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:438: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n",
+      "exception": "MatchError",
+      "wall_ms": 32999,
+      "comparisons": []
+    },
+    {
+      "error": "Out of memory while trying to allocate 16.00MiB.",
+      "name": "kidiq-kidscore_momhs",
+      "status": "crash",
+      "stacktrace": "    (exla 0.13.1) EXLA.NIF.mlir_compile(#Reference<0.559444927.3572105217.37505>, #Reference<0.559444927.3602513921.30206>, [%EXLA.Typespec{type: {:u, 8}, shape: {8}}, %EXLA.Typespec{type: {:f, 64}, shape: {3}}], 1, 1, true, 0)\n    (exla 0.13.1) lib/exla/mlir/module.ex:114: EXLA.MLIR.Module.compile/5\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n    (exla 0.13.1) lib/exla/defn.ex:456: anonymous fn/11 in EXLA.Defn.compile/7\n    (exla 0.13.1) lib/exla/mlir/context_pool.ex:10: anonymous fn/3 in EXLA.MLIR.ContextPool.checkout/1\n    (nimble_pool 1.1.0) lib/nimble_pool.ex:462: NimblePool.checkout!/4\n    (exla 0.13.1) lib/exla/defn/locked_cache.ex:43: EXLA.Defn.LockedCache.run/2\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n",
+      "exception": "RuntimeError",
+      "wall_ms": 427,
+      "comparisons": []
+    },
+    {
+      "error": "no match of right hand side value: {:error, :vulkan_init_failed, \"Device::new: initialization of an object could not be completed for implementation-specific reasons\"}",
+      "name": "kidiq-kidscore_momhs",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:181: Exmc.NUTS.Vulkan.Dispatch.chain_synth_vulkano/8\n    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:98: Exmc.NUTS.Vulkan.Dispatch.chain/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:567: Exmc.NUTS.Tree.ensure_available/3\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:438: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n",
+      "exception": "MatchError",
+      "wall_ms": 47175,
+      "comparisons": []
+    },
+    {
+      "error": "Underlying backend ran out of memory trying to instantiate command buffer with 5 (total of 0 alive graphs in the process). You can try to (a) Give more memory to the driver by reducing XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original error: Failed to instantiate CUDA graph: CUDA_ERROR_OUT_OF_MEMORY: out of memory",
+      "name": "mesquite-logmesquite_logvolume",
+      "status": "crash",
+      "stacktrace": "    (exla 0.13.1) EXLA.NIF.run_io(#Reference<0.559444927.3572105392.27248>, [[{<<0, 0, 0, 0, 0, 0, 0, 0>>, %EXLA.Typespec{type: {:u, 8}, shape: {8}}}, {<<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 166, 67, 199, 40, 248, 253, 252, 63>>, %EXLA.Typespec{type: {:f, 64}, shape: {3}}}]], 0, nil)\n    (exla 0.13.1) lib/exla/executable.ex:50: EXLA.Executable.run/3\n    (exla 0.13.1) lib/exla/defn.ex:295: EXLA.Defn.maybe_outfeed/8\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n    (exla 0.13.1) lib/exla/defn.ex:173: anonymous fn/8 in EXLA.Defn.__compile__/4\n    (nx 0.13.1) lib/nx/defn/compiler.ex:161: Nx.Defn.Compiler.__jit__/4\n    (nx 0.13.1) lib/nx/defn.ex:452: Nx.Defn.do_jit_apply/3\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:197: Exmc.NUTS.Sampler.sample_from_compiled/3\n",
+      "exception": "RuntimeError",
+      "wall_ms": 836,
+      "comparisons": []
+    },
+    {
+      "error": "no match of right hand side value: {:error, :vulkan_init_failed, \"Device::new: initialization of an object could not be completed for implementation-specific reasons\"}",
+      "name": "mesquite-logmesquite_logvolume",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:181: Exmc.NUTS.Vulkan.Dispatch.chain_synth_vulkano/8\n    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:98: Exmc.NUTS.Vulkan.Dispatch.chain/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:567: Exmc.NUTS.Tree.ensure_available/3\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:438: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n",
+      "exception": "MatchError",
+      "wall_ms": 7843,
+      "comparisons": []
+    },
+    {
+      "error": "no match of right hand side value: {:error, :vulkan_init_failed, \"Device::new: initialization of an object could not be completed for implementation-specific reasons\"}",
+      "name": "nes2000-nes",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:181: Exmc.NUTS.Vulkan.Dispatch.chain_synth_vulkano/8\n    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:98: Exmc.NUTS.Vulkan.Dispatch.chain/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:567: Exmc.NUTS.Tree.ensure_available/3\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:438: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n",
+      "exception": "MatchError",
+      "wall_ms": 573761,
+      "comparisons": []
+    },
+    {
+      "error": "Out of memory while trying to allocate 16.00MiB.",
+      "name": "nes2000-nes",
+      "status": "crash",
+      "stacktrace": "    (exla 0.13.1) EXLA.NIF.mlir_compile(#Reference<0.559444927.3572105217.37505>, #Reference<0.559444927.3639214081.223119>, [%EXLA.Typespec{type: {:u, 8}, shape: {8}}, %EXLA.Typespec{type: {:f, 64}, shape: {10}}], 1, 1, true, 0)\n    (exla 0.13.1) lib/exla/mlir/module.ex:114: EXLA.MLIR.Module.compile/5\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n    (exla 0.13.1) lib/exla/defn.ex:456: anonymous fn/11 in EXLA.Defn.compile/7\n    (exla 0.13.1) lib/exla/mlir/context_pool.ex:10: anonymous fn/3 in EXLA.MLIR.ContextPool.checkout/1\n    (nimble_pool 1.1.0) lib/nimble_pool.ex:462: NimblePool.checkout!/4\n    (exla 0.13.1) lib/exla/defn/locked_cache.ex:43: EXLA.Defn.LockedCache.run/2\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n",
+      "exception": "RuntimeError",
+      "wall_ms": 1426,
+      "comparisons": []
+    },
+    {
+      "error": "no match of right hand side value: {:error, :vulkan_init_failed, \"Device::new: initialization of an object could not be completed for implementation-specific reasons\"}",
+      "name": "sblri-blr",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:181: Exmc.NUTS.Vulkan.Dispatch.chain_synth_vulkano/8\n    (exmc 0.3.1) lib/exmc/nuts/vulkan/dispatch.ex:98: Exmc.NUTS.Vulkan.Dispatch.chain/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:567: Exmc.NUTS.Tree.ensure_available/3\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:438: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n",
+      "exception": "MatchError",
+      "wall_ms": 38144,
+      "comparisons": []
+    },
+    {
+      "error": "Out of memory while trying to allocate 16.00MiB.",
+      "name": "sblri-blr",
+      "status": "crash",
+      "stacktrace": "    (exla 0.13.1) EXLA.NIF.mlir_compile(#Reference<0.559444927.3572105217.37505>, #Reference<0.559444927.3611951105.34674>, [%EXLA.Typespec{type: {:u, 8}, shape: {8}}, %EXLA.Typespec{type: {:f, 64}, shape: {6}}], 1, 1, true, 0)\n    (exla 0.13.1) lib/exla/mlir/module.ex:114: EXLA.MLIR.Module.compile/5\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n    (exla 0.13.1) lib/exla/defn.ex:456: anonymous fn/11 in EXLA.Defn.compile/7\n    (exla 0.13.1) lib/exla/mlir/context_pool.ex:10: anonymous fn/3 in EXLA.MLIR.ContextPool.checkout/1\n    (nimble_pool 1.1.0) lib/nimble_pool.ex:462: NimblePool.checkout!/4\n    (exla 0.13.1) lib/exla/defn/locked_cache.ex:43: EXLA.Defn.LockedCache.run/2\n    (stdlib 6.2.2.2) timer.erl:595: :timer.tc/2\n",
+      "exception": "RuntimeError",
+      "wall_ms": 1223,
+      "comparisons": []
+    }
+  ]
+}

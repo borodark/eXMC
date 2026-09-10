@@ -1,2 +1,12 @@
-# Regenerable via run_validation.sh
-posteriordb_processed/
+# posteriordb_processed/ IS committed, as of 2026-09-09.
+#
+# It was ignored as "regenerable via run_validation.sh", which was true on a
+# machine with python3, numpy, and a clone of stan-dev/posteriordb -- and false
+# everywhere else. On 2026-09-09 a fleet posteriordb run found nothing to do on
+# all three remote hosts: the directory was absent, the harness listed zero
+# posteriors, and the run reported success by having nothing to fail. None of
+# those hosts has the preprocessing toolchain, and putting it on a FreeBSD
+# Kepler and a Jetson to regenerate a fixed input is worse than storing 28 MB.
+#
+# Committing them makes `git pull` sufficient to reproduce a verification run,
+# which is the property the fleet needs.

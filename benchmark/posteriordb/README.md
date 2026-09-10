@@ -49,6 +49,25 @@ The `posteriordb_processed/` directory contains 33 pre-computed model specificat
 
 This allows running the validation without any Python dependencies.
 
+### These are committed, and where they come from
+
+The directory is tracked in git as of 2026-09-09. It used to be gitignored as
+"regenerable", which held on a machine with python3, numpy and a clone of
+posteriordb, and nowhere else. A fleet run on 2026-09-09 found the directory
+absent on all three remote hosts: the harness listed zero posteriors and the
+run reported success by having nothing to fail. `git pull` is now sufficient to
+reproduce a verification run, which is the property the fleet needs.
+
+**Provenance.** Every file here is derived from
+[posteriordb](https://github.com/stan-dev/posteriordb) (stan-dev) by
+`preprocess_posteriordb.py` — the response, design matrix, priors and reference
+draws are theirs; the JSON shape is ours. Consult posteriordb's own licence and
+citation guidance before redistributing this directory beyond this repository,
+and note that this repository has a public remote.
+
+~28 MB across 66 files, the largest being the `nes*` models at 1.4 MB each,
+which is dominated by the 10,000 reference draws per parameter.
+
 ## Regenerating Preprocessed Data (optional)
 
 If you want to regenerate the model specifications from the posteriordb source:

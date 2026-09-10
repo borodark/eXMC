@@ -1,0 +1,138 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T19:59:17.788580Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 300,
+    "num_warmup": 300,
+    "ncp": false,
+    "transcendentals": ":f32_cast",
+    "compiler_requested": ":exla",
+    "compiler_resolved": "EXLA",
+    "backend": "EXLA.Backend",
+    "exmc_sha": "f6af24362fc3c7a586b663ab0e41dd6a28968153",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=EXLA (configured: :exla) backend=EXLA.Backend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "name": "sblrc-blr",
+      "status": "pass",
+      "comparisons": [
+        {
+          "pass": true,
+          "mean_err": 0.01658171325668859,
+          "sd_ratio": 1.0141141908782847,
+          "param": "beta[1]",
+          "exmc_mean": 0.9996636788798463,
+          "exmc_sd": 9.964333774977452e-4,
+          "ref_mean": 0.9996473862643858,
+          "ref_sd": 9.825652638139036e-4
+        },
+        {
+          "pass": true,
+          "mean_err": 0.036978188131477255,
+          "sd_ratio": 1.020555547475753,
+          "param": "beta[2]",
+          "exmc_mean": 0.9986945720099181,
+          "exmc_sd": 0.0010267181761433113,
+          "ref_mean": 0.9987317734909833,
+          "ref_sd": 0.0010060385039136783
+        },
+        {
+          "pass": true,
+          "mean_err": 0.08097907152311064,
+          "sd_ratio": 1.014332744484054,
+          "param": "beta[3]",
+          "exmc_mean": 0.9981109834220987,
+          "exmc_sd": 0.001101766192199565,
+          "ref_mean": 0.9981989427271345,
+          "ref_sd": 0.0010861979938939904
+        },
+        {
+          "pass": true,
+          "mean_err": 0.014480696091178753,
+          "sd_ratio": 1.0208804042823456,
+          "param": "beta[4]",
+          "exmc_mean": 0.9988584228107017,
+          "exmc_sd": 0.001040481979144763,
+          "ref_mean": 0.9988436640757263,
+          "ref_sd": 0.0010192006573739624
+        },
+        {
+          "pass": true,
+          "mean_err": 0.016033228210113225,
+          "sd_ratio": 1.013953350903309,
+          "param": "beta[5]",
+          "exmc_mean": 0.9986087654246433,
+          "exmc_sd": 9.916703660645223e-4,
+          "ref_mean": 0.9985930845481275,
+          "ref_sd": 9.78023658762077e-4
+        },
+        {
+          "pass": true,
+          "mean_err": 0.12969714308666216,
+          "sd_ratio": 1.0791376958061119,
+          "param": "sigma",
+          "exmc_mean": 1.0522386914294417,
+          "exmc_sd": 0.08277194619593223,
+          "ref_mean": 1.042290669975779,
+          "ref_sd": 0.07670193203111295
+        }
+      ],
+      "wall_ms": 12582,
+      "divergences": 7,
+      "leapfrog": 6220,
+      "ess": {
+        "beta_0": {
+          "ess": 120.9,
+          "sd": 9.964333774977452e-4,
+          "mcse": 9.06231923806053e-5
+        },
+        "beta_1": {
+          "ess": 141.3,
+          "sd": 0.0010267181761433113,
+          "mcse": 8.637926234403568e-5
+        },
+        "beta_2": {
+          "ess": 156.6,
+          "sd": 0.001101766192199565,
+          "mcse": 8.805433390633426e-5
+        },
+        "beta_3": {
+          "ess": 131.8,
+          "sd": 0.001040481979144763,
+          "mcse": 9.062956261131515e-5
+        },
+        "beta_4": {
+          "ess": 142.0,
+          "sd": 9.916703660645223e-4,
+          "mcse": 8.321463708896587e-5
+        },
+        "sigma": {
+          "ess": 48.2,
+          "sd": 0.08277194619593223,
+          "mcse": 0.011917336965039065
+        }
+      },
+      "min_ess": 48.2,
+      "step_size": 0.04849867506628152,
+      "n_params": 6,
+      "leapfrog_per_sec_apparent": 494.35701796216813,
+      "ess_per_sec": 3.8308694961055476,
+      "div_rate": 0.023333333333333334,
+      "mean_accept": 0.9198138484787607,
+      "mean_tree_depth": 4.15,
+      "max_mean_err": 0.12969714308666216,
+      "max_sd_ratio": 1.0791376958061119
+    }
+  ]
+}

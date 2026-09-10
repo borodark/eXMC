@@ -1,0 +1,1356 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T17:31:52.110867Z",
+    "mode": "validate",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 4,
+    "num_samples": 50,
+    "num_warmup": 50,
+    "ncp": false,
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "a73edc7ad3cefb2181968abaf703d896eb109f3b",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-earn_height",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 49926
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-log10earn_height",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 73376
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-logearn_height",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 59423
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-logearn_height_male",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 163646
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-logearn_interaction",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 169884
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-logearn_interaction_z",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 21151
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-logearn_logheight_male",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 33225
+    },
+    {
+      "name": "eight_schools-eight_schools_noncentered",
+      "status": "pass",
+      "comparisons": [
+        {
+          "pass": true,
+          "mean_err": 0.10779615800977879,
+          "sd_ratio": 1.0896487902460896,
+          "param": "mu",
+          "exmc_mean": 4.767247782861321,
+          "exmc_sd": 3.6059709024305118,
+          "ref_mean": 4.410518336954923,
+          "ref_sd": 3.309296476726348
+        },
+        {
+          "pass": true,
+          "mean_err": 0.15492937279530336,
+          "sd_ratio": 0.7475525433208908,
+          "param": "tau",
+          "exmc_mean": 3.106521384176395,
+          "exmc_sd": 2.3910301176936612,
+          "ref_mean": 3.6020595236405875,
+          "ref_sd": 3.198477670976633
+        },
+        {
+          "pass": true,
+          "mean_err": 0.20142609962112532,
+          "sd_ratio": 0.931635964636593,
+          "param": "theta[1]",
+          "exmc_mean": 5.019320828872438,
+          "exmc_sd": 5.231940333524248,
+          "ref_mean": 6.150502293344259,
+          "ref_sd": 5.615863418889257
+        },
+        {
+          "pass": true,
+          "mean_err": 0.0143359373224911,
+          "sd_ratio": 0.8804249525819307,
+          "param": "theta[2]",
+          "exmc_mean": 4.872982424073979,
+          "exmc_sd": 4.090082890682018,
+          "ref_mean": 4.939581140742171,
+          "ref_sd": 4.6455781139408385
+        },
+        {
+          "pass": true,
+          "mean_err": 0.21468294024399226,
+          "sd_ratio": 1.0021682372755865,
+          "param": "theta[3]",
+          "exmc_mean": 5.0395848584993175,
+          "exmc_sd": 5.292161788713172,
+          "ref_mean": 3.905906090015835,
+          "ref_sd": 5.280711952216741
+        },
+        {
+          "pass": true,
+          "mean_err": 0.04495843296702217,
+          "sd_ratio": 0.8534648096370199,
+          "param": "theta[4]",
+          "exmc_mean": 4.58152285403895,
+          "exmc_sd": 4.07182771252209,
+          "ref_mean": 4.796016751384928,
+          "ref_sd": 4.770938024092459
+        },
+        {
+          "pass": true,
+          "mean_err": 0.03514155257006379,
+          "sd_ratio": 0.8194380270258221,
+          "param": "theta[5]",
+          "exmc_mean": 3.776604774482263,
+          "exmc_sd": 3.781477619321011,
+          "ref_mean": 3.6144363246798945,
+          "ref_sd": 4.6147206922358865
+        },
+        {
+          "pass": true,
+          "mean_err": 0.1242178451045928,
+          "sd_ratio": 0.935199446531238,
+          "param": "theta[6]",
+          "exmc_mean": 4.646927219877558,
+          "exmc_sd": 4.485448849676369,
+          "ref_mean": 4.051147578967492,
+          "ref_sd": 4.796248400609532
+        },
+        {
+          "pass": true,
+          "mean_err": 0.06657461803150605,
+          "sd_ratio": 1.0473705563191613,
+          "param": "theta[7]",
+          "exmc_mean": 5.984106571868143,
+          "exmc_sd": 5.239843438431408,
+          "ref_mean": 6.317169758868946,
+          "ref_sd": 5.002855395177531
+        },
+        {
+          "pass": true,
+          "mean_err": 4.1624308309449044e-4,
+          "sd_ratio": 0.7421473265809955,
+          "param": "theta[8]",
+          "exmc_mean": 4.881783490996496,
+          "exmc_sd": 3.9465109429986325,
+          "ref_mean": 4.883996943532865,
+          "ref_sd": 5.317692056077121
+        }
+      ],
+      "wall_ms": 3620,
+      "divergences": 3,
+      "leapfrog": 1352,
+      "ess": {
+        "mu": {
+          "ess": 50.0,
+          "sd": 3.6059709024305118,
+          "mcse": 0.5099612955739978
+        },
+        "tau": {
+          "ess": 50.0,
+          "sd": 2.3910301176936612,
+          "mcse": 0.33814272204849133
+        },
+        "theta_trans_0": {
+          "ess": 44.4,
+          "sd": 1.0606166746198806,
+          "mcse": 0.15922761202353194
+        },
+        "theta_trans_1": {
+          "ess": 50.0,
+          "sd": 0.9251951159226549,
+          "mcse": 0.13084234807791664
+        },
+        "theta_trans_2": {
+          "ess": 39.7,
+          "sd": 0.9406522081996591,
+          "mcse": 0.14929451126638274
+        },
+        "theta_trans_3": {
+          "ess": 22.1,
+          "sd": 0.843946672872449,
+          "mcse": 0.17939533109146538
+        },
+        "theta_trans_4": {
+          "ess": 36.5,
+          "sd": 0.8576516492091311,
+          "mcse": 0.1419889434331444
+        },
+        "theta_trans_5": {
+          "ess": 38.7,
+          "sd": 1.1551518782274057,
+          "mcse": 0.18579952894794782
+        },
+        "theta_trans_6": {
+          "ess": 24.1,
+          "sd": 0.9999729431646286,
+          "mcse": 0.20376580391526408
+        },
+        "theta_trans_7": {
+          "ess": 40.6,
+          "sd": 0.8266922887384014,
+          "mcse": 0.12979286028246867
+        }
+      },
+      "min_ess": 22.1,
+      "step_size": 0.13398317137664797,
+      "n_params": 10,
+      "leapfrog_per_sec_apparent": 373.4806629834254,
+      "ess_per_sec": 6.104972375690608,
+      "div_rate": 0.06,
+      "mean_accept": 0.7629063505268711,
+      "mean_tree_depth": 4.78,
+      "max_mean_err": 0.21468294024399226,
+      "max_sd_ratio": 1.0896487902460896
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "kidiq-kidscore_interaction",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 104124
+    },
+    {
+      "name": "kidiq-kidscore_momhs",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 504.8636828132966,
+          "sd_ratio": 198.1798154291761,
+          "param": "beta[1]",
+          "exmc_mean": 1105.4897014984924,
+          "exmc_sd": 403.5226139119119,
+          "ref_mean": 77.51461474793969,
+          "ref_sd": 2.036143857728637
+        },
+        {
+          "pass": false,
+          "mean_err": 153.65216243489593,
+          "sd_ratio": 162.13912203083314,
+          "param": "beta[2]",
+          "exmc_mean": 364.78113641684723,
+          "exmc_sd": 372.46411044418363,
+          "ref_mean": 11.813171114459527,
+          "ref_sd": 2.29718840079419
+        },
+        {
+          "pass": false,
+          "mean_err": 25.523831756476564,
+          "sd_ratio": 7.5362395438729575,
+          "param": "sigma",
+          "exmc_mean": 2.7128457901588376,
+          "exmc_sd": 5.0646865367269545,
+          "ref_mean": 19.865990446741417,
+          "ref_sd": 0.672044261231664
+        }
+      ],
+      "wall_ms": 6227,
+      "divergences": 1,
+      "leapfrog": 9374,
+      "ess": {
+        "beta_0": {
+          "ess": 8.4,
+          "sd": 403.5226139119119,
+          "mcse": 138.9229796953179
+        },
+        "beta_1": {
+          "ess": 5.8,
+          "sd": 372.46411044418363,
+          "mcse": 154.19869318852642
+        },
+        "sigma": {
+          "ess": 3.3,
+          "sd": 5.0646865367269545,
+          "mcse": 2.805509031878665
+        }
+      },
+      "min_ess": 3.3,
+      "step_size": 8.315598731971531e-5,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 1505.3797976553717,
+      "ess_per_sec": 0.529950216797816,
+      "div_rate": 0.02,
+      "mean_accept": 0.9999739665781354,
+      "mean_tree_depth": 7.04,
+      "max_mean_err": 504.8636828132966,
+      "max_sd_ratio": 198.1798154291761
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "kidiq-kidscore_momhsiq",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 65036
+    },
+    {
+      "name": "kidiq-kidscore_momiq",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 0.13992486012350513,
+          "sd_ratio": 2.4054777406916235,
+          "param": "beta[1]",
+          "exmc_mean": 26.75168750101196,
+          "exmc_sd": 14.357341473310036,
+          "ref_mean": 25.91653157193623,
+          "ref_sd": 5.968602922587016
+        },
+        {
+          "pass": false,
+          "mean_err": 377.8632343924661,
+          "sd_ratio": 271.72558754457316,
+          "param": "beta[2]",
+          "exmc_mean": 22.89572267461599,
+          "exmc_sd": 16.02689339726266,
+          "ref_mean": 0.6086284370903354,
+          "ref_sd": 0.0589819072325445
+        },
+        {
+          "pass": false,
+          "mean_err": 0.5730515717348366,
+          "sd_ratio": 0.14823793612091157,
+          "param": "sigma",
+          "exmc_mean": 17.918255341569452,
+          "exmc_sd": 0.09250276382426482,
+          "ref_mean": 18.275848381424474,
+          "ref_sd": 0.6240154595029853
+        }
+      ],
+      "wall_ms": 34976,
+      "divergences": 0,
+      "leapfrog": 51150,
+      "ess": {
+        "beta_0": {
+          "ess": 6.0,
+          "sd": 14.357341473310036,
+          "mcse": 5.8732167106393085
+        },
+        "beta_1": {
+          "ess": 3.6,
+          "sd": 16.02689339726266,
+          "mcse": 8.503410676239447
+        },
+        "sigma": {
+          "ess": 4.2,
+          "sd": 0.09250276382426482,
+          "mcse": 0.04490426012214257
+        }
+      },
+      "min_ess": 3.6,
+      "step_size": 8.372154751481673e-7,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 1462.4313815187556,
+      "ess_per_sec": 0.1029277218664227,
+      "div_rate": 0.0,
+      "mean_accept": 0.9999710546721998,
+      "mean_tree_depth": 10.0,
+      "max_mean_err": 377.8632343924661,
+      "max_sd_ratio": 271.72558754457316
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "kidiq_with_mom_work-kidscore_interaction_c",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 13371
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "kidiq_with_mom_work-kidscore_interaction_c2",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 23463
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "kidiq_with_mom_work-kidscore_interaction_z",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 45450
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "kidiq_with_mom_work-kidscore_mom_work",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 37604
+    },
+    {
+      "name": "kilpisjarvi_mod-kilpisjarvi",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 0.38989631592615126,
+          "sd_ratio": 1.5342531049361845e-4,
+          "param": "alpha",
+          "exmc_mean": -72.3953942469326,
+          "exmc_sd": 0.004597338398695506,
+          "ref_mean": -60.712280822229665,
+          "ref_sd": 29.964667393563637
+        },
+        {
+          "pass": false,
+          "mean_err": 0.385506106452256,
+          "sd_ratio": 3.8104381951499175e-4,
+          "param": "beta",
+          "exmc_mean": 0.02048425626336371,
+          "exmc_sd": 2.8670550470781965e-6,
+          "ref_mean": 0.01758362601671587,
+          "ref_sd": 0.007524213490006221
+        },
+        {
+          "pass": false,
+          "mean_err": 10.04088010090262,
+          "sd_ratio": 1.4587654761460889,
+          "param": "sigma",
+          "exmc_mean": 0.04906800916513207,
+          "exmc_sd": 0.15728281907413058,
+          "ref_mean": 1.131666928648437,
+          "ref_sd": 0.1078191262722065
+        }
+      ],
+      "wall_ms": 9015,
+      "divergences": 3,
+      "leapfrog": 315,
+      "ess": {
+        "beta_0": {
+          "ess": 3.8,
+          "sd": 0.004597338398695506,
+          "mcse": 0.0023502136345843984
+        },
+        "beta_1": {
+          "ess": 3.5,
+          "sd": 2.8670550470781965e-6,
+          "mcse": 1.5266827617380426e-6
+        },
+        "sigma": {
+          "ess": 3.3,
+          "sd": 0.15728281907413058,
+          "mcse": 0.08717914630862439
+        }
+      },
+      "min_ess": 3.3,
+      "step_size": 6.4938056981545485e-6,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 34.94176372712146,
+      "ess_per_sec": 0.3660565723793677,
+      "div_rate": 0.06,
+      "mean_accept": 0.9964337792381588,
+      "mean_tree_depth": 2.46,
+      "max_mean_err": 10.04088010090262,
+      "max_sd_ratio": 1.4587654761460889
+    },
+    {
+      "name": "mesquite-logmesquite",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 4.116579106186014,
+          "sd_ratio": 3.7085054905509804,
+          "param": "beta[1]",
+          "exmc_mean": 4.618515467157431,
+          "exmc_sd": 0.6593012470436134,
+          "ref_mean": 5.350364387208211,
+          "ref_sd": 0.17778084695397325
+        },
+        {
+          "pass": false,
+          "mean_err": 5.601224226329884,
+          "sd_ratio": 2.315400676491068,
+          "param": "beta[2]",
+          "exmc_mean": 2.0407209070439536,
+          "exmc_sd": 0.6788223591378616,
+          "ref_mean": 0.3985704654454007,
+          "ref_sd": 0.2931770583079383
+        },
+        {
+          "pass": false,
+          "mean_err": 2.1591657616098043,
+          "sd_ratio": 2.2699996891905814,
+          "param": "beta[3]",
+          "exmc_mean": 1.6196182160684907,
+          "exmc_sd": 0.49456990361828024,
+          "ref_mean": 1.1491959478627976,
+          "ref_sd": 0.21787223406829193
+        },
+        {
+          "pass": false,
+          "mean_err": 7.055467174934892,
+          "sd_ratio": 3.99205558307951,
+          "param": "beta[4]",
+          "exmc_mean": 2.444333899438368,
+          "exmc_sd": 1.1695999911583816,
+          "ref_mean": 0.37720978914319764,
+          "ref_sd": 0.29298189036139144
+        },
+        {
+          "pass": false,
+          "mean_err": 3.1359611119505537,
+          "sd_ratio": 1.7055665622591247,
+          "param": "beta[5]",
+          "exmc_mean": 1.4198322556761942,
+          "exmc_sd": 0.5600744861037502,
+          "ref_mean": 0.39004435581807767,
+          "ref_sd": 0.3283803156658384
+        },
+        {
+          "pass": false,
+          "mean_err": 0.8861472289094854,
+          "sd_ratio": 6.983506420521436,
+          "param": "beta[6]",
+          "exmc_mean": 0.2216447391061112,
+          "exmc_sd": 0.8857467492977205,
+          "ref_mean": 0.1092510531635767,
+          "ref_sd": 0.12683409965728715
+        },
+        {
+          "pass": false,
+          "mean_err": 15.712264434855596,
+          "sd_ratio": 6.8184123994848,
+          "param": "beta[7]",
+          "exmc_mean": -2.692782947088671,
+          "exmc_sd": 0.9148262613959429,
+          "ref_mean": -0.5846687279942842,
+          "ref_sd": 0.1341699808983492
+        },
+        {
+          "pass": false,
+          "mean_err": 8.243032424156862,
+          "sd_ratio": 1.2025530172917516,
+          "param": "sigma",
+          "exmc_mean": 0.010245551413040606,
+          "exmc_sd": 0.04820612267926352,
+          "ref_mean": 0.3406797414855503,
+          "ref_sd": 0.04008648432634403
+        }
+      ],
+      "wall_ms": 2739,
+      "divergences": 3,
+      "leapfrog": 692,
+      "ess": {
+        "beta_0": {
+          "ess": 4.2,
+          "sd": 0.6593012470436134,
+          "mcse": 0.32049812996956256
+        },
+        "beta_1": {
+          "ess": 13.2,
+          "sd": 0.6788223591378616,
+          "mcse": 0.18673590908682194
+        },
+        "beta_2": {
+          "ess": 7.3,
+          "sd": 0.49456990361828024,
+          "mcse": 0.1825504375673316
+        },
+        "beta_3": {
+          "ess": 4.5,
+          "sd": 1.1695999911583816,
+          "mcse": 0.5521490901858751
+        },
+        "beta_4": {
+          "ess": 6.1,
+          "sd": 0.5600744861037502,
+          "mcse": 0.2270759059454801
+        },
+        "beta_5": {
+          "ess": 4.0,
+          "sd": 0.8857467492977205,
+          "mcse": 0.44476675883219174
+        },
+        "beta_6": {
+          "ess": 4.4,
+          "sd": 0.9148262613959429,
+          "mcse": 0.43858411719461504
+        },
+        "sigma": {
+          "ess": 3.3,
+          "sd": 0.04820612267926352,
+          "mcse": 0.026723743770073274
+        }
+      },
+      "min_ess": 3.3,
+      "step_size": 3.5188646544912793e-6,
+      "n_params": 8,
+      "leapfrog_per_sec_apparent": 252.64695144213218,
+      "ess_per_sec": 1.2048192771084336,
+      "div_rate": 0.06,
+      "mean_accept": 0.9995581823323009,
+      "mean_tree_depth": 3.6,
+      "max_mean_err": 15.712264434855596,
+      "max_sd_ratio": 6.983506420521436
+    },
+    {
+      "name": "mesquite-logmesquite_logva",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 9.659781678073662,
+          "sd_ratio": 10.009393091744634,
+          "param": "beta[1]",
+          "exmc_mean": 4.328508319846714,
+          "exmc_sd": 0.9280429310106583,
+          "ref_mean": 5.22413625845133,
+          "ref_sd": 0.09271720298167455
+        },
+        {
+          "pass": false,
+          "mean_err": 4.524350504399756,
+          "sd_ratio": 2.2183380495163147,
+          "param": "beta[2]",
+          "exmc_mean": -0.29349079050367927,
+          "exmc_sd": 0.4440843159124142,
+          "ref_mean": 0.612229191684083,
+          "ref_sd": 0.20018784603601877
+        },
+        {
+          "pass": false,
+          "mean_err": 2.7898883318601433,
+          "sd_ratio": 4.22065247511872,
+          "param": "beta[3]",
+          "exmc_mean": -0.39991138230050266,
+          "exmc_sd": 1.04738203009352,
+          "ref_mean": 0.2924173327462645,
+          "ref_sd": 0.24815642516600678
+        },
+        {
+          "pass": false,
+          "mean_err": 8.549718294411557,
+          "sd_ratio": 6.938010630411442,
+          "param": "beta[4]",
+          "exmc_mean": -1.5436928916539008,
+          "exmc_sd": 0.8247725703669466,
+          "ref_mean": -0.5273247265943225,
+          "ref_sd": 0.11887738637235779
+        },
+        {
+          "pass": false,
+          "mean_err": 8.480834050277462,
+          "sd_ratio": 1.3038957674870353,
+          "param": "sigma",
+          "exmc_mean": 0.013038870769849989,
+          "exmc_sd": 0.05148475805664312,
+          "ref_mean": 0.34790742398142205,
+          "ref_sd": 0.039485332601292486
+        }
+      ],
+      "wall_ms": 1537,
+      "divergences": 2,
+      "leapfrog": 981,
+      "ess": {
+        "beta_0": {
+          "ess": 6.1,
+          "sd": 0.9280429310106583,
+          "mcse": 0.37491840173511476
+        },
+        "beta_1": {
+          "ess": 5.8,
+          "sd": 0.4440843159124142,
+          "mcse": 0.18416426627220167
+        },
+        "beta_2": {
+          "ess": 3.8,
+          "sd": 1.04738203009352,
+          "mcse": 0.5397464254408497
+        },
+        "beta_3": {
+          "ess": 3.5,
+          "sd": 0.8247725703669466,
+          "mcse": 0.43894148775124164
+        },
+        "sigma": {
+          "ess": 3.3,
+          "sd": 0.05148475805664312,
+          "mcse": 0.028537113872722057
+        }
+      },
+      "min_ess": 3.3,
+      "step_size": 2.0288631359315672e-6,
+      "n_params": 5,
+      "leapfrog_per_sec_apparent": 638.2563435263501,
+      "ess_per_sec": 2.147039687703318,
+      "div_rate": 0.04,
+      "mean_accept": 0.999731393663717,
+      "mean_tree_depth": 4.14,
+      "max_mean_err": 9.659781678073662,
+      "max_sd_ratio": 10.009393091744634
+    },
+    {
+      "name": "mesquite-logmesquite_logvas",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 4.008958984296824,
+          "sd_ratio": 2.898841099178212,
+          "param": "beta[1]",
+          "exmc_mean": 6.06258418147448,
+          "exmc_sd": 0.5141603922434663,
+          "ref_mean": 5.351524881108426,
+          "ref_sd": 0.17736756678012633
+        },
+        {
+          "pass": false,
+          "mean_err": 8.001838843976104,
+          "sd_ratio": 2.9058413755670496,
+          "param": "beta[2]",
+          "exmc_mean": 2.6961415252188083,
+          "exmc_sd": 0.8425909750016235,
+          "ref_mean": 0.3758919582458023,
+          "ref_sd": 0.28996454592680554
+        },
+        {
+          "pass": false,
+          "mean_err": 5.427711313090227,
+          "sd_ratio": 2.113144184014783,
+          "param": "beta[3]",
+          "exmc_mean": 2.041224157546307,
+          "exmc_sd": 0.6399666141034634,
+          "ref_mean": 0.3974394798865092,
+          "ref_sd": 0.30285042494714426
+        },
+        {
+          "pass": false,
+          "mean_err": 5.009229095845143,
+          "sd_ratio": 3.30723744825692,
+          "param": "beta[4]",
+          "exmc_mean": 0.8292546549350864,
+          "exmc_sd": 0.7950140330228939,
+          "ref_mean": -0.3748945747860515,
+          "ref_sd": 0.24038613660531274
+        },
+        {
+          "pass": true,
+          "mean_err": 0.08296840450632531,
+          "sd_ratio": 1.3245191050550231,
+          "param": "beta[5]",
+          "exmc_mean": 0.4166670690019955,
+          "exmc_sd": 0.43587945095018366,
+          "ref_mean": 0.38936340651467527,
+          "ref_sd": 0.3290850613529477
+        },
+        {
+          "pass": false,
+          "mean_err": 18.125165842248805,
+          "sd_ratio": 7.088672580037916,
+          "param": "beta[6]",
+          "exmc_mean": 2.396908077710832,
+          "exmc_sd": 0.8943843556661194,
+          "ref_mean": 0.11003919074715407,
+          "ref_sd": 0.12617092206864708
+        },
+        {
+          "pass": false,
+          "mean_err": 1.4260119709792045,
+          "sd_ratio": 8.481033316729233,
+          "param": "beta[7]",
+          "exmc_mean": -0.7746772829376021,
+          "exmc_sd": 1.1297842341381592,
+          "ref_mean": -0.5847138925890881,
+          "ref_sd": 0.13321304043336407
+        },
+        {
+          "pass": false,
+          "mean_err": 8.164855880223312,
+          "sd_ratio": 1.266063019993484,
+          "param": "sigma",
+          "exmc_mean": 0.011426470503584234,
+          "exmc_sd": 0.05106688212612656,
+          "ref_mean": 0.3407574170897354,
+          "ref_sd": 0.0403351818350949
+        }
+      ],
+      "wall_ms": 3701,
+      "divergences": 2,
+      "leapfrog": 1047,
+      "ess": {
+        "beta_0": {
+          "ess": 6.7,
+          "sd": 0.5141603922434663,
+          "mcse": 0.19932932547217913
+        },
+        "beta_1": {
+          "ess": 4.0,
+          "sd": 0.8425909750016235,
+          "mcse": 0.42268569596068806
+        },
+        "beta_2": {
+          "ess": 10.2,
+          "sd": 0.6399666141034634,
+          "mcse": 0.2004916810288606
+        },
+        "beta_3": {
+          "ess": 6.2,
+          "sd": 0.7950140330228939,
+          "mcse": 0.3189127833521473
+        },
+        "beta_4": {
+          "ess": 8.1,
+          "sd": 0.43587945095018366,
+          "mcse": 0.15308731066136133
+        },
+        "beta_5": {
+          "ess": 5.6,
+          "sd": 0.8943843556661194,
+          "mcse": 0.37881039573551
+        },
+        "beta_6": {
+          "ess": 3.5,
+          "sd": 1.1297842341381592,
+          "mcse": 0.6050605472064288
+        },
+        "sigma": {
+          "ess": 3.3,
+          "sd": 0.05106688212612656,
+          "mcse": 0.028306880418641135
+        }
+      },
+      "min_ess": 3.3,
+      "step_size": 2.433563695929509e-6,
+      "n_params": 8,
+      "leapfrog_per_sec_apparent": 282.89651445555256,
+      "ess_per_sec": 0.8916509051607673,
+      "div_rate": 0.04,
+      "mean_accept": 0.9994961082083824,
+      "mean_tree_depth": 4.16,
+      "max_mean_err": 18.125165842248805,
+      "max_sd_ratio": 8.481033316729233
+    },
+    {
+      "error": "argument error",
+      "name": "mesquite-logmesquite_logvash",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 3622
+    },
+    {
+      "name": "mesquite-logmesquite_logvolume",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 18.602887098309086,
+          "sd_ratio": 9.759138648279166,
+          "param": "beta[1]",
+          "exmc_mean": 6.778540417501452,
+          "exmc_sd": 0.8434011977878166,
+          "ref_mean": 5.170847584508247,
+          "ref_sd": 0.08642168414489469
+        },
+        {
+          "pass": false,
+          "mean_err": 45.80099378780001,
+          "sd_ratio": 26.245873277813793,
+          "param": "beta[2]",
+          "exmc_mean": 3.2959889631715615,
+          "exmc_sd": 1.4749977884516456,
+          "ref_mean": 0.7220085194345479,
+          "ref_sd": 0.056199226935172826
+        },
+        {
+          "pass": false,
+          "mean_err": 8.254418317005731,
+          "sd_ratio": 1.6590480539748163,
+          "param": "sigma",
+          "exmc_mean": 0.03220946591220371,
+          "exmc_sd": 0.07928232661719742,
+          "ref_mean": 0.4266703059559361,
+          "ref_sd": 0.04778784220701114
+        }
+      ],
+      "wall_ms": 979,
+      "divergences": 2,
+      "leapfrog": 682,
+      "ess": {
+        "beta_0": {
+          "ess": 5.9,
+          "sd": 0.8434011977878166,
+          "mcse": 0.3471434071372938
+        },
+        "beta_1": {
+          "ess": 3.3,
+          "sd": 1.4749977884516456,
+          "mcse": 0.8098728987243236
+        },
+        "sigma": {
+          "ess": 3.3,
+          "sd": 0.07928232661719742,
+          "mcse": 0.043923033269475886
+        }
+      },
+      "min_ess": 3.3,
+      "step_size": 2.470747449321131e-6,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 696.629213483146,
+      "ess_per_sec": 3.3707865168539324,
+      "div_rate": 0.04,
+      "mean_accept": 0.9996362411245877,
+      "mean_tree_depth": 3.54,
+      "max_mean_err": 45.80099378780001,
+      "max_sd_ratio": 26.245873277813793
+    },
+    {
+      "name": "mesquite-mesquite",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 0.08836570857735983,
+          "sd_ratio": 0.01253010843549046,
+          "param": "beta[1]",
+          "exmc_mean": -713.6078252736443,
+          "exmc_sd": 1.904407533745996,
+          "ref_mean": -727.0382215073174,
+          "ref_sd": 151.98651660123903
+        },
+        {
+          "pass": false,
+          "mean_err": 0.5873478185588563,
+          "sd_ratio": 0.046278207069318726,
+          "param": "beta[2]",
+          "exmc_mean": 117.90796439430147,
+          "exmc_sd": 5.446803133689435,
+          "ref_mean": 187.03700247263703,
+          "ref_sd": 117.69693509367882
+        },
+        {
+          "pass": false,
+          "mean_err": 0.525019792857593,
+          "sd_ratio": 0.020193022103504796,
+          "param": "beta[3]",
+          "exmc_mean": 442.3611085987475,
+          "exmc_sd": 2.6409616867252037,
+          "ref_mean": 373.6959454249475,
+          "ref_sd": 130.78585628185024
+        },
+        {
+          "pass": false,
+          "mean_err": 1.1135566613874088,
+          "sd_ratio": 0.015144942424577158,
+          "param": "beta[4]",
+          "exmc_mean": 109.15565336372045,
+          "exmc_sd": 3.351936446588091,
+          "ref_mean": 355.6122627060053,
+          "ref_sd": 221.32381574119296
+        },
+        {
+          "pass": false,
+          "mean_err": 0.9939383660631389,
+          "sd_ratio": 0.01958474935252836,
+          "param": "beta[5]",
+          "exmc_mean": 89.92311147858862,
+          "exmc_sd": 3.7755316404343606,
+          "ref_mean": -101.68749747865853,
+          "ref_sd": 192.77916569031535
+        },
+        {
+          "pass": false,
+          "mean_err": 0.6086111143125588,
+          "sd_ratio": 0.04752261515410418,
+          "param": "beta[6]",
+          "exmc_mean": 153.95132124528374,
+          "exmc_sd": 1.7094282554742444,
+          "ref_mean": 132.05906990288884,
+          "ref_sd": 35.97083725150622
+        },
+        {
+          "pass": false,
+          "mean_err": 0.5916223020739331,
+          "sd_ratio": 0.01189648400770031,
+          "param": "beta[7]",
+          "exmc_mean": -303.0942331751174,
+          "exmc_sd": 1.2514598846012903,
+          "ref_mean": -365.3304012228999,
+          "ref_sd": 105.19577749116884
+        },
+        {
+          "pass": false,
+          "mean_err": 8.388262015439551,
+          "sd_ratio": 0.7684897638844183,
+          "param": "sigma",
+          "exmc_mean": 5.302866492298488,
+          "exmc_sd": 24.96127409289846,
+          "ref_mean": 277.7615473628049,
+          "ref_sd": 32.48094544126246
+        }
+      ],
+      "wall_ms": 39640,
+      "divergences": 36,
+      "leapfrog": 205,
+      "ess": {
+        "beta_0": {
+          "ess": 3.2,
+          "sd": 1.904407533745996,
+          "mcse": 1.066746209654096
+        },
+        "beta_1": {
+          "ess": 10.3,
+          "sd": 5.446803133689435,
+          "mcse": 1.6981160853281838
+        },
+        "beta_2": {
+          "ess": 5.9,
+          "sd": 2.6409616867252037,
+          "mcse": 1.091751112652084
+        },
+        "beta_3": {
+          "ess": 5.3,
+          "sd": 3.351936446588091,
+          "mcse": 1.4535036532014223
+        },
+        "beta_4": {
+          "ess": 5.6,
+          "sd": 3.7755316404343606,
+          "mcse": 1.6023506434446997
+        },
+        "beta_5": {
+          "ess": 12.5,
+          "sd": 1.7094282554742444,
+          "mcse": 0.4841303759549042
+        },
+        "beta_6": {
+          "ess": 6.7,
+          "sd": 1.2514598846012903,
+          "mcse": 0.4827668564732637
+        },
+        "sigma": {
+          "ess": 3.0,
+          "sd": 24.96127409289846,
+          "mcse": 14.428831970534922
+        }
+      },
+      "min_ess": 3.0,
+      "step_size": 9.344523130168401e-6,
+      "n_params": 8,
+      "leapfrog_per_sec_apparent": 5.1715438950555,
+      "ess_per_sec": 0.07568113017154389,
+      "div_rate": 0.72,
+      "mean_accept": 0.5065980286291188,
+      "mean_tree_depth": 1.98,
+      "max_mean_err": 8.388262015439551,
+      "max_sd_ratio": 0.7684897638844183
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes1972-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 205182
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes1976-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 157200
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes1980-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 104228
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes1984-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 138749
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes1988-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 129680
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes1992-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 158768
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes1996-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 130964
+    },
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "nes2000-nes",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 48046
+    },
+    {
+      "name": "sblrc-blr",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 617.6359369443032,
+          "sd_ratio": 341.83840056660244,
+          "param": "beta[1]",
+          "exmc_mean": 1.6065150035890126,
+          "exmc_sd": 0.3358785382344466,
+          "ref_mean": 0.9996473862643858,
+          "ref_sd": 9.825652638139036e-4
+        },
+        {
+          "pass": false,
+          "mean_err": 46.624673425321554,
+          "sd_ratio": 123.4819248436176,
+          "param": "beta[2]",
+          "exmc_mean": 1.0456379901892576,
+          "exmc_sd": 0.12422757093005432,
+          "ref_mean": 0.9987317734909833,
+          "ref_sd": 0.0010060385039136783
+        },
+        {
+          "pass": false,
+          "mean_err": 436.0499401162345,
+          "sd_ratio": 156.52430932308533,
+          "param": "beta[3]",
+          "exmc_mean": 1.471835512918983,
+          "exmc_sd": 0.1700163907823777,
+          "ref_mean": 0.9981989427271345,
+          "ref_sd": 0.0010861979938939904
+        },
+        {
+          "pass": false,
+          "mean_err": 829.8065088168095,
+          "sd_ratio": 575.4797345622017,
+          "param": "beta[4]",
+          "exmc_mean": 1.8445830033550112,
+          "exmc_sd": 0.5865293237711893,
+          "ref_mean": 0.9988436640757263,
+          "ref_sd": 0.0010192006573739624
+        },
+        {
+          "pass": false,
+          "mean_err": 1003.9231599701927,
+          "sd_ratio": 498.79694775516293,
+          "param": "beta[5]",
+          "exmc_mean": 1.9804536865781612,
+          "exmc_sd": 0.487835215822861,
+          "ref_mean": 0.9985930845481275,
+          "ref_sd": 9.78023658762077e-4
+        },
+        {
+          "pass": false,
+          "mean_err": 12.700428998499037,
+          "sd_ratio": 2.1868329445519787,
+          "param": "sigma",
+          "exmc_mean": 0.06814322816693012,
+          "exmc_sd": 0.16773431187642446,
+          "ref_mean": 1.042290669975779,
+          "ref_sd": 0.07670193203111295
+        }
+      ],
+      "wall_ms": 6723,
+      "divergences": 8,
+      "leapfrog": 32225,
+      "ess": {
+        "beta_0": {
+          "ess": 3.4,
+          "sd": 0.3358785382344466,
+          "mcse": 0.18208051048954702
+        },
+        "beta_1": {
+          "ess": 8.4,
+          "sd": 0.12422757093005432,
+          "mcse": 0.04277408423665316
+        },
+        "beta_2": {
+          "ess": 3.9,
+          "sd": 0.1700163907823777,
+          "mcse": 0.08576363828397823
+        },
+        "beta_3": {
+          "ess": 4.1,
+          "sd": 0.5865293237711893,
+          "mcse": 0.2880615754540556
+        },
+        "beta_4": {
+          "ess": 4.9,
+          "sd": 0.487835215822861,
+          "mcse": 0.22022575178905496
+        },
+        "sigma": {
+          "ess": 3.4,
+          "sd": 0.16773431187642446,
+          "mcse": 0.09082488220020628
+        }
+      },
+      "min_ess": 3.4,
+      "step_size": 2.8075851081507422e-5,
+      "n_params": 6,
+      "leapfrog_per_sec_apparent": 4793.247062323368,
+      "ess_per_sec": 0.5057266101442808,
+      "div_rate": 0.16,
+      "mean_accept": 0.510636525287656,
+      "mean_tree_depth": 9.22,
+      "max_mean_err": 1003.9231599701927,
+      "max_sd_ratio": 575.4797345622017
+    },
+    {
+      "name": "sblri-blr",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 160.44705238389736,
+          "sd_ratio": 132.46169747763253,
+          "param": "beta[1]",
+          "exmc_mean": 1.1557463696255592,
+          "exmc_sd": 0.12902165972624977,
+          "ref_mean": 0.9994661362377109,
+          "ref_sd": 9.740299436222788e-4
+        },
+        {
+          "pass": false,
+          "mean_err": 190.6324676930342,
+          "sd_ratio": 168.35975097093237,
+          "param": "beta[2]",
+          "exmc_mean": 0.7803152484151928,
+          "exmc_sd": 0.1942195696307292,
+          "ref_mean": 1.0002285924268346,
+          "ref_sd": 0.0011535985798901637
+        },
+        {
+          "pass": false,
+          "mean_err": 969.1769267015717,
+          "sd_ratio": 427.04060864647903,
+          "param": "beta[3]",
+          "exmc_mean": 1.929020718077045,
+          "exmc_sd": 0.40916069068066363,
+          "ref_mean": 1.0004226112650136,
+          "ref_sd": 9.581306376869253e-4
+        },
+        {
+          "pass": false,
+          "mean_err": 449.8686367449617,
+          "sd_ratio": 229.7222848786746,
+          "param": "beta[4]",
+          "exmc_mean": 1.4780658993671703,
+          "exmc_sd": 0.24353504269679585,
+          "ref_mean": 1.0011475293644694,
+          "ref_sd": 0.0010601280708374301
+        },
+        {
+          "pass": false,
+          "mean_err": 698.397556516468,
+          "sd_ratio": 511.4433388215559,
+          "param": "beta[5]",
+          "exmc_mean": 1.73321136971489,
+          "exmc_sd": 0.5357935696669713,
+          "ref_mean": 1.0015625409025803,
+          "ref_sd": 0.0010476108084651607
+        },
+        {
+          "pass": false,
+          "mean_err": 12.687929227268889,
+          "sd_ratio": 2.5627340122974913,
+          "param": "sigma",
+          "exmc_mean": 0.059476998545293785,
+          "exmc_sd": 0.18242120915278784,
+          "ref_mean": 0.9626325270460435,
+          "ref_sd": 0.07118226404980953
+        }
+      ],
+      "wall_ms": 4449,
+      "divergences": 12,
+      "leapfrog": 11399,
+      "ess": {
+        "beta_0": {
+          "ess": 3.6,
+          "sd": 0.12902165972624977,
+          "mcse": 0.06791986398763694
+        },
+        "beta_1": {
+          "ess": 3.3,
+          "sd": 0.1942195696307292,
+          "mcse": 0.10636767090358433
+        },
+        "beta_2": {
+          "ess": 5.6,
+          "sd": 0.40916069068066363,
+          "mcse": 0.173386124604702
+        },
+        "beta_3": {
+          "ess": 14.5,
+          "sd": 0.24353504269679585,
+          "mcse": 0.06392152939080332
+        },
+        "beta_4": {
+          "ess": 5.2,
+          "sd": 0.5357935696669713,
+          "mcse": 0.23396284188396796
+        },
+        "sigma": {
+          "ess": 3.5,
+          "sd": 0.18242120915278784,
+          "mcse": 0.09706094560053959
+        }
+      },
+      "min_ess": 3.3,
+      "step_size": 7.905342862628223e-5,
+      "n_params": 6,
+      "leapfrog_per_sec_apparent": 2562.1487974825804,
+      "ess_per_sec": 0.7417397167902899,
+      "div_rate": 0.24,
+      "mean_accept": 0.47188638278360984,
+      "mean_tree_depth": 7.7,
+      "max_mean_err": 969.1769267015717,
+      "max_sd_ratio": 511.4433388215559
+    }
+  ]
+}

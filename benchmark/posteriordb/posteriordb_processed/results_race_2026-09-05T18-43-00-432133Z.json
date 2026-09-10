@@ -1,0 +1,206 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T18:43:00.432133Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 100,
+    "num_warmup": 100,
+    "ncp": false,
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "e1e2c8474607796613983df737fe37def9ce3094",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "error": "argument error",
+      "name": "earnings-earn_height",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) Exmc.NUTS.NativeTree.build_subtree_bin(<<205, 88, 1, 42, 17, 219, 235, 192, 199, 157, 232, 103, 174, 220, 146, 64, 233, 219, 121, 111, 116, 69, 86, 192, 32, 140, 229, 54, 247, 220, 235, 192, 59, 21, 107, 18, 55, 231, 146, 64, 0, 0, 0, 0, 0, 0, 248, 255, 198, 148, ...>>, <<92, 94, 129, 223, 157, 161, 146, 191, 55, 69, 132, 107, 45, 209, 176, 63, 0, 0, 0, 0, 0, 0, 248, 255, 188, 45, 244, 212, 156, 161, 146, 191, 106, 241, 26, 106, 45, 209, 176, 63, 0, 0, 0, 0, 0, 0, 248, 255, 183, 210, ...>>, <<0, 0, 0, 0, 0, 0, 240, 127, 0, 0, 0, 0, 0, 0, 240, 255, 0, 0, 0, 0, 0, 0, 240, 255, 0, 0, 0, 0, 0, 0, 240, 255, 0, 0, 0, 0, 0, 0, 240, 255, 0, 0, 0, 0, 0, 0, 240, 255, 0, 0, ...>>, <<159, 146, 247, 171, 58, 54, 81, 62, 253, 61, 123, 249, 52, 79, 247, 189, 0, 0, 0, 0, 0, 0, 248, 255, 83, 255, 148, 255, 102, 55, 81, 62, 102, 103, 162, 120, 57, 92, 247, 189, 0, 0, 0, 0, 0, 0, 248, 255, 202, 162, ...>>, <<210, 58, 190, 197, 213, 244, 138, 64, 242, 155, 135, 127, 31, 182, 68, 64, 26, 116, 194, 118, 210, 229, 60, 63>>, 87235.32208498739, 3, 3, true, 566785982717)\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:1027: Exmc.NUTS.Tree.build_subtree_nif_precomputed/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:444: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n    (elixir 1.18.3) lib/enum.ex:4507: Enum.reduce_range/5\n",
+      "exception": "ArgumentError",
+      "comparisons": [],
+      "wall_ms": 249764
+    },
+    {
+      "name": "eight_schools-eight_schools_noncentered",
+      "status": "pass",
+      "comparisons": [
+        {
+          "pass": true,
+          "mean_err": 0.16189558810831986,
+          "sd_ratio": 0.970672846416257,
+          "param": "mu",
+          "exmc_mean": 4.946278836279326,
+          "exmc_sd": 3.2122442306992545,
+          "ref_mean": 4.410518336954923,
+          "ref_sd": 3.309296476726348
+        },
+        {
+          "pass": true,
+          "mean_err": 0.14647006134873056,
+          "sd_ratio": 1.37895533960811,
+          "param": "tau",
+          "exmc_mean": 4.07054074433108,
+          "exmc_sd": 4.410557863010539,
+          "ref_mean": 3.6020595236405875,
+          "ref_sd": 3.198477670976633
+        },
+        {
+          "pass": true,
+          "mean_err": 0.19977261993891593,
+          "sd_ratio": 0.9257654760424212,
+          "param": "theta[1]",
+          "exmc_mean": 7.272398041754883,
+          "exmc_sd": 5.198972471377232,
+          "ref_mean": 6.150502293344259,
+          "ref_sd": 5.615863418889257
+        },
+        {
+          "pass": true,
+          "mean_err": 0.017454991299223774,
+          "sd_ratio": 0.891130272352399,
+          "param": "theta[2]",
+          "exmc_mean": 5.020669666300873,
+          "exmc_sd": 4.139815289910444,
+          "ref_mean": 4.939581140742171,
+          "ref_sd": 4.6455781139408385
+        },
+        {
+          "pass": true,
+          "mean_err": 0.14160747224092343,
+          "sd_ratio": 0.8541427333412261,
+          "param": "theta[3]",
+          "exmc_mean": 4.65369436120168,
+          "exmc_sd": 4.51048174085409,
+          "ref_mean": 3.905906090015835,
+          "ref_sd": 5.280711952216741
+        },
+        {
+          "pass": true,
+          "mean_err": 0.09073781356843692,
+          "sd_ratio": 0.9707362184310125,
+          "param": "theta[4]",
+          "exmc_mean": 5.228921236361597,
+          "exmc_sd": 4.6313223358762405,
+          "ref_mean": 4.796016751384928,
+          "ref_sd": 4.770938024092459
+        },
+        {
+          "pass": true,
+          "mean_err": 0.04882551447692623,
+          "sd_ratio": 1.0292391648950239,
+          "param": "theta[5]",
+          "exmc_mean": 3.839752436645629,
+          "exmc_sd": 4.7496512715006505,
+          "ref_mean": 3.6144363246798945,
+          "ref_sd": 4.6147206922358865
+        },
+        {
+          "pass": true,
+          "mean_err": 0.20590504582127273,
+          "sd_ratio": 1.0603108318752745,
+          "param": "theta[6]",
+          "exmc_mean": 5.038719325665204,
+          "exmc_sd": 5.085514131530747,
+          "ref_mean": 4.051147578967492,
+          "ref_sd": 4.796248400609532
+        },
+        {
+          "pass": true,
+          "mean_err": 0.04959523895861048,
+          "sd_ratio": 1.050929304726453,
+          "param": "theta[7]",
+          "exmc_mean": 6.5652875676681495,
+          "exmc_sd": 5.257647342100906,
+          "ref_mean": 6.317169758868946,
+          "ref_sd": 5.002855395177531
+        },
+        {
+          "pass": true,
+          "mean_err": 0.2690605745433813,
+          "sd_ratio": 1.1297929697474662,
+          "param": "theta[8]",
+          "exmc_mean": 6.3147782233857495,
+          "exmc_sd": 6.00789110023788,
+          "ref_mean": 4.883996943532865,
+          "ref_sd": 5.317692056077121
+        }
+      ],
+      "wall_ms": 171626,
+      "divergences": 6,
+      "leapfrog": 720,
+      "ess": {
+        "mu": {
+          "ess": 38.7,
+          "sd": 3.2122442306992545,
+          "mcse": 0.5160534921940221
+        },
+        "tau": {
+          "ess": 69.8,
+          "sd": 4.410557863010539,
+          "mcse": 0.5278985196828765
+        },
+        "theta_trans_0": {
+          "ess": 77.5,
+          "sd": 0.8939768859139351,
+          "mcse": 0.10154745019103395
+        },
+        "theta_trans_1": {
+          "ess": 77.5,
+          "sd": 0.8857892824824133,
+          "mcse": 0.10063423791296977
+        },
+        "theta_trans_2": {
+          "ess": 100.0,
+          "sd": 0.752449273207391,
+          "mcse": 0.07524492732073909
+        },
+        "theta_trans_3": {
+          "ess": 64.7,
+          "sd": 1.0058834333135942,
+          "mcse": 0.12503066832484672
+        },
+        "theta_trans_4": {
+          "ess": 100.0,
+          "sd": 1.1436433164808382,
+          "mcse": 0.11436433164808382
+        },
+        "theta_trans_5": {
+          "ess": 100.0,
+          "sd": 0.9709016189964791,
+          "mcse": 0.0970901618996479
+        },
+        "theta_trans_6": {
+          "ess": 59.4,
+          "sd": 0.9384065446419675,
+          "mcse": 0.12178102536165931
+        },
+        "theta_trans_7": {
+          "ess": 100.0,
+          "sd": 0.9278832351975527,
+          "mcse": 0.09278832351975527
+        }
+      },
+      "min_ess": 38.7,
+      "step_size": 0.7454954983251876,
+      "n_params": 10,
+      "leapfrog_per_sec_apparent": 4.195168564203559,
+      "ess_per_sec": 0.2254903103259413,
+      "div_rate": 0.06,
+      "mean_accept": 0.8281289590550638,
+      "mean_tree_depth": 3.0,
+      "max_mean_err": 0.2690605745433813,
+      "max_sd_ratio": 1.37895533960811
+    }
+  ]
+}

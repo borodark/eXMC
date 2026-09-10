@@ -1,0 +1,38 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-06T03:03:21.078642Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 300,
+    "num_warmup": 300,
+    "ncp": false,
+    "transcendentals": ":f32_cast",
+    "chains": 1,
+    "tier": "full",
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "d9e248b147bd9b97fb404a585e0330e1462645a5",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "322ae2237ee1fb242536ab89d048aaf8a25c704c",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "error": "Vulkan compiler requires a synthesisable model (f64 chain shader path).\nChainShaderCodegen.detect_meta/1 returned :unsupported for this IR.\nEither:\n  - use `compiler: :exla` (if EXLA is available on this platform)\n  - use `compiler: :none` (pure CPU, slower but correct)\n  - reshape the model so CustomSynth can emit a fused f64 chain shader\n    (standard-family priors with optional Custom likelihood)\n\nNote on width: this is NOT a width problem. `:unsupported` means the\nIR itself has no chain-shader form — a non-standard prior family, or\na structure CustomSynth cannot compose — so widening anything will\nnot help.\n\nThe only width bound is d <= 256, the shader's thread tile\n(`local_size_x = 256` with a `q_shared[256]` tile), and it reports\nitself as `{:unsupported, :d_exceeds_tile}` rather than as this\nmessage.\n\nThis note used to say the binding limit was the 128-byte push block\nat 13 prior floats. That was wrong, and wrong in a way that sent\nreaders to reduce their model when the model was never the problem.\nSee Exmc.NUTS.CustomSynth.Push.\n",
+      "name": "sblrc-blr",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) lib/exmc/compiler.ex:141: Exmc.Compiler.compile_for_sampling/2\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:35: Exmc.NUTS.Sampler.sample/3\n    benchmark/posteriordb/validate_posteriordb.exs:300: anonymous fn/8 in PosteriorDBValidator.validate_one/2\n    (elixir 1.18.3) lib/enum.ex:4484: Enum.map/2\n    benchmark/posteriordb/validate_posteriordb.exs:298: PosteriorDBValidator.validate_one/2\n    (elixir 1.18.3) lib/task/supervised.ex:101: Task.Supervised.invoke_mfa/2\n    (elixir 1.18.3) lib/task/supervised.ex:36: Task.Supervised.reply/4\n",
+      "exception": "Exmc.SynthUnsupportedError",
+      "wall_ms": 337,
+      "comparisons": []
+    }
+  ]
+}

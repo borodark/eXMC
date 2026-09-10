@@ -1,0 +1,33 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T17:42:27.146375Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 20,
+    "num_warmup": 20,
+    "ncp": false,
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "a73edc7ad3cefb2181968abaf703d896eb109f3b",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "error": "no match of right hand side value: {:error, :dispatch_failed, \"ComputePipeline: a non-validation error occurred\"}",
+      "name": "earnings-earn_height",
+      "status": "crash",
+      "comparisons": [],
+      "wall_ms": 9271
+    }
+  ]
+}

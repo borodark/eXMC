@@ -1,0 +1,138 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T19:58:12.845416Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 300,
+    "num_warmup": 300,
+    "ncp": false,
+    "transcendentals": ":polynomial",
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "f6af24362fc3c7a586b663ab0e41dd6a28968153",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "name": "sblrc-blr",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 37.252541839195295,
+          "sd_ratio": 5.231774653032054,
+          "param": "beta[1]",
+          "exmc_mean": 0.9630443326644184,
+          "exmc_sd": 0.005140560042171334,
+          "ref_mean": 0.9996473862643858,
+          "ref_sd": 9.825652638139036e-4
+        },
+        {
+          "pass": false,
+          "mean_err": 3.643499937715518,
+          "sd_ratio": 6.908572199856394,
+          "param": "beta[2]",
+          "exmc_mean": 1.0023972747173322,
+          "exmc_sd": 0.006950289640123156,
+          "ref_mean": 0.9987317734909833,
+          "ref_sd": 0.0010060385039136783
+        },
+        {
+          "pass": false,
+          "mean_err": 10.304330596346675,
+          "sd_ratio": 12.849400708958838,
+          "param": "beta[3]",
+          "exmc_mean": 1.0093914859493067,
+          "exmc_sd": 0.013956993272811108,
+          "ref_mean": 0.9981989427271345,
+          "ref_sd": 0.0010861979938939904
+        },
+        {
+          "pass": false,
+          "mean_err": 2.6135218457253697,
+          "sd_ratio": 12.250136378190005,
+          "param": "beta[4]",
+          "exmc_mean": 0.9961799608925018,
+          "exmc_sd": 0.012485347049571945,
+          "ref_mean": 0.9988436640757263,
+          "ref_sd": 0.0010192006573739624
+        },
+        {
+          "pass": false,
+          "mean_err": 23.797474447815684,
+          "sd_ratio": 8.102400919880097,
+          "param": "beta[5]",
+          "exmc_mean": 0.9753185915193777,
+          "exmc_sd": 0.00792433979241835,
+          "ref_mean": 0.9985930845481275,
+          "ref_sd": 9.78023658762077e-4
+        },
+        {
+          "pass": false,
+          "mean_err": 13.588816598025186,
+          "sd_ratio": 1.825299598868863e-4,
+          "param": "sigma",
+          "exmc_mean": 2.182890791754212e-6,
+          "exmc_sd": 1.4000400576885725e-5,
+          "ref_mean": 1.042290669975779,
+          "ref_sd": 0.07670193203111295
+        }
+      ],
+      "wall_ms": 51605,
+      "divergences": 83,
+      "leapfrog": 5407,
+      "ess": {
+        "beta_0": {
+          "ess": 7.0,
+          "sd": 0.005140560042171334,
+          "mcse": 0.0019473293217074992
+        },
+        "beta_1": {
+          "ess": 4.4,
+          "sd": 0.006950289640123156,
+          "mcse": 0.003319873724039672
+        },
+        "beta_2": {
+          "ess": 5.7,
+          "sd": 0.013956993272811108,
+          "mcse": 0.005865895617309328
+        },
+        "beta_3": {
+          "ess": 4.5,
+          "sd": 0.012485347049571945,
+          "mcse": 0.00589429200566627
+        },
+        "beta_4": {
+          "ess": 7.3,
+          "sd": 0.00792433979241835,
+          "mcse": 0.002925832899636721
+        },
+        "sigma": {
+          "ess": 10.5,
+          "sd": 1.4000400576885725e-5,
+          "mcse": 4.328635806125004e-6
+        }
+      },
+      "min_ess": 4.4,
+      "step_size": 0.0539875022345356,
+      "n_params": 6,
+      "leapfrog_per_sec_apparent": 104.77666892742953,
+      "ess_per_sec": 0.08526305590543554,
+      "div_rate": 0.27666666666666667,
+      "mean_accept": 0.2322927576880196,
+      "mean_tree_depth": 4.21,
+      "max_mean_err": 37.252541839195295,
+      "max_sd_ratio": 12.849400708958838
+    }
+  ]
+}

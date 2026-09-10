@@ -1,0 +1,797 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-08T00:58:39.819260Z",
+    "mode": "validate",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.4",
+    "parallel": 4,
+    "num_samples": 1000,
+    "num_warmup": 1000,
+    "ncp": false,
+    "transcendentals": ":f32_cast",
+    "chains": 4,
+    "tier": "fast",
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "4c658c0d7817ebf1d4c6c049060736bf337b5f30",
+    "exmc_dirty": false,
+    "nx_vulkan_sha": "bc54f340b9aa4c2cfa8c3b13cbbd1bf7ed06f065",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64 perop_fallback=false nx_default_backend={Nx.BinaryBackend, []} nx_defn_options=[]"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "name": "eight_schools-eight_schools_noncentered",
+      "status": "pass",
+      "chains": 4,
+      "arm": "vulkan",
+      "wall_ms": 480463,
+      "min_ess": 2310.9,
+      "div_rate": 0.0235,
+      "divergences": 94,
+      "comparisons": [
+        {
+          "pass": true,
+          "ess_total": 2917.0,
+          "rhat": 0.9996798282112404,
+          "mean_err": 0.009155218180288232,
+          "sd_ratio": 1.0035017876881724,
+          "ess_min_per_chain": 602.6,
+          "param": "mu",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 4.410518336954923,
+          "ref_sd": 3.309296476726348,
+          "mcse_z": 0.49274166367290173,
+          "mcse": 0.06148725285751608,
+          "exmc_mean": 4.440815668222612,
+          "exmc_sd": 3.320884930385061
+        },
+        {
+          "pass": true,
+          "ess_total": 2310.9,
+          "rhat": 1.00074723022727,
+          "mean_err": 0.01012638525233337,
+          "sd_ratio": 1.0211325440261927,
+          "ess_min_per_chain": 469.0,
+          "param": "tau",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 3.6020595236405875,
+          "ref_sd": 3.198477670976633,
+          "mcse_z": 0.4767173284317848,
+          "mcse": 0.06794176587589687,
+          "exmc_mean": 3.634448540757883,
+          "exmc_sd": 3.266069641175341
+        },
+        {
+          "pass": true,
+          "ess_total": 3090.7,
+          "rhat": 1.0004400134410043,
+          "mean_err": 0.010701851186229832,
+          "sd_ratio": 0.9873730610716336,
+          "ess_min_per_chain": 708.1,
+          "param": "theta[1]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 6.150502293344259,
+          "ref_sd": 5.615863418889257,
+          "mcse_z": 0.6025646811927137,
+          "mcse": 0.09974055311735629,
+          "exmc_mean": 6.210602427935403,
+          "exmc_sd": 5.544952254468895
+        },
+        {
+          "pass": true,
+          "ess_total": 3997.5,
+          "rhat": 1.000178462465106,
+          "mean_err": 0.012708511601424053,
+          "sd_ratio": 0.998510310146136,
+          "ess_min_per_chain": 997.5,
+          "param": "theta[2]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 4.939581140742171,
+          "ref_sd": 4.6455781139408385,
+          "mcse_z": 0.8047031588356798,
+          "mcse": 0.07336666037419451,
+          "exmc_mean": 4.99861952409851,
+          "exmc_sd": 4.638657643359168
+        },
+        {
+          "pass": true,
+          "ess_total": 3585.9,
+          "rhat": 1.0009536236741745,
+          "mean_err": 0.022478737829347523,
+          "sd_ratio": 1.0094290985129954,
+          "ess_min_per_chain": 788.7,
+          "param": "theta[3]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 3.905906090015835,
+          "ref_sd": 5.280711952216741,
+          "mcse_z": 1.3335099412795737,
+          "mcse": 0.08901601394308281,
+          "exmc_mean": 4.024609829542017,
+          "exmc_sd": 5.330504305432945
+        },
+        {
+          "pass": true,
+          "ess_total": 3756.9,
+          "rhat": 1.0012716995149025,
+          "mean_err": 0.02053284911609445,
+          "sd_ratio": 1.0015602084189397,
+          "ess_min_per_chain": 919.3,
+          "param": "theta[4]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 4.796016751384928,
+          "ref_sd": 4.770938024092459,
+          "mcse_z": 1.256576170319733,
+          "mcse": 0.07795862511542162,
+          "exmc_mean": 4.893977701975857,
+          "exmc_sd": 4.778381681763888
+        },
+        {
+          "pass": true,
+          "ess_total": 3793.0,
+          "rhat": 0.9999530916744906,
+          "mean_err": 0.0036402466129563382,
+          "sd_ratio": 1.016734991156724,
+          "ess_min_per_chain": 841.5,
+          "param": "theta[5]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 3.6144363246798945,
+          "ref_sd": 4.6147206922358865,
+          "mcse_z": 0.2205043528828321,
+          "mcse": 0.07618317348400572,
+          "exmc_mean": 3.6312350460495457,
+          "exmc_sd": 4.6919480022112054
+        },
+        {
+          "pass": true,
+          "ess_total": 3330.0,
+          "rhat": 1.0003727879263937,
+          "mean_err": 0.03566622805049914,
+          "sd_ratio": 1.0025295968781154,
+          "ess_min_per_chain": 589.4,
+          "param": "theta[6]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 4.051147578967492,
+          "ref_sd": 4.796248400609532,
+          "mcse_z": 2.052963032650776,
+          "mcse": 0.0833254600898021,
+          "exmc_mean": 4.222211668210473,
+          "exmc_sd": 4.80838097559038
+        },
+        {
+          "pass": true,
+          "ess_total": 3270.8,
+          "rhat": 0.9997679547187379,
+          "mean_err": 0.012144082140386474,
+          "sd_ratio": 1.0308261522929247,
+          "ess_min_per_chain": 631.2,
+          "param": "theta[7]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 6.317169758868946,
+          "ref_sd": 5.002855395177531,
+          "mcse_z": 0.6737571278626073,
+          "mcse": 0.09017357196390322,
+          "exmc_mean": 6.377924845724458,
+          "exmc_sd": 5.157074177488754
+        },
+        {
+          "pass": true,
+          "ess_total": 3355.9,
+          "rhat": 1.0000563825337814,
+          "mean_err": 0.03250318231579675,
+          "sd_ratio": 0.9784459042005773,
+          "ess_min_per_chain": 676.5,
+          "param": "theta[8]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 4.883996943532865,
+          "ref_sd": 5.317692056077121,
+          "mcse_z": 1.9244035234133117,
+          "mcse": 0.0898158376323118,
+          "exmc_mean": 5.056838857930804,
+          "exmc_sd": 5.203074012068606
+        }
+      ],
+      "leapfrog": 31724,
+      "max_rhat": 1.0012716995149025,
+      "step_size": 0.4284169899005746,
+      "n_params": 10,
+      "leapfrog_per_sec_apparent": 66.02797718034479,
+      "ess_per_sec": 4.809735609193632,
+      "mean_accept": 0.8452753044981564,
+      "mean_tree_depth": 3.032,
+      "ess": {
+        "mu": {
+          "ess_total": 2917.0,
+          "rhat": 0.9996798282112404,
+          "ess_min_per_chain": 602.6,
+          "mean": 4.440815668222612,
+          "sd": 3.320884930385061,
+          "mcse": 0.06148725285751608
+        },
+        "tau": {
+          "ess_total": 2310.9,
+          "rhat": 1.00074723022727,
+          "ess_min_per_chain": 469.0,
+          "mean": 3.634448540757883,
+          "sd": 3.266069641175341,
+          "mcse": 0.06794176587589687
+        },
+        "theta_trans_0": {
+          "ess_total": 3090.7,
+          "rhat": 1.0004400134410043,
+          "ess_min_per_chain": 708.1,
+          "mean": 6.210602427935403,
+          "sd": 5.544952254468895,
+          "mcse": 0.09974055311735629
+        },
+        "theta_trans_1": {
+          "ess_total": 3997.5,
+          "rhat": 1.000178462465106,
+          "ess_min_per_chain": 997.5,
+          "mean": 4.99861952409851,
+          "sd": 4.638657643359168,
+          "mcse": 0.07336666037419451
+        },
+        "theta_trans_2": {
+          "ess_total": 3585.9,
+          "rhat": 1.0009536236741745,
+          "ess_min_per_chain": 788.7,
+          "mean": 4.024609829542017,
+          "sd": 5.330504305432945,
+          "mcse": 0.08901601394308281
+        },
+        "theta_trans_3": {
+          "ess_total": 3756.9,
+          "rhat": 1.0012716995149025,
+          "ess_min_per_chain": 919.3,
+          "mean": 4.893977701975857,
+          "sd": 4.778381681763888,
+          "mcse": 0.07795862511542162
+        },
+        "theta_trans_4": {
+          "ess_total": 3793.0,
+          "rhat": 0.9999530916744906,
+          "ess_min_per_chain": 841.5,
+          "mean": 3.6312350460495457,
+          "sd": 4.6919480022112054,
+          "mcse": 0.07618317348400572
+        },
+        "theta_trans_5": {
+          "ess_total": 3330.0,
+          "rhat": 1.0003727879263937,
+          "ess_min_per_chain": 589.4,
+          "mean": 4.222211668210473,
+          "sd": 4.80838097559038,
+          "mcse": 0.0833254600898021
+        },
+        "theta_trans_6": {
+          "ess_total": 3270.8,
+          "rhat": 0.9997679547187379,
+          "ess_min_per_chain": 631.2,
+          "mean": 6.377924845724458,
+          "sd": 5.157074177488754,
+          "mcse": 0.09017357196390322
+        },
+        "theta_trans_7": {
+          "ess_total": 3355.9,
+          "rhat": 1.0000563825337814,
+          "ess_min_per_chain": 676.5,
+          "mean": 5.056838857930804,
+          "sd": 5.203074012068606,
+          "mcse": 0.0898158376323118
+        }
+      },
+      "max_mean_err": 0.03566622805049914,
+      "max_sd_ratio": 1.0308261522929247
+    },
+    {
+      "name": "kidiq-kidscore_momhs",
+      "status": "pass",
+      "chains": 4,
+      "arm": "vulkan",
+      "wall_ms": 994159,
+      "min_ess": 1480.2,
+      "div_rate": 0.01575,
+      "divergences": 63,
+      "comparisons": [
+        {
+          "pass": true,
+          "ess_total": 1480.2,
+          "rhat": 0.9999568326096918,
+          "mean_err": 0.025273863123601595,
+          "sd_ratio": 1.024170506574171,
+          "ess_min_per_chain": 334.1,
+          "param": "beta[1]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 77.51461474793969,
+          "ref_sd": 2.036143857728637,
+          "mcse_z": 0.9494088601299618,
+          "mcse": 0.05420343470688836,
+          "exmc_mean": 77.56607596909988,
+          "exmc_sd": 2.085358486227825
+        },
+        {
+          "pass": true,
+          "ess_total": 1694.4,
+          "rhat": 0.9996270740147909,
+          "mean_err": 0.027192680775761487,
+          "sd_ratio": 1.027774724780238,
+          "ess_min_per_chain": 333.3,
+          "param": "beta[2]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 11.813171114459527,
+          "ref_sd": 2.29718840079419,
+          "mcse_z": 1.0890743826126295,
+          "mcse": 0.05735761657961713,
+          "exmc_mean": 11.750704403594948,
+          "exmc_sd": 2.360992176394604
+        },
+        {
+          "pass": true,
+          "ess_total": 1905.1,
+          "rhat": 1.000032798883289,
+          "mean_err": 0.018392829313289873,
+          "sd_ratio": 1.0198369950934845,
+          "ess_min_per_chain": 364.1,
+          "param": "sigma",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 19.865990446741417,
+          "ref_sd": 0.672044261231664,
+          "mcse_z": 0.7871854912668859,
+          "mcse": 0.01570251932351635,
+          "exmc_mean": 19.878351242129227,
+          "exmc_sd": 0.685375599944321
+        }
+      ],
+      "leapfrog": 39698,
+      "max_rhat": 1.000032798883289,
+      "step_size": 0.3247288304142881,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 39.93123836327992,
+      "ess_per_sec": 1.488896645305228,
+      "mean_accept": 0.942011676215099,
+      "mean_tree_depth": 3.406,
+      "ess": {
+        "beta_0": {
+          "ess_total": 1480.2,
+          "rhat": 0.9999568326096918,
+          "ess_min_per_chain": 334.1,
+          "mean": 77.56607596909988,
+          "sd": 2.085358486227825,
+          "mcse": 0.05420343470688836
+        },
+        "beta_1": {
+          "ess_total": 1694.4,
+          "rhat": 0.9996270740147909,
+          "ess_min_per_chain": 333.3,
+          "mean": 11.750704403594948,
+          "sd": 2.360992176394604,
+          "mcse": 0.05735761657961713
+        },
+        "sigma": {
+          "ess_total": 1905.1,
+          "rhat": 1.000032798883289,
+          "ess_min_per_chain": 364.1,
+          "mean": 19.878351242129227,
+          "sd": 0.685375599944321,
+          "mcse": 0.01570251932351635
+        }
+      },
+      "max_mean_err": 0.027192680775761487,
+      "max_sd_ratio": 1.027774724780238
+    },
+    {
+      "name": "mesquite-logmesquite_logvolume",
+      "status": "pass",
+      "chains": 4,
+      "arm": "vulkan",
+      "wall_ms": 296770,
+      "min_ess": 2268.0,
+      "div_rate": 0.00825,
+      "divergences": 33,
+      "comparisons": [
+        {
+          "pass": true,
+          "ess_total": 2366.6,
+          "rhat": 0.9997662088115691,
+          "mean_err": 0.015506808685424074,
+          "sd_ratio": 1.025956711049201,
+          "ess_min_per_chain": 492.0,
+          "param": "beta[1]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 5.170847584508247,
+          "ref_sd": 0.08642168414489469,
+          "mcse_z": 0.7352807984499484,
+          "mcse": 0.001822602365153771,
+          "exmc_mean": 5.16950745998594,
+          "exmc_sd": 0.08866490682862904
+        },
+        {
+          "pass": true,
+          "ess_total": 2268.0,
+          "rhat": 1.00053401537733,
+          "mean_err": 0.020321846500281033,
+          "sd_ratio": 1.0064588732508857,
+          "ess_min_per_chain": 506.3,
+          "param": "beta[2]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.7220085194345479,
+          "ref_sd": 0.056199226935172826,
+          "mcse_z": 0.9615817785449025,
+          "mcse": 0.0011877014401617124,
+          "exmc_mean": 0.723150591497759,
+          "exmc_sd": 0.05656221061874486
+        },
+        {
+          "pass": true,
+          "ess_total": 2388.7,
+          "rhat": 1.0000963166310004,
+          "mean_err": 0.028129184502506763,
+          "sd_ratio": 0.9897949116160885,
+          "ess_min_per_chain": 562.5,
+          "param": "sigma",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.4266703059559361,
+          "ref_sd": 0.04778784220701114,
+          "mcse_z": 1.3889820198958454,
+          "mcse": 9.677828878724401e-4,
+          "exmc_mean": 0.4253260729255184,
+          "exmc_sd": 0.047300163053612176
+        }
+      ],
+      "leapfrog": 25210,
+      "max_rhat": 1.00053401537733,
+      "step_size": 0.52016091217498,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 84.94793948175355,
+      "ess_per_sec": 7.642281901809483,
+      "mean_accept": 0.9331090367679942,
+      "mean_tree_depth": 2.752,
+      "ess": {
+        "beta_0": {
+          "ess_total": 2366.6,
+          "rhat": 0.9997662088115691,
+          "ess_min_per_chain": 492.0,
+          "mean": 5.16950745998594,
+          "sd": 0.08866490682862904,
+          "mcse": 0.001822602365153771
+        },
+        "beta_1": {
+          "ess_total": 2268.0,
+          "rhat": 1.00053401537733,
+          "ess_min_per_chain": 506.3,
+          "mean": 0.723150591497759,
+          "sd": 0.05656221061874486,
+          "mcse": 0.0011877014401617124
+        },
+        "sigma": {
+          "ess_total": 2388.7,
+          "rhat": 1.0000963166310004,
+          "ess_min_per_chain": 562.5,
+          "mean": 0.4253260729255184,
+          "sd": 0.047300163053612176,
+          "mcse": 9.677828878724401e-4
+        }
+      },
+      "max_mean_err": 0.028129184502506763,
+      "max_sd_ratio": 1.025956711049201
+    },
+    {
+      "name": "sblri-blr",
+      "status": "pass",
+      "chains": 4,
+      "arm": "vulkan",
+      "wall_ms": 768239,
+      "min_ess": 764.7,
+      "div_rate": 0.00975,
+      "divergences": 39,
+      "comparisons": [
+        {
+          "pass": true,
+          "ess_total": 3914.7,
+          "rhat": 0.9993313655995948,
+          "mean_err": 0.01568195107054778,
+          "sd_ratio": 0.9817694084681774,
+          "ess_min_per_chain": 914.7,
+          "param": "beta[1]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.9994661362377109,
+          "ref_sd": 9.740299436222788e-4,
+          "mcse_z": 0.9994001811828068,
+          "mcse": 1.5283857462438258e-5,
+          "exmc_mean": 0.999481410927628,
+          "exmc_sd": 9.562728015803368e-4
+        },
+        {
+          "pass": true,
+          "ess_total": 3978.2,
+          "rhat": 0.9997646549460644,
+          "mean_err": 0.006967677092083767,
+          "sd_ratio": 0.9644666908568255,
+          "ess_min_per_chain": 978.2,
+          "param": "beta[2]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 1.0002285924268346,
+          "ref_sd": 0.0011535985798901637,
+          "mcse_z": 0.4556615342807862,
+          "mcse": 1.7640072276998413e-5,
+          "exmc_mean": 1.000220554524436,
+          "exmc_sd": 0.0011126074049237994
+        },
+        {
+          "pass": true,
+          "ess_total": 3962.6,
+          "rhat": 0.9993324805813283,
+          "mean_err": 0.011891021375257542,
+          "sd_ratio": 0.9813642837596839,
+          "ess_min_per_chain": 962.6,
+          "param": "beta[3]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 1.0004226112650136,
+          "ref_sd": 9.581306376869253e-4,
+          "mcse_z": 0.7627481415004742,
+          "mcse": 1.4936977585565554e-5,
+          "exmc_mean": 1.0004340044169067,
+          "exmc_sd": 9.402751870018386e-4
+        },
+        {
+          "pass": true,
+          "ess_total": 4.0e3,
+          "rhat": 0.9995200340598321,
+          "mean_err": 0.0017385644494671729,
+          "sd_ratio": 1.0075098207846263,
+          "ess_min_per_chain": 1.0e3,
+          "param": "beta[4]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 1.0011475293644694,
+          "ref_sd": 0.0010601280708374301,
+          "mcse_z": 0.10913687203627248,
+          "mcse": 1.6887976917898142e-5,
+          "exmc_mean": 1.0011456862634935,
+          "exmc_sd": 0.0010680894426581707
+        },
+        {
+          "pass": true,
+          "ess_total": 4.0e3,
+          "rhat": 0.9995635788335809,
+          "mean_err": 0.004493399377666701,
+          "sd_ratio": 1.0032182353651413,
+          "ess_min_per_chain": 1.0e3,
+          "param": "beta[5]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 1.0015625409025803,
+          "ref_sd": 0.0010476108084651607,
+          "mcse_z": 0.28327588094604605,
+          "mcse": 1.661748871479405e-5,
+          "exmc_mean": 1.0015578335688256,
+          "exmc_sd": 0.0010509822666178675
+        },
+        {
+          "pass": true,
+          "ess_total": 764.7,
+          "rhat": 1.0017670821692228,
+          "mean_err": 0.023523205598625422,
+          "sd_ratio": 1.0022881893920457,
+          "ess_min_per_chain": 159.5,
+          "param": "sigma",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.9626325270460435,
+          "ref_sd": 0.07118226404980953,
+          "mcse_z": 0.649017124061943,
+          "mcse": 0.0025799550892273565,
+          "exmc_mean": 0.9643069620782628,
+          "exmc_sd": 0.0713451425513101
+        }
+      ],
+      "leapfrog": 30880,
+      "max_rhat": 1.0017670821692228,
+      "step_size": 0.22531205113675418,
+      "n_params": 6,
+      "leapfrog_per_sec_apparent": 40.19582447649755,
+      "ess_per_sec": 0.9953933606598988,
+      "mean_accept": 0.91779244891883,
+      "mean_tree_depth": 3.063,
+      "ess": {
+        "beta_0": {
+          "ess_total": 3914.7,
+          "rhat": 0.9993313655995948,
+          "ess_min_per_chain": 914.7,
+          "mean": 0.999481410927628,
+          "sd": 9.562728015803368e-4,
+          "mcse": 1.5283857462438258e-5
+        },
+        "beta_1": {
+          "ess_total": 3978.2,
+          "rhat": 0.9997646549460644,
+          "ess_min_per_chain": 978.2,
+          "mean": 1.000220554524436,
+          "sd": 0.0011126074049237994,
+          "mcse": 1.7640072276998413e-5
+        },
+        "beta_2": {
+          "ess_total": 3962.6,
+          "rhat": 0.9993324805813283,
+          "ess_min_per_chain": 962.6,
+          "mean": 1.0004340044169067,
+          "sd": 9.402751870018386e-4,
+          "mcse": 1.4936977585565554e-5
+        },
+        "beta_3": {
+          "ess_total": 4.0e3,
+          "rhat": 0.9995200340598321,
+          "ess_min_per_chain": 1.0e3,
+          "mean": 1.0011456862634935,
+          "sd": 0.0010680894426581707,
+          "mcse": 1.6887976917898142e-5
+        },
+        "beta_4": {
+          "ess_total": 4.0e3,
+          "rhat": 0.9995635788335809,
+          "ess_min_per_chain": 1.0e3,
+          "mean": 1.0015578335688256,
+          "sd": 0.0010509822666178675,
+          "mcse": 1.661748871479405e-5
+        },
+        "sigma": {
+          "ess_total": 764.7,
+          "rhat": 1.0017670821692228,
+          "ess_min_per_chain": 159.5,
+          "mean": 0.9643069620782628,
+          "sd": 0.0713451425513101,
+          "mcse": 0.0025799550892273565
+        }
+      },
+      "max_mean_err": 0.023523205598625422,
+      "max_sd_ratio": 1.0075098207846263
+    },
+    {
+      "error": ":timeout",
+      "name": "unknown",
+      "status": "crash",
+      "comparisons": []
+    },
+    {
+      "error": ":timeout",
+      "name": "unknown",
+      "status": "crash",
+      "comparisons": []
+    }
+  ]
+}

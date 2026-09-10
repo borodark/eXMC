@@ -1,0 +1,92 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T17:41:55.209012Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 50,
+    "num_warmup": 50,
+    "ncp": false,
+    "compiler_requested": ":exla",
+    "compiler_resolved": "EXLA",
+    "backend": "EXLA.Backend",
+    "exmc_sha": "a73edc7ad3cefb2181968abaf703d896eb109f3b",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=EXLA (configured: :exla) backend=EXLA.Backend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "name": "earnings-earn_height",
+      "status": "fail",
+      "comparisons": [
+        {
+          "pass": false,
+          "mean_err": 0.012288415618804461,
+          "sd_ratio": 0.022676595461124112,
+          "param": "beta[1]",
+          "exmc_mean": -61166.42100439396,
+          "exmc_sd": 219.23532004507362,
+          "ref_mean": -61285.224320158624,
+          "ref_sd": 9667.911588444671
+        },
+        {
+          "pass": false,
+          "mean_err": 0.027771317450470803,
+          "sd_ratio": 0.06991765686168908,
+          "param": "beta[2]",
+          "exmc_mean": 1257.7908339774046,
+          "exmc_sd": 10.081602457617796,
+          "ref_mean": 1261.7952499550997,
+          "ref_sd": 144.19251030624775
+        },
+        {
+          "pass": true,
+          "mean_err": 0.061911397110465574,
+          "sd_ratio": 0.8883514443783183,
+          "param": "sigma",
+          "exmc_mean": 18863.47764378384,
+          "exmc_sd": 342.60368351011493,
+          "ref_mean": 18887.35453714123,
+          "ref_sd": 385.6623250608594
+        }
+      ],
+      "wall_ms": 8876,
+      "divergences": 1,
+      "leapfrog": 26334,
+      "ess": {
+        "beta_0": {
+          "ess": 6.6,
+          "sd": 219.23532004507362,
+          "mcse": 85.33612961655825
+        },
+        "beta_1": {
+          "ess": 19.2,
+          "sd": 10.081602457617796,
+          "mcse": 2.2988997462649086
+        },
+        "sigma": {
+          "ess": 50.0,
+          "sd": 342.60368351011493,
+          "mcse": 48.4514775738984
+        }
+      },
+      "min_ess": 6.6,
+      "step_size": 9.788518405093283e-8,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 2966.876971608833,
+      "ess_per_sec": 0.743578188373141,
+      "div_rate": 0.02,
+      "mean_accept": 0.9523192708963193,
+      "mean_tree_depth": 7.7,
+      "max_mean_err": 0.061911397110465574,
+      "max_sd_ratio": 0.8883514443783183
+    }
+  ]
+}

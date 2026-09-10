@@ -1,0 +1,35 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T18:11:02.469522Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 300,
+    "num_warmup": 300,
+    "ncp": false,
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "a73edc7ad3cefb2181968abaf703d896eb109f3b",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "error": "argument error",
+      "name": "sblrc-blr",
+      "status": "crash",
+      "stacktrace": "    (exmc 0.3.1) Exmc.NUTS.NativeTree.build_subtree_bin(<<230, 103, 21, 40, 184, 119, 238, 63, 6, 7, 244, 35, 161, 19, 240, 63, 156, 106, 216, 54, 32, 107, 239, 63, 218, 49, 130, 235, 206, 104, 238, 63, 17, 185, 162, 107, 211, 96, 240, 63, 18, 3, 188, 114, 52, 170, 48, 192, 142, 18, ...>>, <<15, 90, 53, 242, 93, 124, 105, 64, 216, 179, 126, 156, 133, 50, 118, 64, 201, 52, 92, 87, 48, 73, 101, 64, 113, 189, 205, 116, 165, 159, 119, 64, 123, 250, 31, 142, 43, 52, 98, 64, 0, 0, 0, 0, 0, 0, 248, 255, 222, 66, ...>>, <<0, 0, 0, 0, 0, 0, 240, 127, 0, 0, 0, 224, 255, 255, 255, 127, 0, 0, 0, 224, 255, 255, 255, 127, 0, 0, 0, 224, 255, 255, 255, 127, 0, 0, 0, 224, 255, 255, 255, 127, 0, 0, 0, 224, 255, 255, 255, 127, 0, 0, ...>>, <<118, 107, 44, 5, 210, 127, 131, 191, 50, 60, 179, 117, 1, 148, 132, 191, 111, 119, 179, 188, 153, 27, 132, 191, 233, 31, 32, 253, 70, 118, 131, 191, 217, 21, 157, 45, 209, 246, 132, 191, 0, 0, 0, 0, 0, 0, 248, 255, 10, 104, ...>>, <<128, 252, 76, 57, 225, 185, 9, 63, 226, 251, 223, 81, 188, 195, 9, 63, 48, 6, 233, 9, 133, 240, 9, 63, 61, 239, 161, 45, 149, 195, 9, 63, 84, 24, 242, 13, 24, 207, 9, 63, 225, 172, 200, 41, 195, 77, 150, 63>>, 1502.618607937876, 5, 6, true, 721492749441)\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:1027: Exmc.NUTS.Tree.build_subtree_nif_precomputed/8\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:444: anonymous fn/13 in Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:437: Exmc.NUTS.Tree.do_build/11\n    (exmc 0.3.1) lib/exmc/nuts/tree.ex:128: Exmc.NUTS.Tree.build/12\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1007: Exmc.NUTS.Sampler.nuts_step_with_stats/8\n    (exmc 0.3.1) lib/exmc/nuts/sampler.ex:1087: anonymous fn/9 in Exmc.NUTS.Sampler.run_sampling/8\n    (elixir 1.18.3) lib/enum.ex:4507: Enum.reduce_range/5\n",
+      "exception": "ArgumentError",
+      "comparisons": [],
+      "wall_ms": 57670
+    }
+  ]
+}

@@ -1,0 +1,664 @@
+{
+  "provenance": {
+    "schedulers_online": 88,
+    "timestamp": "2026-09-05T20:39:33.760620Z",
+    "mode": "race",
+    "otp_release": "27",
+    "host": "super-io",
+    "seed": 42,
+    "precision": ":f64",
+    "elixir_version": "1.18.3",
+    "parallel": 1,
+    "num_samples": 300,
+    "num_warmup": 300,
+    "ncp": false,
+    "transcendentals": ":f32_cast",
+    "chains": 2,
+    "compiler_requested": ":vulkan",
+    "compiler_resolved": "Nx.Vulkan",
+    "backend": "Nx.Vulkan.VulkanoBackend",
+    "exmc_sha": "6511877e82cc97270065874874558e4aa469deab",
+    "exmc_dirty": true,
+    "nx_vulkan_sha": "91f29d31e6dceebde2156ee1cb158d8050a8d16d",
+    "jit_describe": "compiler=Nx.Vulkan (configured: :vulkan) backend=Nx.Vulkan.VulkanoBackend precision=:f64"
+  },
+  "schema": "exmc.posteriordb.v1",
+  "models": [
+    {
+      "name": "mesquite-logmesquite_logvolume",
+      "status": "pass",
+      "chains": 2,
+      "arm": "exla",
+      "wall_ms": 11262,
+      "min_ess": 319.6,
+      "div_rate": 0.016666666666666666,
+      "divergences": 10,
+      "comparisons": [
+        {
+          "pass": true,
+          "ess_total": 319.6,
+          "rhat": 0.9996015208014696,
+          "mean_err": 0.06063598395743285,
+          "sd_ratio": 0.9718096904445989,
+          "ess_min_per_chain": 105.0,
+          "param": "beta[1]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 5.170847584508247,
+          "ref_sd": 0.08642168414489469,
+          "mcse_z": 1.1153827261095939,
+          "mcse": 0.004698175550612994,
+          "exmc_mean": 5.165607320654863,
+          "exmc_sd": 0.083985430116551
+        },
+        {
+          "pass": true,
+          "ess_total": 380.4,
+          "rhat": 0.999322435282328,
+          "mean_err": 0.011200091826562775,
+          "sd_ratio": 0.9644790229808211,
+          "ess_min_per_chain": 166.8,
+          "param": "beta[2]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.7220085194345479,
+          "ref_sd": 0.056199226935172826,
+          "mcse_z": 0.22649784398399855,
+          "mcse": 0.002778995557680645,
+          "exmc_mean": 0.7226379559368037,
+          "exmc_sd": 0.054202975486712934
+        },
+        {
+          "pass": true,
+          "ess_total": 325.7,
+          "rhat": 0.9991024481942701,
+          "mean_err": 0.056018358388445336,
+          "sd_ratio": 0.921092499438751,
+          "ess_min_per_chain": 142.3,
+          "param": "sigma",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.4266703059559361,
+          "ref_sd": 0.04778784220701114,
+          "mcse_z": 1.0976130839878124,
+          "mcse": 0.0024389254377661456,
+          "exmc_mean": 0.4293473024272989,
+          "exmc_sd": 0.04401702302124053
+        }
+      ],
+      "leapfrog": 3524,
+      "max_rhat": 0.9996015208014696,
+      "step_size": 0.5788399892451467,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 312.9106730598473,
+      "ess_per_sec": 28.37861836263541,
+      "mean_accept": 0.912524769226225,
+      "mean_tree_depth": 2.63,
+      "ess": {
+        "beta_0": {
+          "ess_total": 319.6,
+          "rhat": 0.9996015208014696,
+          "ess_min_per_chain": 105.0,
+          "mean": 5.165607320654863,
+          "sd": 0.083985430116551,
+          "mcse": 0.004698175550612994
+        },
+        "beta_1": {
+          "ess_total": 380.4,
+          "rhat": 0.999322435282328,
+          "ess_min_per_chain": 166.8,
+          "mean": 0.7226379559368037,
+          "sd": 0.054202975486712934,
+          "mcse": 0.002778995557680645
+        },
+        "sigma": {
+          "ess_total": 325.7,
+          "rhat": 0.9991024481942701,
+          "ess_min_per_chain": 142.3,
+          "mean": 0.4293473024272989,
+          "sd": 0.04401702302124053,
+          "mcse": 0.0024389254377661456
+        }
+      },
+      "max_mean_err": 0.06063598395743285,
+      "max_sd_ratio": 0.9718096904445989
+    },
+    {
+      "name": "mesquite-logmesquite_logvolume",
+      "status": "fail",
+      "chains": 2,
+      "arm": "vulkan",
+      "wall_ms": 7647,
+      "min_ess": 14.8,
+      "div_rate": 0.79,
+      "divergences": 474,
+      "comparisons": [
+        {
+          "pass": false,
+          "ess_total": 21.3,
+          "rhat": 4.926353859806757,
+          "mean_err": 8.044795259768595,
+          "sd_ratio": 19.051833225376832,
+          "ess_min_per_chain": 10.2,
+          "param": "beta[1]",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "fail"
+          },
+          "ref_mean": 5.170847584508247,
+          "ref_sd": 0.08642168414489469,
+          "mcse_z": 1.9499943073493737,
+          "mcse": 0.35653681261003956,
+          "exmc_mean": 4.47560282955818,
+          "exmc_sd": 1.6464915133847269
+        },
+        {
+          "pass": false,
+          "ess_total": 16.3,
+          "rhat": 2.2884635611971365,
+          "mean_err": 5.931524192270236,
+          "sd_ratio": 7.0116407975913475,
+          "ess_min_per_chain": 7.6,
+          "param": "beta[2]",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "fail"
+          },
+          "ref_mean": 0.7220085194345479,
+          "ref_sd": 0.056199226935172826,
+          "mcse_z": 3.4120664394413853,
+          "mcse": 0.09769653670854,
+          "exmc_mean": 1.0553555935874106,
+          "exmc_sd": 0.39404879237175233
+        },
+        {
+          "pass": false,
+          "ess_total": 14.8,
+          "rhat": 1.0007154164836136,
+          "mean_err": 8.89813948636341,
+          "sd_ratio": 0.4313146009263283,
+          "ess_min_per_chain": 7.0,
+          "param": "sigma",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "pass",
+            "ess": "fail",
+            "mean": "fail",
+            "sd": "fail"
+          },
+          "ref_mean": 0.4266703059559361,
+          "ref_sd": 0.04778784220701114,
+          "mcse_z": 79.4497573648932,
+          "mcse": 0.005352097977560406,
+          "exmc_mean": 0.0014474202456262312,
+          "exmc_sd": 0.020611594090647358
+        }
+      ],
+      "leapfrog": 1415,
+      "max_rhat": 4.926353859806757,
+      "step_size": 0.5155037015038668,
+      "n_params": 3,
+      "leapfrog_per_sec_apparent": 185.0398849221917,
+      "ess_per_sec": 1.9353995030731006,
+      "mean_accept": 0.2632949377495042,
+      "mean_tree_depth": 1.44,
+      "ess": {
+        "beta_0": {
+          "ess_total": 21.3,
+          "rhat": 4.926353859806757,
+          "ess_min_per_chain": 10.2,
+          "mean": 4.47560282955818,
+          "sd": 1.6464915133847269,
+          "mcse": 0.35653681261003956
+        },
+        "beta_1": {
+          "ess_total": 16.3,
+          "rhat": 2.2884635611971365,
+          "ess_min_per_chain": 7.6,
+          "mean": 1.0553555935874106,
+          "sd": 0.39404879237175233,
+          "mcse": 0.09769653670854
+        },
+        "sigma": {
+          "ess_total": 14.8,
+          "rhat": 1.0007154164836136,
+          "ess_min_per_chain": 7.0,
+          "mean": 0.0014474202456262312,
+          "sd": 0.020611594090647358,
+          "mcse": 0.005352097977560406
+        }
+      },
+      "max_mean_err": 8.89813948636341,
+      "max_sd_ratio": 19.051833225376832
+    },
+    {
+      "name": "sblrc-blr",
+      "status": "fail",
+      "chains": 2,
+      "arm": "exla",
+      "wall_ms": 20332,
+      "min_ess": 81.9,
+      "div_rate": 0.028333333333333332,
+      "divergences": 17,
+      "comparisons": [
+        {
+          "pass": false,
+          "ess_total": 316.1,
+          "rhat": 1.0113384898319802,
+          "mean_err": 0.03690293173314988,
+          "sd_ratio": 1.0653578596796018,
+          "ess_min_per_chain": 85.1,
+          "param": "beta[1]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.9996473862643858,
+          "ref_sd": 9.825652638139036e-4,
+          "mcse_z": 0.6158401283638808,
+          "mcse": 5.887816851139692e-5,
+          "exmc_mean": 0.9996836458032397,
+          "exmc_sd": 0.0010467836264523036
+        },
+        {
+          "pass": false,
+          "ess_total": 303.9,
+          "rhat": 1.0027772412119909,
+          "mean_err": 0.020188962196091727,
+          "sd_ratio": 1.0508724680302386,
+          "ess_min_per_chain": 92.0,
+          "param": "beta[2]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.9987317734909833,
+          "ref_sd": 0.0010060385039136783,
+          "mcse_z": 0.3349384727307832,
+          "mcse": 6.064061007303691e-5,
+          "exmc_mean": 0.99871146261766,
+          "exmc_sd": 0.001057218165541216
+        },
+        {
+          "pass": true,
+          "ess_total": 367.6,
+          "rhat": 1.0036153780192134,
+          "mean_err": 0.01584817015042911,
+          "sd_ratio": 1.0537445755313042,
+          "ess_min_per_chain": 141.8,
+          "param": "beta[3]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "pass",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.9981989427271345,
+          "ref_sd": 0.0010861979938939904,
+          "mcse_z": 0.2883411009140611,
+          "mcse": 5.970099500111626e-5,
+          "exmc_mean": 0.9981817284765102,
+          "exmc_sd": 0.001144575244018777
+        },
+        {
+          "pass": false,
+          "ess_total": 294.6,
+          "rhat": 1.010807125384264,
+          "mean_err": 0.004265915834329117,
+          "sd_ratio": 1.0192299223792542,
+          "ess_min_per_chain": 75.1,
+          "param": "beta[4]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.9988436640757263,
+          "ref_sd": 0.0010192006573739624,
+          "mcse_z": 0.07184132188410493,
+          "mcse": 6.0519824922823404e-5,
+          "exmc_mean": 0.9988393162515037,
+          "exmc_sd": 0.0010387998069041485
+        },
+        {
+          "pass": false,
+          "ess_total": 273.3,
+          "rhat": 1.0068094763658801,
+          "mean_err": 0.001208405021340564,
+          "sd_ratio": 1.0551655033745806,
+          "ess_min_per_chain": 76.1,
+          "param": "beta[5]",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 0.9985930845481275,
+          "ref_sd": 9.78023658762077e-4,
+          "mcse_z": 0.018934159223498673,
+          "mcse": 6.241886350946091e-5,
+          "exmc_mean": 0.9985919026994272,
+          "exmc_sd": 0.001031976826209936
+        },
+        {
+          "pass": false,
+          "ess_total": 81.9,
+          "rhat": 1.0076188847135372,
+          "mean_err": 0.12819880462554392,
+          "sd_ratio": 0.9376863388663292,
+          "ess_min_per_chain": 33.8,
+          "param": "sigma",
+          "gates": {
+            "divergences": "pass",
+            "rhat": "pass",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "pass"
+          },
+          "ref_mean": 1.042290669975779,
+          "ref_sd": 0.07670193203111295,
+          "mcse_z": 1.2372530816407576,
+          "mcse": 0.007947521929643079,
+          "exmc_mean": 1.0521237659746374,
+          "exmc_sd": 0.07192235383022832
+        }
+      ],
+      "leapfrog": 12410,
+      "max_rhat": 1.0113384898319802,
+      "step_size": 0.05579087007663533,
+      "n_params": 6,
+      "leapfrog_per_sec_apparent": 610.3678929765886,
+      "ess_per_sec": 4.028132992327365,
+      "mean_accept": 0.8943407421405124,
+      "mean_tree_depth": 4.023333333333333,
+      "ess": {
+        "beta_0": {
+          "ess_total": 316.1,
+          "rhat": 1.0113384898319802,
+          "ess_min_per_chain": 85.1,
+          "mean": 0.9996836458032397,
+          "sd": 0.0010467836264523036,
+          "mcse": 5.887816851139692e-5
+        },
+        "beta_1": {
+          "ess_total": 303.9,
+          "rhat": 1.0027772412119909,
+          "ess_min_per_chain": 92.0,
+          "mean": 0.99871146261766,
+          "sd": 0.001057218165541216,
+          "mcse": 6.064061007303691e-5
+        },
+        "beta_2": {
+          "ess_total": 367.6,
+          "rhat": 1.0036153780192134,
+          "ess_min_per_chain": 141.8,
+          "mean": 0.9981817284765102,
+          "sd": 0.001144575244018777,
+          "mcse": 5.970099500111626e-5
+        },
+        "beta_3": {
+          "ess_total": 294.6,
+          "rhat": 1.010807125384264,
+          "ess_min_per_chain": 75.1,
+          "mean": 0.9988393162515037,
+          "sd": 0.0010387998069041485,
+          "mcse": 6.0519824922823404e-5
+        },
+        "beta_4": {
+          "ess_total": 273.3,
+          "rhat": 1.0068094763658801,
+          "ess_min_per_chain": 76.1,
+          "mean": 0.9985919026994272,
+          "sd": 0.001031976826209936,
+          "mcse": 6.241886350946091e-5
+        },
+        "sigma": {
+          "ess_total": 81.9,
+          "rhat": 1.0076188847135372,
+          "ess_min_per_chain": 33.8,
+          "mean": 1.0521237659746374,
+          "sd": 0.07192235383022832,
+          "mcse": 0.007947521929643079
+        }
+      },
+      "max_mean_err": 0.12819880462554392,
+      "max_sd_ratio": 1.0653578596796018
+    },
+    {
+      "name": "sblrc-blr",
+      "status": "fail",
+      "chains": 2,
+      "arm": "vulkan",
+      "wall_ms": 101450,
+      "min_ess": 10.0,
+      "div_rate": 0.45666666666666667,
+      "divergences": 274,
+      "comparisons": [
+        {
+          "pass": false,
+          "ess_total": 21.4,
+          "rhat": 7.514348097737053,
+          "mean_err": 10.384764678000813,
+          "sd_ratio": 60.776965506029605,
+          "ess_min_per_chain": 8.7,
+          "param": "beta[1]",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "fail"
+          },
+          "ref_mean": 0.9996473862643858,
+          "ref_sd": 9.825652638139036e-4,
+          "mcse_z": 0.7898256273891989,
+          "mcse": 0.012918938929867287,
+          "exmc_mean": 1.009851095309871,
+          "exmc_sd": 0.059717335146240495
+        },
+        {
+          "pass": false,
+          "ess_total": 10.3,
+          "rhat": 2.4481850133566474,
+          "mean_err": 21.0723705249072,
+          "sd_ratio": 23.9734766077431,
+          "ess_min_per_chain": 5.1,
+          "param": "beta[2]",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "fail"
+          },
+          "ref_mean": 0.9987317734909833,
+          "ref_sd": 0.0010060385039136783,
+          "mcse_z": 2.8269462867909065,
+          "mcse": 0.007499122362476054,
+          "exmc_mean": 0.977532157374191,
+          "exmc_sd": 0.02411824054006343
+        },
+        {
+          "pass": false,
+          "ess_total": 12.4,
+          "rhat": 3.900810778512204,
+          "mean_err": 1.6629500703632054,
+          "sd_ratio": 17.28129981629021,
+          "ess_min_per_chain": 4.4,
+          "param": "beta[3]",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "fail"
+          },
+          "ref_mean": 0.9981989427271345,
+          "ref_sd": 0.0010861979938939904,
+          "mcse_z": 0.3384724571568723,
+          "mcse": 0.005336602704831664,
+          "exmc_mean": 0.9963926496967601,
+          "exmc_sd": 0.018770913192335013
+        },
+        {
+          "pass": false,
+          "ess_total": 10.0,
+          "rhat": 3.4101779279705613,
+          "mean_err": 35.053840590959254,
+          "sd_ratio": 21.673985038591965,
+          "ess_min_per_chain": 4.7,
+          "param": "beta[4]",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "fail",
+            "sd": "fail"
+          },
+          "ref_mean": 0.9988436640757263,
+          "ref_sd": 0.0010192006573739624,
+          "mcse_z": 5.1028070231798415,
+          "mcse": 0.007001420436143468,
+          "exmc_mean": 0.9631167667019386,
+          "exmc_sd": 0.02209013979924636
+        },
+        {
+          "pass": false,
+          "ess_total": 14.2,
+          "rhat": 3.329741420941582,
+          "mean_err": 4.1333745331206355,
+          "sd_ratio": 20.054204877682725,
+          "ess_min_per_chain": 6.3,
+          "param": "beta[5]",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "fail",
+            "ess": "fail",
+            "mean": "pass",
+            "sd": "fail"
+          },
+          "ref_mean": 0.9985930845481275,
+          "ref_sd": 9.78023658762077e-4,
+          "mcse_z": 0.7772966885172771,
+          "mcse": 0.005200765864097441,
+          "exmc_mean": 0.9945505464642108,
+          "exmc_sd": 0.01961348682803555
+        },
+        {
+          "pass": false,
+          "ess_total": 13.7,
+          "rhat": 1.0054123810641538,
+          "mean_err": 13.56670971808386,
+          "sd_ratio": 0.33550001888803166,
+          "ess_min_per_chain": 5.8,
+          "param": "sigma",
+          "gates": {
+            "divergences": "fail",
+            "rhat": "pass",
+            "ess": "fail",
+            "mean": "fail",
+            "sd": "fail"
+          },
+          "ref_mean": 1.042290669975779,
+          "ref_sd": 0.07670193203111295,
+          "mcse_z": 149.6570196929238,
+          "mcse": 0.006953184346564332,
+          "exmc_mean": 0.0016978232934713215,
+          "exmc_sd": 0.025733499645186914
+        }
+      ],
+      "leapfrog": 15497,
+      "max_rhat": 7.514348097737053,
+      "step_size": 0.0549476454965024,
+      "n_params": 6,
+      "leapfrog_per_sec_apparent": 152.75505174963035,
+      "ess_per_sec": 0.09857072449482504,
+      "mean_accept": 0.19702287033477292,
+      "mean_tree_depth": 4.71,
+      "ess": {
+        "beta_0": {
+          "ess_total": 21.4,
+          "rhat": 7.514348097737053,
+          "ess_min_per_chain": 8.7,
+          "mean": 1.009851095309871,
+          "sd": 0.059717335146240495,
+          "mcse": 0.012918938929867287
+        },
+        "beta_1": {
+          "ess_total": 10.3,
+          "rhat": 2.4481850133566474,
+          "ess_min_per_chain": 5.1,
+          "mean": 0.977532157374191,
+          "sd": 0.02411824054006343,
+          "mcse": 0.007499122362476054
+        },
+        "beta_2": {
+          "ess_total": 12.4,
+          "rhat": 3.900810778512204,
+          "ess_min_per_chain": 4.4,
+          "mean": 0.9963926496967601,
+          "sd": 0.018770913192335013,
+          "mcse": 0.005336602704831664
+        },
+        "beta_3": {
+          "ess_total": 10.0,
+          "rhat": 3.4101779279705613,
+          "ess_min_per_chain": 4.7,
+          "mean": 0.9631167667019386,
+          "sd": 0.02209013979924636,
+          "mcse": 0.007001420436143468
+        },
+        "beta_4": {
+          "ess_total": 14.2,
+          "rhat": 3.329741420941582,
+          "ess_min_per_chain": 6.3,
+          "mean": 0.9945505464642108,
+          "sd": 0.01961348682803555,
+          "mcse": 0.005200765864097441
+        },
+        "sigma": {
+          "ess_total": 13.7,
+          "rhat": 1.0054123810641538,
+          "ess_min_per_chain": 5.8,
+          "mean": 0.0016978232934713215,
+          "sd": 0.025733499645186914,
+          "mcse": 0.006953184346564332
+        }
+      },
+      "max_mean_err": 35.053840590959254,
+      "max_sd_ratio": 60.776965506029605
+    }
+  ]
+}
