@@ -8,6 +8,53 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-10, fleet re-verified at 144d441db (nx_vulkan 9a8427c)
+
+| host | GPU | result | failures |
+|---|---|---|---|
+| mac-248 | GT 750M | **707 / 0** | — |
+| mac-247 | GT 650M | 707 / **1** | `PokerTest`, timeout |
+| Jetson | Tegra X1 | 707 / **2** | `PokerTest` + `IntegrationTest`, timeouts |
+
+Identical to the `371785ff5` run. nx_vulkan `9a8427c` is thirteen commits of
+benchmark and documentation work with nothing under `native/`, and the 18
+shader goldens are byte-identical across the bump, so this is the expected
+outcome rather than a surprise — but it is now measured rather than assumed.
+
+### The Jetson read 707/4 first, and both extras were the harness
+
+Worth writing down because the same trap has now cost time twice in three days.
+
+* **`epmd` is not on a non-interactive PATH.** Two `DistributedTest` failures
+  with `econnrefused` and `:nodistribution`. `epmd` lives in the erlang install
+  (`~/.asdf/installs/erlang/27.2.4/erts-15.2.2/bin/epmd`) and is not an asdf
+  shim, so a `bash -s` session cannot find it and the BEAM cannot auto-start
+  it. With it running, all 5 distributed tests pass — so the Jetson's real
+  result is 707/2. The same failure hit super-io on 2026-09-07 for the same
+  reason. **Any fleet script must put the erts bin directory on PATH and start
+  epmd**, or two tests fail for reasons that have nothing to do with the code.
+
+* **`set -e` plus a failing `mix test` swallowed the completion marker.** The
+  runner script ends with `echo "### SUITE EXIT: $?"`, and `mix test` exits
+  non-zero whenever anything fails, so `set -e` aborted the script first. The
+  waiting loop then blocked on a marker that could never arrive while both
+  suites had in fact finished. A completion marker guarded by `set -e` is not
+  a completion marker; it needs `|| true` or the trap has to be explicit.
+
+Neither is a code defect and neither changes a number, but both make a run
+report something other than what happened, which is the failure this document
+keeps returning to.
+
+### posteriordb not re-run
+
+Deliberate. The NIF is unchanged, the goldens are byte-identical, and the
+2026-09-09 run established that every non-completion is a 30-minute timeout
+rather than an accuracy failure. Re-running would cost hours per host to
+reproduce a result that cannot have moved. The fixtures now arrive with
+`git pull` (`702fb780f`), so it is one command whenever it is wanted.
+
+---
+
 ## Status — 2026-09-09, fleet + posteriordb at 371785ff5 (vector RVs)
 
 super-io excluded by request; the three remote hosts only.
