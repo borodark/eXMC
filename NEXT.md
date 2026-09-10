@@ -43,6 +43,24 @@ failure blocks and no summary — the exact shape the non-vacuity check flags,
 which an outer kill prevents it from ever reporting. That asymmetry is now in
 the script's header.
 
+### Both remaining gates are now planned
+
+`docs/TWO_GATES_THAT_DO_NOT_GATE.md` covers `bench/leapfrog_leaf_diff.exs` and
+the Cauchy KS failure. Two findings from writing it, both measured:
+
+* the leaf-diff harness has **two** defects, not one. Its booleans are
+  discarded, which was known — and its threshold is `1e-6` while the measured
+  agreement is **~3e-15**. Asserting the booleans as they stand yields a test
+  that is green and nearly meaningless, which is worse than none because it
+  reads as coverage.
+* **the Cauchy KS failure is host-specific.** It fails on super-io and passes
+  on mac-247, mac-248 and the Jetson — zero occurrences in the fleet logs of
+  three separate runs. The test is seeded and its reference is the analytic
+  CDF, so identical draws would fail everywhere. The draws differ by host,
+  which sits in tension with this document's own claim that both Keplers and
+  the Ampere produce bit-identical q/p/grad. Measure that before touching the
+  tolerance.
+
 ### Not run: posteriordb
 
 Unchanged NIF, byte-identical goldens, and the 2026-09-09 fleet run established
