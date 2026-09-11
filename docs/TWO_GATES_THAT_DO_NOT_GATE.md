@@ -53,7 +53,47 @@ state, because it *looks* like coverage.
 
 So the promotion is two changes, and (b) is not optional.
 
+### THE FLEET RUN, 2026-09-11 — the tolerance, measured
+
+Run on all four hosts at `994305de4`. Worst relative Δ per buffer, across the
+three parameter sets the harness already drives:
+
+| host | q | p | grad | logp | logp offset spread |
+|---|---|---|---|---|---|
+| super-io (Ampere) | 1.92e-15 | 2.22e-15 | 3.07e-15 | 9.20e-16 | 1.78e-14 |
+| mac-247 (GT 650M) | 4.77e-15 | 4.22e-15 | 6.72e-15 | 1.53e-15 | 2.84e-14 |
+| mac-248 (GT 750M) | 4.77e-15 | 4.22e-15 | 6.72e-15 | 1.53e-15 | 2.84e-14 |
+| Jetson (Tegra X1) | 4.77e-15 | 4.22e-15 | 6.72e-15 | 1.53e-15 | 2.84e-14 |
+
+**Fleet worst: 6.72e-15 on the gradient, 2.84e-14 on the offset spread.**
+
+Every arm still reports `constant -> ratio-equivalent`, on every host.
+
+**Three hosts agree to the last printed digit and super-io does not.** mac-247,
+mac-248 and the Jetson produce byte-identical numbers here — two FreeBSD
+Keplers and a Linux Tegra, so it crosses both OS and architecture — while the
+Ampere differs. That matches the golden comparison, where the diverging d1 case
+is a Normal model of the same shape as this fixture, and it matches the Cauchy
+KS failing on super-io alone.
+
+So the recurring framing has been backwards: on this model **super-io is the
+outlier**, not the Keplers. Worth stating because this fleet has made that
+mistake before — `validator.ex:189` records three weeks of "super-io is not
+valid for numerical validation, the macs are the reference", which was exactly
+inverted for a different reason.
+
+Note the axes are independent: the Jetson agrees numerically with the Keplers
+AND survives the `:polynomial` shader that kills them. Numerical agreement and
+driver robustness are separate properties of a host.
+
 ### Proposed
+
+0. **Tolerances, now derived from the fleet rather than from one machine.**
+   1e-13 relative for `q`, `p`, `grad` and `logp` is ~15x the fleet worst of
+   6.72e-15; 1e-12 for the offset spread is ~35x its worst of 2.84e-14. The
+   first draft proposed the same numbers from super-io's figures alone, which
+   were 2x tighter and would have encoded one machine's agreement with its own
+   CPU. The values survive; the justification is what changed.
 
 1. **Move to `test/nuts/leapfrog_leaf_diff_test.exs`**, tagged
    `@moduletag :requires_vulkan`. It needs a real device; the whole point is
