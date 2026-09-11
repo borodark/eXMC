@@ -295,6 +295,37 @@ defmodule Exmc.NUTS.Sampler do
       # Freeze step size
       epsilon_final = epsilon
 
+      # ZERO the divergence and recovery counters at the warmup boundary.
+      #
+      # `run_sampling/8` was handed warmup's final state, counters included, and
+      # `stats.divergences` then reported warmup PLUS sampling. Nothing said so,
+      # and every consumer divides the field by `num_samples` -- our own
+      # posteriordb harness prints `div=94/4000` where 4000 is
+      # chains x num_samples, so the numerator spanned both phases and the
+      # denominator one. That is not a rate of anything.
+      #
+      # MEASURED on a Normal(0,1), one chain, 300 kept draws:
+      #
+      #   warmup   stats.divergences   draws flagged divergent
+      #      300           8                     0
+      #     1000          14                     0
+      #       0           2                     2      <- exact match
+      #
+      # The count tracks warmup length, and with warmup off it equals the
+      # sampling count exactly. Reported by the pathmc_ex session, which saw 10
+      # and 11 against 0 flagged draws and could not tell whether the field was
+      # meant to include warmup; the warmup=0 arm is what settles it.
+      #
+      # Divergences during warmup are EXPECTED -- dual averaging explores step
+      # sizes that diverge on purpose -- so counting them in a diagnostic whose
+      # whole use is "did the sampler struggle on the posterior" mixes two
+      # different questions. Stan and every other NUTS implementation report the
+      # post-warmup count; this now matches.
+      #
+      # `recoveries` is reset with it, for the same reason and by the same
+      # argument.
+      state = %{state | divergences: 0, recoveries: 0}
+
       # Run sampling
       {draws, sample_stats, state} =
         run_sampling(
