@@ -219,6 +219,42 @@ The same module dispatches correctly on super-io and returns
 that DECISION 93 describes. It is valid SPIR-V that one driver runs and another
 dies on.
 
+### It is NOT the hardware, and the heading above is a misnomer
+
+Two further hosts, both suggested by the nx_vulkan session, which pointed out
+that super-io confounds more than one variable:
+
+| host | GPU | arch | driver | OS | result |
+|---|---|---|---|---|---|
+| super-io | RTX 3060 Ti | Ampere | 580.178.04 | Linux | **OK** |
+| Jetson | Tegra X1 | Maxwell | L4T / Tegra | Linux | **OK** |
+| asus | GTX 1660 Ti | Turing | 470.256.02 | FreeBSD | **EXIT 139** |
+| mac-248 | GT 750M | Kepler | 470.256.02 | FreeBSD | **EXIT 139** |
+| mac-247 | GT 650M | Kepler | 470.256.02 | FreeBSD | **EXIT 139** |
+
+Same module throughout: SPV `86970c0212aadda4…`, 496516 bytes, `validate_file`
+`:ok`. The Jetson returns bit-identical numbers to super-io.
+
+**Architecture is eliminated from both directions.** A Turing part five
+generations newer than the GT 650M crashes; a Maxwell-era Tegra older than the
+Turing runs it. Calling this "the Kepler segfault" is wrong.
+
+**Driver branch and OS remain perfectly confounded.** Every host that works is
+Linux; every host that crashes is FreeBSD. The Jetson adds that a second,
+unrelated Linux stack handles the module — so it is not something specific to
+nvidia-580 — but it does not separate the two, because it is also Linux.
+
+No further host of the kinds available changes this. Separating them requires
+an INTERVENTION: nvidia-580 on a FreeBSD box, or nvidia-470 on a Linux one.
+Both are operator decisions with real cost — super-io has a history of coming
+up on llvmpipe after a driver/module mismatch, where it returns wrong u8
+answers while the suite still largely passes — so the cheap experiment is the
+FreeBSD ports side, not downgrading the development machine.
+
+Until then the supportable claim is exactly: *nvidia-470 on FreeBSD crashes;
+two unrelated Linux stacks do not.* Three crashing hosts are not three
+independent observations when they share an OS.
+
 **On "byte-identical", and how it was nearly wrong.** The first version of this
 section asserted byte-identity from matching FILE SIZES. That is not evidence:
 super-io's cache holds two distinct 492552-byte modules, so size is not a
@@ -234,7 +270,15 @@ GLSL text is not host-deterministic while the SPIR-V is.
 
 Not chased. The likely cause is ours: `shortest_repeat/1` in the CSE pass picks
 via `Enum.min_by` over a map's enumeration order, and equal-length candidates
-break ties by that order, which can differ between OTP builds. It matters
+break ties by that order, which can differ between OTP builds.
+
+Measured across five hosts, the split follows neither OS nor architecture:
+
+* `d915a7f8…` — super-io (Linux/x86), asus (FreeBSD/x86)
+* `fe41408a…` — mac-247, mac-248 (FreeBSD/x86), Jetson (Linux/aarch64)
+
+Two groups whose membership crosses both axes, which rules out the platform-
+shaped explanations and leaves the OTP build or term hashing. It matters
 because the SPV cache is content-addressed on the source text: "same model
 implies same shader SHA" is false across hosts. It can never surface as a wrong
 answer — the SPIR-V is identical — only as a cache miss, or as a provenance
