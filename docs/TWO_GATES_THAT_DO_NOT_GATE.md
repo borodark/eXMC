@@ -180,14 +180,60 @@ for the model that claim was measured on and false in general, and the failure
 mode of a precisely-worded, precisely-incomplete claim is that nobody re-tests
 it.
 
-**Untested hypothesis, offered as the first thing to check and not as a
-finding:** `exp_d`/`log_d` are `double(exp(float(x)))`, i.e. the GPU's f32
-transcendental unit, whose last-ULP behaviour is explicitly allowed to differ
-across architectures. d3 (StudentT) uses the most transcendentals and diverges
-most; d2 diverges not at all. If that is the mechanism, the existing
-`:polynomial` setting for `:exmc, :chain_shader_transcendentals` is a ready
-lever to test it with — one run of the goldens under each setting on two hosts
-answers it.
+**The transcendental hypothesis was tested on 2026-09-11. It is not confirmed,
+it is partly REFUTED, and the lever is not usable.**
+
+The hypothesis was that `exp_d`/`log_d` being `double(exp(float(x)))` — the
+GPU's f32 transcendental unit, whose last-ULP behaviour is explicitly allowed
+to differ across architectures — explained the cross-host divergence, and that
+`:polynomial` would show it.
+
+| model | SPIR-V under `:f32_cast` → `:polynomial` | cross-host divergence under `:f32_cast` |
+|---|---|---|
+| d1, Normal | 8968 → **8968, digests identical** | `logp`, 3 of 6 cases |
+| d2, Normal + HalfNormal | 35392 → 39356 | none |
+| d3, StudentT | 492552 → 496516 | heavy |
+
+**d1 refutes it.** Its SPIR-V and every digest are unchanged by the switch, so
+it uses no transcendentals at all — and it is one of the models that diverges
+across hosts. Whatever makes an Ampere and a GT 750M disagree on d1's `logp`,
+it is not `exp`/`log`.
+
+d2 is uninformative: it never diverged under `:f32_cast`, so there is nothing
+for the switch to remove.
+
+**d3 cannot be tested, because `:polynomial` SEGFAULTS the Kepler.** `mix run`
+exits 139 with a core, on both mac-247 and mac-248, at DISPATCH — not at
+synthesis:
+
+```
+STEP 1 OK  spv=496516 bytes     <- compiles
+STEP 2 dispatch
+[nx_vulkan_vulkano] device: NVIDIA GeForce GT 750M (DiscreteGpu)
+EXIT 139                        <- core dumped
+```
+
+The same SPIR-V, byte-identical at 496516, dispatches correctly on super-io and
+returns `[0.2932, 0.1029, 0.2010]`. Both modules pass
+`Nx.Vulkan.Spirv.validate_file/1` — 123138 and 124129 words — so this is not
+the 16-bit word-count wrap class that DECISION 93 describes. It is valid
+SPIR-V that one driver runs and another dies on.
+
+Cores preserved at `~/cores/beam.smp.248.polynomial.*.core` and
+`~/cores/beam.smp.248.poly_d3.*.core`, moved out of the checkout because
+`kern.corefile` is `%N.core` and they land in the working directory.
+
+**Consequences for this document.** The `:polynomial` option is documented as
+"the clean fix... available if a downstream model surfaces where the f32
+precision loss provably matters". It is not available on half the fleet, and
+nothing said so — no test exercises it. That is a third gate that does not
+gate, and it belongs on this list rather than in a footnote.
+
+The divergence itself remains unexplained. The next candidates, none tested:
+FMA contraction differing by architecture; the `partial[]` workgroup tree
+reduction over 256 lanes; or driver-level fast-math. The leaf-diff run in Part 1
+is still the instrument — it localises which buffer and which trajectory step
+first disagrees, which none of the above guesswork can.
 
 ### Consequence: these are one investigation, not two
 
