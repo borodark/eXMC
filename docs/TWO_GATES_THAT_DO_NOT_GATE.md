@@ -235,9 +235,27 @@ that super-io confounds more than one variable:
 Same module throughout: SPV `86970c0212aadda4…`, 496516 bytes, `validate_file`
 `:ok`. The Jetson returns bit-identical numbers to super-io.
 
-**Architecture is eliminated from both directions.** A Turing part five
-generations newer than the GT 650M crashes; a Maxwell-era Tegra older than the
-Turing runs it. Calling this "the Kepler segfault" is wrong.
+**"Old hardware" is eliminated from both directions.** A Turing part five
+generations newer than the GT 650M crashes; a Maxwell-era Tegra older than that
+Turing runs it. No cutoff year fits either way, so calling this "the Kepler
+segfault" is wrong.
+
+**But architecture as an UNORDERED category is not eliminated, and saying it was
+is an error this document made.** Corrected 2026-09-11 after the pathmc_ex
+session modelled the table: every host sharing an architecture shares an
+outcome, and three of the four architectures have exactly one host, so a lookup
+table — Ampere runs, Maxwell runs, Turing crashes, Kepler crashes — fits
+perfectly. It survives VACUOUSLY. A hypothesis that cannot fail explains
+nothing, and "architecture does not predict the outcome" was simply false: it
+predicts it exactly, on four data points and four free parameters.
+
+So three hypotheses survive, not two — architecture-as-lookup, driver branch,
+and OS — and they are mutually confounded.
+
+**One hypothesis IS eliminated outright, and it is the one nobody proposed.**
+super-io and asus share the GLSL cache key `d915a7f8…` and have OPPOSITE
+outcomes, so the source-text split cannot explain the crash. That is a real
+elimination rather than a vacuous survival, and it is the only one in the set.
 
 **Driver branch and OS remain perfectly confounded.** Every host that works is
 Linux; every host that crashes is FreeBSD. The Jetson adds that a second,
