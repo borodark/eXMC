@@ -213,11 +213,32 @@ STEP 2 dispatch
 EXIT 139                        <- core dumped
 ```
 
-The same SPIR-V, byte-identical at 496516, dispatches correctly on super-io and
-returns `[0.2932, 0.1029, 0.2010]`. Both modules pass
-`Nx.Vulkan.Spirv.validate_file/1` — 123138 and 124129 words — so this is not
-the 16-bit word-count wrap class that DECISION 93 describes. It is valid
-SPIR-V that one driver runs and another dies on.
+The same module dispatches correctly on super-io and returns
+`[0.2932, 0.1029, 0.2010]`. Both variants pass `Nx.Vulkan.Spirv.validate_file/1`
+— 123138 and 124129 words — so this is not the 16-bit word-count wrap class
+that DECISION 93 describes. It is valid SPIR-V that one driver runs and another
+dies on.
+
+**On "byte-identical", and how it was nearly wrong.** The first version of this
+section asserted byte-identity from matching FILE SIZES. That is not evidence:
+super-io's cache holds two distinct 492552-byte modules, so size is not a
+unique key. Verified properly afterwards — SHA-256 of the module contents is
+`86970c0212aadda471911bdd00ed7ef5` on both hosts, so the claim holds. It held
+by luck rather than by method, on the same day this document was revised for
+exactly that failure.
+
+**And checking it turned up a separate finding.** The two hosts produced
+DIFFERENT GLSL for the same model — cache keys `d915a7f8…` on super-io and
+`fe41408a…` on mac-248 — which glslang compiled to byte-identical SPIR-V. Our
+GLSL text is not host-deterministic while the SPIR-V is.
+
+Not chased. The likely cause is ours: `shortest_repeat/1` in the CSE pass picks
+via `Enum.min_by` over a map's enumeration order, and equal-length candidates
+break ties by that order, which can differ between OTP builds. It matters
+because the SPV cache is content-addressed on the source text: "same model
+implies same shader SHA" is false across hosts. It can never surface as a wrong
+answer — the SPIR-V is identical — only as a cache miss, or as a provenance
+claim that quietly is not comparing what it says it is.
 
 Cores preserved at `~/cores/beam.smp.248.polynomial.*.core` and
 `~/cores/beam.smp.248.poly_d3.*.core`, moved out of the checkout because
