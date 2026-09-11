@@ -8,6 +8,67 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-11, the multi-equation constraint is `:multiple_custom_nodes`
+
+MEASURED by the pathmc_ex session at `147305261`, on real `Compile.Exmc`
+output:
+
+| model | result |
+|---|---|
+| single equation `Y ~ X` | **synthesised**, `["beta_Y[0]", "beta_Y[1]", "sigma_Y"]` |
+| single, sigma pinned (their oracle) | **synthesised** |
+| multi-equation `M~X; Y~M+X` | `{:unsupported, :multiple_custom_nodes}` |
+
+The reason propagates now where a bare atom came back before, so the discard
+site fixed in `147305261` was on their path. But the reason is not the one this
+document has been carrying.
+
+### Two of our records were wrong, and this corrects them
+
+**`capture_guard/3`'s per-node-span refusal is NOT what blocks multi-equation
+models.** I asserted that from reading the guard, never ran it, and it reached
+their `PLAN.md`, `EXMC_NOTES.md` and a handoff doc as though measured. It is
+also listed in this document's 2026-09-07 status as the thing that "the
+consumer would notice if the fused shader ever grew per-node observation
+spans". **That item would not unblock them.** Do not spend on it for that
+reason.
+
+Verified here while checking: build the condition `capture_guard/3` guards --
+captures alongside per-node spans -- and it SYNTHESISES, because `obs_spans/1`
+returns `:full` whenever a Custom likelihood is present. The combination may be
+unreachable.
+
+**The actual constraint is a scope limit.** `extract_components/1` returns
+`{:error, :multiple_custom_nodes}` for more than one `Dist.Custom` node, with
+the comment *"out of scope for R1. A real multi-likelihood model needs separate
+handling."* Whether lifting it is hard, easy or deliberate is not established
+and is not guessed at here.
+
+It is worth knowing that this is structural on the consumer's side, not
+incidental: `PathMC.Compile.Exmc` emits one Custom likelihood per outcome, and
+a path model is a set of regressions by definition. Every multi-equation model
+that library can express has several Custom nodes.
+
+Their models also never use the scalar-placeholder idiom -- every equation gets
+`Builder.obs(ir, "#{outcome}_obs", outcome, response)` with a real tensor -- so
+each carries a non-empty observation region. Relevant to whatever lifting
+`:multiple_custom_nodes` would involve.
+
+### The process point, fourth instance, and the receiving half
+
+I treated a reading of the code as an execution of it, having applied exactly
+that correction to my own emitter two days earlier after two guessed axis
+signatures matched nothing.
+
+The new part is the receiving side. The claim was specific enough -- a named
+tuple carrying two counts -- to read as a measurement, and it propagated into
+three of their files across several commits while the probe that answers it sat
+in their repo root. Their formulation, which is better than mine: *a claim about
+what another system does is measurable or it is a guess, and which one it is
+does not depend on how confident the sender sounded.*
+
+---
+
 ## Status — 2026-09-10 (later), fleet at d410b183a — obs buffer populated
 
 First fleet run through `scripts/fleet_verify.sh`, which landed with the
