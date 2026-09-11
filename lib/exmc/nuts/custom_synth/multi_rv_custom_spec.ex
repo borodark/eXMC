@@ -129,6 +129,18 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
           // posterior variance 8.55 against a CPU reference's 1.45) and was
           // blamed on the GPU. It is not hardware: both Keplers and the Ampere
           // produce bit-identical q/p/grad from this shader.
+        //
+        // NARROWED 2026-09-11, because that sentence is precisely worded and
+        // precisely incomplete. It holds for the model it was measured on. It
+        // does NOT hold in general: across 18 golden cases, 9 differ between
+        // an Ampere and a GT 750M from byte-identical SPIR-V -- logp on a
+        // simple Normal, grad/p/q on a StudentT, and nothing at all on a
+        // Normal+HalfNormal. Enough to change a NUTS tree: the same seed gives
+        // 1251 dispatches on the Ampere and 1172 on both Keplers.
+        //
+        // The point above STILL STANDS -- that defect was a stale index, not
+        // hardware -- but do not cite this line as evidence that two GPUs
+        // agree bit-for-bit. See docs/TWO_GATES_THAT_DO_NOT_GATE.md.
           double grad_qn = 0.0lf;
           double lp_i    = 0.0lf;
           if (in_bounds) {

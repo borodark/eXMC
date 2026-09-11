@@ -1,6 +1,9 @@
 # Two gates that do not gate
 
-**Status:** plans, nothing started. Written 2026-09-10 against `699f3a870`.
+**Status:** plans. Written 2026-09-10 against `699f3a870`; **substantially
+revised 2026-09-11 after measuring on the fleet**, which merged the two items
+into one investigation and falsified two claims in the first draft. See
+"What the fleet measurement changed" below before reading the rest.
 
 Both items are the same species. One is a harness that cannot fail; the other
 is a test that fails on exactly one machine and has been read as noise. Neither
@@ -122,15 +125,83 @@ specific than that:
 occurrences across all three fleet logs at `d410b183a`, `144d441db` and
 `371785ff5`; one on super-io in every run.
 
-The test is seeded (`seed: 42`), the reference is `:none` — the KS is against
-the **analytic** Cauchy CDF, so there is no Monte Carlo error on that side —
-and the code and `nx_vulkan` pin are identical across hosts. Identical draws
-would give an identical `d` and it would fail everywhere.
+The test is seeded (`seed: 42`) and the code and `nx_vulkan` pin are identical
+across hosts, so identical draws would give an identical `d` and it would fail
+everywhere.
+
+**CORRECTION (2026-09-11).** The first draft said `reference: :none` meant the
+KS was against the analytic Cauchy CDF, with no Monte Carlo error on that side.
+That is wrong. It is a TWO-SAMPLE KS — `m: 800, n: 800` — between a reference
+arm run under compiler `:none` and the Vulkan candidate, and `:none` names the
+reference COMPILER, not the absence of one. Both arms carry sampling error.
+`validator.ex:189` pins it explicitly and records why: it used to fall through
+to whatever `auto_detect/0` found, which on a host without EXLA was Nx.Vulkan
+— the arm under test — so the Kepler fleet spent three weeks comparing a run
+against itself while the fleet's standing verdict was that super-io was the
+unreliable host. That verdict was exactly backwards.
 
 **So the draws differ by host.** That is the finding, and it sits in tension
 with a claim recorded in `NEXT.md`: *"both Keplers and the Ampere produce
 bit-identical q/p/grad from this shader"*. Either that claim does not extend to
 this model, or something outside the shader diverges.
+
+### What the fleet measurement changed
+
+Run on 2026-09-11 at `147305261`. The Cauchy case, verbatim from the test, on
+three hosts:
+
+| host | SPIR-V sha | dispatches | result |
+|---|---|---|---|
+| super-io (Ampere) | `a12cfb9f…` | **1251** | `{:error, d=0.0999…}` |
+| mac-248 (GT 750M) | `a12cfb9f…` | **1172** | `:ok` |
+| mac-247 (GT 650M) | `a12cfb9f…` | **1172** | `:ok` |
+
+**The same shader, and both arms genuinely dispatching on every host** — so the
+"it passes vacuously on the fleet because the candidate falls back to CPU"
+hypothesis is refuted. What differs is the DISPATCH COUNT: the two Keplers
+agree exactly and the Ampere does not. Same seed and same SPIR-V producing a
+different number of dispatches means NUTS grew a different tree, which means
+the leapfrog outputs differ.
+
+Confirmed directly against the 18 shader goldens, mac-248 vs super-io:
+
+| model | differing buffers |
+|---|---|
+| d1, Normal | `logp` in 3 of 6 cases |
+| d2, Normal + HalfNormal | **none** — all 6 identical |
+| d3, StudentT | `grad` x4, `p` x3, `q` x1; at n_obs=64/k=8 all four |
+
+**Nine of eighteen cases differ between Ampere and Kepler from byte-identical
+SPIR-V.**
+
+This falsifies a claim this project has carried in `NEXT.md`: *"both Keplers
+and the Ampere produce bit-identical q/p/grad from this shader."* It is true
+for the model that claim was measured on and false in general, and the failure
+mode of a precisely-worded, precisely-incomplete claim is that nobody re-tests
+it.
+
+**Untested hypothesis, offered as the first thing to check and not as a
+finding:** `exp_d`/`log_d` are `double(exp(float(x)))`, i.e. the GPU's f32
+transcendental unit, whose last-ULP behaviour is explicitly allowed to differ
+across architectures. d3 (StudentT) uses the most transcendentals and diverges
+most; d2 diverges not at all. If that is the mechanism, the existing
+`:polynomial` setting for `:exmc, :chain_shader_transcendentals` is a ready
+lever to test it with — one run of the goldens under each setting on two hosts
+answers it.
+
+### Consequence: these are one investigation, not two
+
+The Cauchy failure IS cross-host numerical divergence, and the leaf-diff
+harness is the instrument that measures exactly that divergence
+element-wise along a trajectory. So:
+
+* **The leaf-diff tolerance cannot be set from one host.** The first draft
+  proposed 1e-13 from super-io numbers. Those numbers describe super-io's
+  agreement with its own CPU, not two GPUs' agreement with each other. The
+  fleet run must produce the tolerance, not assume it.
+* **Cauchy triage step 1 is the leaf-diff run.** There is no separate
+  measurement to design: dispatch the same fixture on three hosts and compare
+  element-wise, which is what the harness already does against the host.
 
 ### First measurement, before any tuning
 
