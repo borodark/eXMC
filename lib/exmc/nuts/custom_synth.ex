@@ -99,8 +99,12 @@ defmodule Exmc.NUTS.CustomSynth do
   exercised by `synthesise_with_template_glsl/2` (used by tests
   passing a hand-written shader).
   """
+  # The reason is a term, not an atom: `{:captures_with_obs_spans, 2, 3}` and
+  # `{:unsupported_op, :pow}` both reach a caller. The bare `:unsupported` is
+  # still produced for a refusal that genuinely carries no reason, which is now
+  # the exception rather than the rule.
   @spec synthesise(IR.t(), keyword()) ::
-          {:ok, synth_meta()} | :unsupported | {:unsupported, :push_too_large}
+          {:ok, synth_meta()} | :unsupported | {:unsupported, term()} | {:error, term()}
   def synthesise(%IR{} = ir, opts \\ []) do
     # Rewrite FIRST, or the shader describes different coordinates than the
     # sampler does.
@@ -126,6 +130,27 @@ defmodule Exmc.NUTS.CustomSynth do
          {:ok, glsl, captures_bin} <- render_template(components, ir) do
       synthesise_with_template_glsl(components, glsl, ir, captures_bin: captures_bin)
     else
+      # PROPAGATE the reason. `else _ -> :unsupported` discarded it, and the
+      # reasons being discarded were not vague: `capture_guard/3` returns
+      # `{:error, {:captures_with_obs_spans, n_captures, n_spans}}` with both
+      # counts, and the emitter returns `{:error, {:unsupported_op, op}}`
+      # naming the op. All of that was computed and then thrown away one frame
+      # up.
+      #
+      # Reported by the pathmc_ex session: a multi-equation path model -- two
+      # observed nodes, which is the ordinary case for that library -- is
+      # refused here and told nothing. Of the bare `:unsupported` returns in
+      # this file, it is the one an external consumer actually reaches, which
+      # is prioritisation this project did not have on its own.
+      #
+      # The reason may be a TUPLE rather than an atom, which is the point:
+      # `{:captures_with_obs_spans, 2, 3}` says how many of each. `compiler.ex`
+      # matches `{:unsupported, reason} when reason in [:d_exceeds_tile,
+      # :push_too_large]`, so anything else falls to the same generic branch a
+      # bare atom hit before -- the behaviour is unchanged, only the diagnosis
+      # arrives with it.
+      {:error, reason} -> {:unsupported, reason}
+      {:unsupported, _} = refusal -> refusal
       _ -> :unsupported
     end
   end
@@ -198,10 +223,17 @@ defmodule Exmc.NUTS.CustomSynth do
           # `capture_guard/3`, so this arm can only ever carry an empty one.
           {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, <<>>, <<>>}}
         else
+          # A glslang failure is `{:error, %{exit:, stderr:, glsl_path:}}` and
+          # stays an `:error` -- "the shader would not COMPILE" is a different
+          # category from "I decline to try", and collapsing them loses the
+          # distinction that makes a refusal legible.
+          {:error, _} = compile_error -> compile_error
           _ -> :unsupported
         end
       end
     else
+      {:error, reason} -> {:unsupported, reason}
+      {:unsupported, _} = refusal -> refusal
       _ -> :unsupported
     end
   end
@@ -240,7 +272,19 @@ defmodule Exmc.NUTS.CustomSynth do
     # values as if they were its own. Refuse rather than attribute by guess.
     # Not reachable from any fixture here today; recorded because it is the
     # shape the next model of this kind would take.
-    mixed_obs_sources? = observed != [] and not is_nil(custom_obs)
+    # `custom_n_obs/1 > 0`, NOT `not is_nil/1`. The hazard is two NON-EMPTY
+    # observation regions concatenated into one flat buffer. A scalar
+    # placeholder -- `Builder.obs(ir, "C_obs", "C", Nx.tensor(0.0))`, the idiom
+    # for "this Custom has no observation axis, its data is captured" --
+    # contributes zero doubles and conflicts with nothing.
+    #
+    # The first version of this guard tested `not is_nil(custom_obs)` and
+    # refused that combination, which is a legitimate and probably common model
+    # class: standard observed nodes plus a Custom whose data is in the
+    # closure. Caught by probing the condition `capture_guard/3` actually
+    # guards rather than by any test here -- the over-refusal is invisible to a
+    # suite that contains no such model.
+    mixed_obs_sources? = observed != [] and custom_n_obs(custom_obs) > 0
 
     n_obs =
       Keyword.get_lazy(opts, :n_obs, fn ->
