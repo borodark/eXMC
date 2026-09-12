@@ -8,6 +8,41 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-12, asus moved to 580 and the confound may already be broken
+
+`docs/HANDOVER_ASUS.md` is the handover; this is the one-paragraph version.
+
+asus is now **FreeBSD 15.0 + driver 580.178.04**, swapped live by the nx_vulkan
+session with `kldunload`/`kldload` — no reboot, same kernel and userland, one
+variable. Both cards enumerate under Vulkan 1.4.312: GTX 1660 Ti (Turing) and
+Quadro M4000 (discrete Maxwell). That is exactly the intervention
+`docs/TWO_GATES_THAT_DO_NOT_GATE.md` Part 2 says is required to separate driver
+branch from OS, and they REPORT the outcome already: the crash module
+"segfaults on both cards under 470 and runs under 580". Unconfirmed in our own
+harness — that is task 1 of the handover, and until it is run this stays a
+citation, not a result.
+
+If it holds, three things follow at once. FreeBSD is eliminated.
+Architecture-as-lookup is falsified **non-vacuously** — the M4000 is Maxwell and
+crashed under 470 while the Jetson's Maxwell Tegra runs it, and one Turing part
+does both depending only on the driver. And the 470 branch is the survivor, on
+a within-host, within-card, single-variable design rather than on three FreeBSD
+hosts that were never three independent observations.
+
+Two operational notes worth having before anyone runs there. **asus is shared:**
+the nx_vulkan session is measuring cross-process GPU contention on it, and an
+eXMC suite on the other card is the neighbour that perturbs their numbers —
+check the box is idle first. **There is no device knob in the nx_vulkan rev we
+pin** (`9a8427c`): `build_ctx()` sorts on device *type* only and both cards are
+`DiscreteGpu`, so it always takes the 1660 Ti. Their `NXV_DEVICE` selector is
+real but sits on `feat/device-selector` @ `befb91b`, unpinned here. Until the
+pin moves, `VK_LOADER_DEVICE_SELECT=0x10de:0x13f1` reorders the loader's
+enumeration and selects the M4000 with no code change — MEASURED against
+`vulkaninfo` on the box, and it works because `min_by_key` returns the first
+minimum on a tie. Confirm the card from the banner on every run.
+
+---
+
 ## Status — 2026-09-11 (later), the leaf-diff harness is a gate that can fail
 
 `bench/leapfrog_leaf_diff.exs` is now `test/nuts/leapfrog_leaf_diff_test.exs`

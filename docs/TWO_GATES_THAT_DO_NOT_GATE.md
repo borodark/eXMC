@@ -311,6 +311,18 @@ super-io and asus share the GLSL cache key `d915a7f8…` and have OPPOSITE
 outcomes, so the source-text split cannot explain the crash. That is a real
 elimination rather than a vacuous survival, and it is the only one in the set.
 
+> **THE INTERVENTION HAS SINCE HAPPENED — 2026-09-11/12.** asus was moved from
+> 470 to 580 by the nx_vulkan session, by `kldunload`/`kldload` with no reboot,
+> so kernel and userland were held constant. They REPORT that the crash module
+> "segfaults on both cards under 470 and runs under 580". If that holds, the
+> paragraph below is superseded: FreeBSD is eliminated, the driver branch is the
+> survivor, and architecture-as-lookup is falsified non-vacuously — the M4000 is
+> Maxwell and crashed under 470 while the Jetson's Maxwell Tegra ran it, and one
+> Turing part does both depending only on the driver. Not yet confirmed in
+> eXMC's own harness; that is task 1 of `docs/HANDOVER_ASUS.md`. The rest of
+> this section is left as written, as the record of what was known before the
+> intervention.
+
 **Driver branch and OS remain perfectly confounded.** Every host that works is
 Linux; every host that crashes is FreeBSD. The Jetson adds that a second,
 unrelated Linux stack handles the module — so it is not something specific to
