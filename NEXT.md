@@ -484,9 +484,10 @@ traversals, not operations.
 
 That makes obs-axis parallelism the whole of the remaining opportunity rather
 than a second-order term: what is left is arithmetic run by one invocation
-while 255 idle. Promoting `bench/leapfrog_leaf_diff.exs` into a test that can
-fail is still open, and is a prerequisite for THAT change, which is not
-bit-identical.
+while 255 idle. The leaf-diff harness was promoted to
+`test/nuts/leapfrog_leaf_diff_test.exs` on 2026-09-11 with fleet-derived
+tolerances, so that prerequisite is met; the parallelism work itself, which is
+not bit-identical, is still open.
 
 Two hypotheses were tested and refuted along the way; §1 of that document
 records them so they are not re-derived.

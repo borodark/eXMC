@@ -782,7 +782,7 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
           # gradient's first accumulator carries the /3.0 divisor.
           #
           # Positional attribution is therefore per-direction, and
-          # bench/leapfrog_leaf_diff.exs pins it with DISTINCT per-node sigmas
+          # test/nuts/leapfrog_leaf_diff_test.exs pins it with DISTINCT per-node sigmas
           # precisely so a permutation cannot pass unnoticed — with identical
           # observations a mirrored assignment gives bit-identical answers.
           {loops, expr} =

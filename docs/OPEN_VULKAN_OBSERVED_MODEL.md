@@ -46,7 +46,7 @@ log-density's — reverse-mode AD walks `compose_logp_defn/1`'s left fold
 backwards, so `_gacc*_0` is the LAST observed node while `_lpacc0` is the
 first. With all three observations `Normal(mu, 1)` a mirrored assignment gives
 a **bit-identical** answer, so the first version of this fix looked correct and
-was not. `bench/leapfrog_leaf_diff.exs` therefore uses **distinct per-node
+was not. `test/nuts/leapfrog_leaf_diff_test.exs` therefore uses **distinct per-node
 sigmas** (1.0 / 2.0 / 3.0), where any permutation changes the numbers. Keep it
 that way. A marker-count guard raises (degrading to `:unsupported`, i.e. the
 slower host path) if the correspondence ever breaks.
