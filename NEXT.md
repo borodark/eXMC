@@ -8,6 +8,62 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-12 (after the lock bump), what to do next after the reboot
+
+Supersedes the "(last)" section's items 1 and 2 below; its items 3–7 stand
+unchanged and follow these.
+
+**Done and MEASURED**
+
+- **nx_vulkan lock `16d13f3` → `8116a19`** (server `main`, unchanged since the
+  last section). Not docs only, as that section expected: the range carries the
+  negative-base `pow` shader fix (five `elementwise_binary_*` shaders) and
+  increment 3's `vulkano_backend.ex` device routing. `EXMC_COMPILER=vulkan mix
+  check`, super-io: **723 tests, 0 failures**, 6 excluded, 2 skipped, exit 0,
+  18m52s. No loader segfault. Banner: RTX 3060 Ti, "device [0] of 2".
+- **Why EXLA kept being forgotten, answered.** Nothing on this host ever set
+  `LD_LIBRARY_PATH`: no hit in `~/.bashrc`, `~/.profile`, `/etc/environment`,
+  `/etc/profile.d`, `environment.d`. "Interactive shells inherit it" was never
+  true; only a terminal where someone had exported it did. And
+  `test/distributed_test.exs:227` starts `:exla` on `:peer` nodes, so even a
+  Vulkan-arm suite logs "Failed to load NIF library" from them. Harmless to
+  the count, since the coordinator retries, but it is the same miss.
+- **The fix that sticks is the system loader, not an export.**
+  `docs/EXLA_CPU_BUILD.md` now opens with the recipe: an
+  `/etc/ld.so.conf.d/zz-nvidia-pip-wheels.conf` naming the python3.12
+  `nvidia/nvshmem/lib` and `nvidia/cuda_nvrtc/lib`, then `ldconfig`. `zz-`
+  keeps `/usr/local/cuda`'s `libnvrtc.so.12` (12.6) first for the rest of the
+  box. Both orders were measured: `client: :cuda` gives the identical f64
+  result either way. `Exmc.JIT`'s "not usable" error now points at the doc.
+
+**Next, in order**
+
+1. **Install the loader entry** (needs sudo; not done before the reboot). Use
+   the three-line block in `docs/EXLA_CPU_BUILD.md`. Then, from a shell with
+   no `LD_LIBRARY_PATH`: `ldd _build/test/lib/exla/priv/libexla.so | grep
+   'not found'` prints nothing. Then update the agent memory
+   `exla-ld-library-path-super-io` to say the loader entry is the mechanism.
+2. **`bench/nuts_truth.exs` on both arms at `8116a19`.** Started before the
+   reboot and killed by it with no rows printed. `COMPILER=none` then
+   `COMPILER=vulkan`, default seeds 1–6, `mix run --no-deps-check`. No earlier
+   numbers exist for any pin since `9a8427c`, so this run is the baseline.
+   Record the table here.
+3. **Track 3 — the EXLA arm at HEAD**, now unblocked by 1:
+   `EXMC_COMPILER=exla mix check`, no exports. Last measured at `a178a0833`
+   (652 tests). Note that **a bare `mix check` on super-io becomes the EXLA
+   arm** once EXLA loads, because auto-detect prefers it. Every Vulkan count
+   from now on must name `EXMC_COMPILER=vulkan`. Rerun the Vulkan arm after
+   the loader change too: its peer nodes will now actually start EXLA.
+   Both counts go into a new `docs/ARMS.md` (Track 1 item 2).
+4. Then the "(last)" section's items 3–7: seed 46 and the leaf-diff outlier,
+   Track 5 item 2, Track 4, Track 6 leftovers, phd.git.
+
+**Not pushed.** This commit (lock, doc, `jit.ex` pointer, this section) is on
+`gate1/reconcile-core` locally; `main` on the server was not moved. Push both
+together as before once item 2 is recorded, or now.
+
+---
+
 ## Status — 2026-09-12 (last), what to do next after the restart
 
 Supersedes the "evening" handoff below; everything there that is not repeated

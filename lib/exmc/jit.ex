@@ -209,6 +209,8 @@ defmodule Exmc.JIT do
       AND its application must start. A dependency that ships every module and
       then fails in `Application.ensure_all_started/1` — a CUDA exla whose NIF
       cannot find libnvshmem_host.so.3 is the standard case — lands here.
+      `ldd` on its libexla.so names what is missing; docs/EXLA_CPU_BUILD.md
+      has the loader fix, and the CPU build for when the libraries are absent.
 
       Detected alternative: #{inspect(auto_detect())}
 

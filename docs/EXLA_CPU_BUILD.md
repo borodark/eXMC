@@ -14,6 +14,62 @@ eXMC no longer *needs* you to fix this. `exla` is declared `runtime: false`
 aborting the VM at boot. Everything below is for when you want EXLA working,
 not for when you want the test suite to run.
 
+## Before building a CPU EXLA: the CUDA build may only need its libraries found
+
+On super-io the CUDA `libexla.so` is fine; four of the libraries it links are
+simply not on the loader's path. See which:
+
+```sh
+ldd _build/test/lib/exla/priv/libexla.so | grep 'not found'
+```
+
+There (measured 2026-09-12) that prints `libnvshmem_host.so.3`,
+`nvshmem_bootstrap_uid.so.3`, `nvshmem_transport_ibrc.so.3` and
+`libnvrtc-builtins.so.12.9`. All four ship in pip wheels under the
+**python3.12** site-packages — not the python3.10 tree holding the other
+`nvidia/*` wheels, where searching finds nvrtc 12.1 and no nvshmem, which reads
+as "not installed":
+
+```sh
+find / -name 'libnvshmem_host.so.3' 2>/dev/null
+```
+
+Register those directories with the system loader, once per host:
+
+```sh
+NV=/home/io/.local/lib/python3.12/site-packages/nvidia
+printf '%s\n' "$NV/nvshmem/lib" "$NV/cuda_nvrtc/lib" |
+  sudo tee /etc/ld.so.conf.d/zz-nvidia-pip-wheels.conf
+sudo ldconfig
+ldd _build/test/lib/exla/priv/libexla.so | grep 'not found'   # prints nothing
+```
+
+**Why the loader and not `LD_LIBRARY_PATH`.** This host ran on an exported
+`LD_LIBRARY_PATH` for a month, and it failed the same way every time: a shell
+that had not exported it — an agent, `nohup`, cron, a fresh terminal — got a
+different backend, silently. The loader reads that variable once at process
+start, so nothing inside the BEAM can set it, and `test/distributed_test.exs`
+starts `:exla` on `:peer` nodes that inherit whatever the launching shell had.
+An `ld.so.conf.d` entry has no such gap.
+
+**Why `zz-`.** The `cuda_nvrtc` wheel also carries `libnvrtc.so.12` (12.9),
+and the system has its own (12.6, `/usr/local/cuda`). Files are read in sort
+order and the first directory providing a soname wins, so sorting after
+`000_cuda.conf` and `988_cuda-12.conf` leaves every other CUDA program on the
+box on 12.6 and only adds the sonames nothing else provides. Measured with
+both orders: `Nx.Defn.jit(..., compiler: EXLA, client: :cuda)` returns the
+same f64 result either way (`908.1872256586632` for
+`sum(exp(x) * sin(x))`, `x = iota(1000) / 1000`) on the RTX 3060 Ti.
+
+Once EXLA loads, `Exmc.JIT` auto-detection picks it over Vulkan, so a bare
+`mix test` on this host is the EXLA arm; name `EXMC_COMPILER=vulkan` for the
+other one. Tests still run EXLA on the host client (`config/test.exs`);
+`client: :cuda` is opt-in. The CUDA client preallocates 90% of the card and
+logs `CUDA_ERROR_OUT_OF_MEMORY` when the desktop already holds some of it,
+then continues with less — noise, not a failure.
+
+If the libraries are genuinely absent, build for the CPU instead:
+
 ## The recipe
 
 ```sh
