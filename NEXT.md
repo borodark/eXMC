@@ -8,6 +8,57 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-12 (evening), handoff before a restart: what to do next, in order
+
+Everything below the line is committed and pushed unless it says otherwise.
+Read `docs/REVIEW_PLAN.md` for the why; this is only the what.
+
+**Where the four trees stand**
+
+| tree | HEAD | pushed | notes |
+|---|---|---|---|
+| exmc (this) | `b53be8c74` + this section | yes, `gate1/reconcile-core` and `main` together | nx_vulkan lock at `16d13f3`; `mix check` green (723 tests, the Cauchy KS failure only) |
+| nx_vulkan | server `main` past `3c5ae2d` (`docs/MULTI_DEVICE.md`); local checkout behind | theirs | the other session owns increment 3; `git fetch` before reading anything there |
+| pathmc_ex | `60d6ed0` local, **unpushed** | no | pin bump to exmc `dc671b62c` + `guide/02` fix **uncommitted**; another session's edits in `lib/path_mc/{do,compile/exmc,backend/conjugate}.ex`, three tests, `TODO.md`, one `NEXT.md` hunk — stage by hunk, never by file |
+| phd.git (`../../pymc`) | `a561f16`, rewritten onto our own root | yes to `o` (localhost); **not** to `origin` (192.168.0.33, no route today) | pre-rewrite bundle: `/home/io/backups/phd_before_rewrite_2026-09-12.bundle` |
+
+**Next, in order**
+
+1. **pathmc_ex, first, because it is the only tree with uncommitted verified
+   work.** Coordinate with whichever session is editing its `lib/` (ListAgents;
+   the name changes per restart). Then: re-bump its exmc pin from `dc671b62c`
+   to this HEAD, `MIX_INSTALL_FORCE=1 mix guide` and `mix check` (the notebook
+   is what breaks on a pin bump, not the gate — 2026-09-12 proved it), commit
+   pin + lock + `guide/02` together, push `60d6ed0` and that.
+2. **exmc `docs/REVIEW_PLAN.md` Track 3** — the EXLA arm at HEAD, unmeasured
+   since 2026-08 (`a178a0833`, 652 tests). `LD_LIBRARY_PATH` for the CUDA
+   build is in the agent memory `exla-ld-library-path-super-io`, nowhere in a
+   repo; the first deliverable is putting it in `docs/EXLA_CPU_BUILD.md`.
+   Then `EXMC_COMPILER=exla mix check`, and the count goes into a new
+   `docs/ARMS.md` (Track 1 item 2) beside the Vulkan rows above.
+3. **Track 5 item 2** — `Exmc.NUTS.Vulkan.Dispatch` threads a device slot to
+   `ChainTrace.dispatch_f64/7`. One line, but read nx_vulkan
+   `docs/MULTI_DEVICE.md` first; the startup budget is 13 s for the first
+   Vulkan client in a BEAM, and `:cross_device` raises on Nx-level ops.
+4. **Track 2** (cross-arm parity test) and **Track 4** (`docs/PUBLIC_API.md`,
+   a reason on every bare `:unsupported`, the `detect_meta/2` spec).
+5. **phd.git** when 192.168.0.33 is reachable: `git push origin --force` for
+   the 17 branches and the tag (the list is the server's own `ls-remote`),
+   then a server-side `git gc` on both to drop the old objects. The audit
+   decisions (mesh to core?, `smc/` → `smc_ex`, the stranded core tests and
+   benches, the `LICENSE` file that still says Apache for the trader) are in
+   the 2026-09-12 handoff message and still open.
+6. **exmc Track 6 leftovers**: 16 compile warnings before
+   `--warnings-as-errors` can join `mix check`; the dead tags `:requires_f64`
+   and the seven tagged-never-read ones.
+
+**Do not**: push exmc to `upstream` (GitHub) — that is a release and the
+operator's; move the nx_vulkan lock past a rev this suite has not run on;
+reset the server's `main` without deciding whether it should lag
+`gate1/reconcile-core` (they have been in lockstep since `dc671b62c`).
+
+---
+
 ## Status — 2026-09-12 (later), both pins moved and the three-repo sweep
 
 A cross-repo review of nx_vulkan, eXMC and pathmc_ex, with the pins moved
