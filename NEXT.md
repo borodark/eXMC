@@ -35,6 +35,30 @@ unchanged and follow these.
   keeps `/usr/local/cuda`'s `libnvrtc.so.12` (12.6) first for the rest of the
   box. Both orders were measured: `client: :cuda` gives the identical f64
   result either way. `Exmc.JIT`'s "not usable" error now points at the doc.
+- **`bench/nuts_truth.exs` on both arms at `8116a19`**, super-io, seeds 1–6
+  pooled, warmup/samples 500/2000, `use_nif=true full_tree_nif=false`. This is
+  the first recorded run for any pin since `9a8427c`, so it is the baseline:
+
+  | model | stat | truth | `none` | err | `vulkan` | err |
+  |---|---|---|---|---|---|---|
+  | Normal(0,1) | mean | 0 | −0.016021 | −0.0160 | −0.003061 | −0.0031 |
+  | | var | 1 | 1.011326 | 1.13% (ess 4615) | 0.998776 | −0.12% (ess 4672) |
+  | HalfNormal(1) | mean | 0.797885 | 0.792226 | −0.71% | 0.795981 | −0.24% |
+  | | var | 0.363380 | 0.349842 | −3.73% (ess 4516) | 0.351352 | −3.31% (ess 4392) |
+  | Exponential(2) | mean | 0.5 | 0.495538 | −0.89% | 0.491954 | −1.61% |
+  | | var | 0.25 | 0.256864 | 2.75% (ess 4707) | 0.254845 | 1.94% (ess 4547) |
+
+  Both arms: "all 3 models within tolerance of analytic truth", exit 0.
+  Times: `none` 5m42s, `vulkan` 1m06s.
+- **A bump trap the bench found, not the suite.** The first `COMPILER=vulkan`
+  run died in 2 s: `{:bad_lib, 'Function not found
+  Nx.Vulkan.NativeV:buf_alloc_zeroed_on/2'}`. `mix check` rebuilds nx_vulkan
+  for `_build/test` only. The Rust `.so` lives in `deps/nx_vulkan/priv`,
+  which every environment shares, so `_build/dev` ran a pre-bump
+  `NativeV.beam` against the new library. `mix run --no-deps-check` is what
+  lets that through. **After any nx_vulkan lock move, run `mix deps.compile
+  nx_vulkan` (in `:dev`) before any bench.** §5's bench commands all use
+  `--no-deps-check`.
 
 **Next, in order**
 
@@ -43,24 +67,18 @@ unchanged and follow these.
    no `LD_LIBRARY_PATH`: `ldd _build/test/lib/exla/priv/libexla.so | grep
    'not found'` prints nothing. Then update the agent memory
    `exla-ld-library-path-super-io` to say the loader entry is the mechanism.
-2. **`bench/nuts_truth.exs` on both arms at `8116a19`.** Started before the
-   reboot and killed by it with no rows printed. `COMPILER=none` then
-   `COMPILER=vulkan`, default seeds 1–6, `mix run --no-deps-check`. No earlier
-   numbers exist for any pin since `9a8427c`, so this run is the baseline.
-   Record the table here.
-3. **Track 3 — the EXLA arm at HEAD**, now unblocked by 1:
+2. **Track 3 — the EXLA arm at HEAD**, now unblocked by 1:
    `EXMC_COMPILER=exla mix check`, no exports. Last measured at `a178a0833`
    (652 tests). Note that **a bare `mix check` on super-io becomes the EXLA
    arm** once EXLA loads, because auto-detect prefers it. Every Vulkan count
    from now on must name `EXMC_COMPILER=vulkan`. Rerun the Vulkan arm after
    the loader change too: its peer nodes will now actually start EXLA.
    Both counts go into a new `docs/ARMS.md` (Track 1 item 2).
-4. Then the "(last)" section's items 3–7: seed 46 and the leaf-diff outlier,
+3. Then the "(last)" section's items 3–7: seed 46 and the leaf-diff outlier,
    Track 5 item 2, Track 4, Track 6 leftovers, phd.git.
 
-**Not pushed.** This commit (lock, doc, `jit.ex` pointer, this section) is on
-`gate1/reconcile-core` locally; `main` on the server was not moved. Push both
-together as before once item 2 is recorded, or now.
+Pushed: `gate1/reconcile-core` and `main` together to `origin`, as before.
+Not to `upstream`.
 
 ---
 
