@@ -43,7 +43,20 @@ describes this exact window — "a SIGSEGV was observed on mac-247 on
 design had closed. Increment 2 reopened it one call earlier. The fix is
 theirs: take the init mutex in `slots()`/`resolve_default()` when no context
 is open, or make the library handle `'static`. Reported in nx_vulkan
-`NEXT.md`. Until then a `bae9221` lock is the newest rev this suite passes on.
+`NEXT.md`.
+
+**Fixed the same evening, `d657387`** (their session confirmed the mechanism
+frame for frame: `enumerate_devices()` now takes `CTX_INIT` when no instance
+is open). MEASURED here at `f8fa9e9`, `mix test`, `max_cases: 176`: **723
+tests, 1 failure** (Cauchy KS), no segfault, 792.7 s. Their `16d13f3` then
+added the consumer surface this repo asked for — `Nx.Vulkan.Device.resolve/1`
+(selector or slot → `{:ok, slot, info}`), `ChainTrace.dispatch_f64/7` with a
+defaulted device argument, and one `Node` per device — so the pin to move
+to is `16d13f3`, and `Exmc.NUTS.Vulkan.Dispatch` gains one line
+(`docs/REVIEW_PLAN.md` Track 5 item 2). Their warm-up measurement on asus:
+the first Vulkan client in a BEAM pays **13.0 s** (loader, instance,
+allocators, pipeline cache), the second device 204 ms; size any startup
+budget against 13 s, not the 2.6 s the standalone probe measured.
 
 **Pins.** `mix.lock` here follows nx_vulkan `bae9221` (from `9a8427c`, 52
 commits; `mix deps.update nx_vulkan`; not `5f65398`, see above). pathmc_ex follows eXMC `dc671b62c`
