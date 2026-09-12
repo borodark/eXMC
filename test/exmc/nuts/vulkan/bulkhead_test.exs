@@ -10,7 +10,9 @@ defmodule Exmc.NUTS.Vulkan.BulkheadTest do
 
   alias Exmc.{Builder, Dist, NUTS.Sampler}
 
-  @moduletag :vulkan
+  # Needs a Vulkan device: starts `Nx.Vulkan.Node` and names the compiler.
+  # `test_helper.exs` excludes `:requires_vulkan` on hosts without one.
+  @moduletag :requires_vulkan
 
   setup do
     put_env_scoped(:compiler, :vulkan)

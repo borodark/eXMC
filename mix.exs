@@ -12,6 +12,7 @@ defmodule Exmc.MixProject do
       compilers: [:yecc, :leex | Mix.compilers()],
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      aliases: aliases(),
       description:
         "Probabilistic programming for the BEAM. NUTS/HMC, ADVI, SMC, Pathfinder. " <>
           "Inspired by PyMC. Beats PyMC on 4 of 7 benchmarks.",
@@ -103,6 +104,23 @@ defmodule Exmc.MixProject do
   # through to Vulkan where it does not. With exla off the dependency list on
   # FreeBSD, auto-detect lands on Vulkan by itself — no config, no override.
   @freebsd? match?({:unix, :freebsd}, :os.type())
+
+  # `mix check` is the gate on one host: formatting first because it fails in
+  # a second, then compile, then the suite on whatever arm the host detects
+  # (`EXMC_COMPILER=vulkan mix check` names it). The fleet gate is
+  # `scripts/fleet_verify.sh`, which runs this on every GPU box and compares
+  # counts. Not `compile --warnings-as-errors` yet: the tree carries 16
+  # warnings at 2026-09-12 (docs/REVIEW_PLAN.md Track 6 lists them); add the
+  # flag when they are gone.
+  defp aliases do
+    [
+      check: [
+        "format --check-formatted",
+        "compile",
+        "test"
+      ]
+    ]
+  end
 
   defp deps do
     [

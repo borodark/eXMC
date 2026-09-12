@@ -28,8 +28,10 @@ in the repo records it.
   `CustomDistTest` "custom dist works with NUTS sampler", passes under
   `EXMC_COMPILER=vulkan` and fails without it, because
   `:allow_vulkan_perop_sampling` is set by `config/runtime.exs` **from the env
-  var**, not from the detected backend. The fleet script sets the variable, so
-  the fleet never sees this. MEASURED.
+  var**, not from the detected backend — deliberately, per its comment and
+  `Exmc.JIT.describe/0`'s moduledoc, which record the same 16/1 vs 16/0 on
+  mac-248. The fleet script sets the variable, so the fleet never sees this.
+  MEASURED.
 - The EXLA arm was last recorded fully green on 2026-08 at `a178a0833`
   (652 tests). Every status section since 2026-09-02 is Vulkan-only. The EXLA
   arm at HEAD is unmeasured.
@@ -52,11 +54,14 @@ in the repo records it.
 **Question.** Can a run's arm be chosen, recorded, and reasoned about without
 reading a log?
 
-1. Key `:allow_vulkan_perop_sampling` off the detected backend, the way
-   `test_helper.exs` keys its excludes, or move the test env's setting into
-   `config/test.exs` under the detected arm. Then `mix test` on a Vulkan host
-   and `EXMC_COMPILER=vulkan mix test` are the same arm, or the difference is a
-   named, tagged test.
+1. `config/runtime.exs` sets `:allow_vulkan_perop_sampling` only under an
+   explicit `EXMC_COMPILER=vulkan`, deliberately (its comment: a global flag
+   would turn a loud refusal into a silent per-op run). The one test that
+   needs the fallback, `CustomDistTest` "custom dist works with NUTS sampler",
+   should set it for itself with `put_env_scoped/2`, and the env-var block in
+   `runtime.exs` should then go. Then `mix test` on a Vulkan host and
+   `EXMC_COMPILER=vulkan mix test` are the same arm, and the auto-detect
+   run's second failure disappears for the right reason.
 2. Write `docs/ARMS.md`: the three arms, how each is selected (env var for
    `mix` invocations from this repo; `put_env` for consumers), what each host
    in the fleet runs, and the expected suite result per arm per host — a
@@ -190,7 +195,11 @@ Dialyzer would enforce; no bare `:unsupported` remains.
 
 - A whole-tree `mix format` as its own commit, then `format --check-formatted`
   as the first step of whatever the gate is (pathmc_ex's `mix check` alias is
-  the model).
+  the model). Done 2026-09-12: `mix check` = format check, compile, test.
+  Not yet `compile --warnings-as-errors`: the tree carries 16 warnings at
+  HEAD (clauses of `do_eval/3`, `do_emit/3`, `detect_meta/2`,
+  `analytic_moments/1` not grouped; `@doc` on private functions; unused
+  defaults on `nuts_step_with_stats/8`). Fix those, then add the flag.
 - README: a dependency section (git server, `NX_VULKAN_PATH`, `NX_PATH`,
   optional EXLA and how a consumer opts in), an arms section, a testing
   section naming the gate.

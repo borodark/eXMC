@@ -235,15 +235,68 @@ ExmcViz.stream(ir, init, num_samples: 5000)   # live sampling dashboard
 
 ![Pair Plot](assets/pair_plot_4k.png)
 
-## Backends 
+## Backends: three arms
 
-eXMC's tensor operations go through [Nx](https://github.com/elixir-nx/nx), with backend-specific acceleration:
+eXMC's tensor operations go through [Nx](https://github.com/elixir-nx/nx).
+Every model runs on three arms, and `Exmc.JIT` picks one at boot in the order
+EXLA > Vulkan > Evaluator unless `config :exmc, :compiler` names it:
 
-| Backend | Platform | Status |
-|---------|----------|--------|
-| [EXLA](https://github.com/elixir-nx/nx/tree/main/exla) | CPU, CUDA GPU | Supported. JIT-compiled gradients, `device: :cuda` for GPU |
-| [EMLX](https://github.com/elixir-nx/emlx) | Apple Silicon (Metal) | Planned. MLX backend for M-series Macs ([#1](https://github.com/borodark/exmc/issues/1)) |
-| BinaryBackend | Any | Fallback. Pure Elixir, no dependencies |
+| arm | `:compiler` | what it is | where it is the deploy option |
+|---|---|---|---|
+| **CPU** | `:none` | `Nx.Defn.Evaluator` on `Nx.BinaryBackend`. Slow, no native code, always correct | everywhere; the reference the other two are checked against |
+| **EXLA** | `:exla` | XLA JIT, CUDA or the CPU build ([`docs/EXLA_CPU_BUILD.md`](docs/EXLA_CPU_BUILD.md)) | Linux |
+| **Vulkan** | `:vulkan` | [`nx_vulkan`](https://github.com/borodark/nx_vulkan): f64 compute, and a fused f64 NUTS chain shader synthesised from the model | **FreeBSD, where it is the only GPU option**; on Linux it is raced against EXLA on the same box |
+
+All three are f64. `Exmc.JIT.describe/0` prints which arm a process has,
+and `test/test_helper.exs` prints it at the top of every suite run — read
+that line before reading a failure. EMLX (Apple Metal) is postponed until
+there is hardware to test on; Apple GPUs are expected to arrive through
+nx_vulkan and MoltenVK instead (`lib/exmc/jit.ex` has the reasoning).
+
+### Dependencies and how they are wired
+
+`nx_vulkan` and `exla` are both `optional: true`, so a consumer gets neither
+unless it declares them in its own `mix.exs`. `exla` is also `runtime: false`:
+an EXLA that is present but cannot load its NIF (the CUDA build without
+`libnvshmem_host.so.3` on the path is the usual case) is treated as absent and
+the run falls through to the next arm, rather than aborting the VM.
+
+`nx_vulkan` comes from a private git server on this LAN, following `main`,
+with the concrete sha in `mix.lock`. To iterate against a local checkout or to
+bisect a backend regression:
+
+```bash
+NX_VULKAN_PATH=/path/to/nx_vulkan mix deps.get   # sibling checkout
+NX_VULKAN_REF=<sha> mix deps.get                 # one rev, without editing mix.exs
+NX_PATH=/path/to/nx-monorepo mix deps.get        # unreleased nx + exla
+```
+
+The pin policy, and why the lock rather than `mix.exs` holds the sha, is the
+long comment above `nx_vulkan_dep/1` in `mix.exs`. `nx` is pinned to three
+components (`~> 0.13.1`) here and in nx_vulkan, and the two must agree.
+
+Two application keys matter to a consumer. `config :exmc, :compiler` selects
+the arm (`:exla | :vulkan | :none | :auto`); `config :exmc, :force_precision`
+forces `:f32` or `:f64` and is otherwise `:f64` on every arm. The
+`EXMC_COMPILER` environment variable sets the first of those, but only through
+this repo's own `config/runtime.exs` — a dependency's config is never loaded,
+so from a consumer it does nothing.
+
+### Testing
+
+```bash
+mix test                          # the suite on whatever arm this host detects
+EXMC_COMPILER=vulkan mix test     # the same suite, arm named explicitly
+scripts/fleet_verify.sh           # the fleet gate: every GPU box, counts compared
+```
+
+`test/test_helper.exs` excludes `:diag` and `:slow` by default, and
+`:requires_vulkan` on hosts without a Vulkan device; a Vulkan host runs those
+and excludes `:vulkan_known_failure` instead. The two Vulkan invocations
+above are the same arm and report the same failures (since 2026-09-12; before
+that the explicit form allowed per-op fallback for one refused model and the
+auto-detected form did not). The current per-host results and their known
+failures are in the dated Status sections at the top of [`NEXT.md`](NEXT.md).
 
 ## The Ecosystem: _Three Comrades_
 
@@ -255,7 +308,7 @@ dependencies beyond Elixir itself.
 
 | Library | Algorithm | For | Deps |
 |---|---|---|---|
-| **eXMC** | NUTS / HMC, ADVI, SMC, Pathfinder | Known parametric models, continuous parameters | Nx, EXLA |
+| **eXMC** | NUTS / HMC, ADVI, SMC, Pathfinder | Known parametric models, continuous parameters | Nx; EXLA or nx_vulkan optional |
 | [**smc_ex**](https://github.com/borodark/smc_ex) | Bootstrap PF, PMCMC, Online SMC² | Discrete state transitions, streaming data, epidemic tracking | **zero** |
 | [**StochTree-Ex**](https://github.com/borodark/ex_stochtree) | BART (Bayesian Additive Regression Trees) | Unknown functional form, feature discovery, nonparametric regression | Rustler |
 

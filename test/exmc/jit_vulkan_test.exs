@@ -11,14 +11,16 @@ defmodule Exmc.JITVulkanTest do
   at f32. Operators on genuinely f64-lacking devices flip the
   escape hatch: `config :exmc, :force_precision, :f32`.
 
-  Tagged `:vulkan` so `mix test` skips it on hosts without Nx.Vulkan
-  loaded; run with `mix test --include vulkan` after configuring the
-  compiler.
+  Tagged `:requires_vulkan`, which `test_helper.exs` excludes on hosts
+  without a Vulkan device and includes on hosts with one. (Until 2026-09-12
+  this said `:vulkan` and claimed `mix test` skipped it; nothing excluded
+  that tag, so on a host without Vulkan the `setup_all` guard below was the
+  only thing standing between this module and a failure.)
   """
 
   use ExUnit.Case, async: false
 
-  @moduletag :vulkan
+  @moduletag :requires_vulkan
 
   setup_all do
     if Code.ensure_loaded?(Nx.Vulkan) do

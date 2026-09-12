@@ -23,7 +23,6 @@ defmodule Exmc.NUTS.Vulkan.ChaosTest do
   alias Exmc.{Builder, Dist, NUTS.Sampler}
   alias Exmc.NUTS.Vulkan.SuspectTracker
 
-  @moduletag :vulkan
   @moduletag :requires_vulkan
 
   setup do
