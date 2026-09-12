@@ -8,6 +8,65 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-12 (last), what to do next after the restart
+
+Supersedes the "evening" handoff below; everything there that is not repeated
+here is done. Read `docs/REVIEW_PLAN.md` for the why.
+
+**Where the trees stand**
+
+| tree | state | pushed |
+|---|---|---|
+| exmc (this) | `mix check` **723 / 0** on super-io at `f79fdc27b` (auto-detected Vulkan, nx_vulkan lock `16d13f3`) — first fully green run here | yes, `gate1/reconcile-core` and `main` together |
+| nx_vulkan | server `main` at `8116a19` ("increment 3 is landed; and what to check when the box comes back" — asus may be down, read that commit first): the divergence script, `docs/MULTI_DEVICE.md`, increments 1–3, the loader fix; their NEXT.md §1c.2 records the KS resolution | theirs; local checkout behind — `git fetch` first |
+| pathmc_ex | `60d6ed0` (docs) pushed; the working tree is **owned by session `pathmc-ex-17`** — its uncommitted work includes the pin move to exmc `5b660310a` on the LAN address, `check.full`, an arm field on the posterior, and this session's guide/02 fix. They were asked to commit it as one piece. Do not stage anything there. | partly |
+| phd.git | rewritten onto our root, `02469a6` on `o` with its own `exmc/NEXT.md` | `origin` (192.168.0.33) still has the old history — force-push when reachable |
+
+**Next, in order**
+
+1. **Bump this tree's nx_vulkan lock past `16d13f3`** to their current `main`
+   (`mix deps.update nx_vulkan`), run `EXMC_COMPILER=vulkan mix check` (16 min
+   here) and `bench/nuts_truth.exs` on both arms — the bump checklist their
+   NEXT.md asks for and no pin since `9a8427c` has had. Everything past
+   `16d13f3` is docs, tests and per-device capability; expect 723 / 0.
+2. **Track 3 — the EXLA arm at HEAD.** Unmeasured since 2026-08
+   (`a178a0833`, 652 tests). First deliverable: the `LD_LIBRARY_PATH` recipe
+   from the agent memory `exla-ld-library-path-super-io` into
+   `docs/EXLA_CPU_BUILD.md`; then `EXMC_COMPILER=exla mix check`; the count
+   into a new `docs/ARMS.md` (Track 1 item 2) with the Vulkan rows.
+3. **The two things the KS hunt left open** (Track 2 item 3, both this repo's):
+   - seed 46 in `bench/validator_ks_seeds.exs`: d = 0.30 even ESS-sized, a
+     4× ESS gap between arms (host 308, GPU 80) on one seed — look at the
+     GPU chain's trace, step size and divergences before calling it MCMC luck;
+   - the leaf-diff outlier: super-io is *closer* to the host than mac-247,
+     mac-248 and the Jetson, which agree to the digit. nx_vulkan measured f64
+     division exactly rounded on Turing and discrete Maxwell, so the grouping
+     is Kepler + Tegra or it is `inversesqrt` (`:rsqrt`, glsl.ex:602). A
+     three-constant `inversesqrt` inside a synthesised body, dispatched here
+     and on a Kepler, is the test; nx_vulkan cannot run it for us because
+     `Nx.rsqrt` at f64 falls back to the host there.
+4. **Track 5 item 2** — `Exmc.NUTS.Vulkan.Dispatch` threads a device slot to
+   `ChainTrace.dispatch_f64/7`, after reading nx_vulkan `docs/MULTI_DEVICE.md`
+   (13 s first-client startup; `:cross_device` raises on Nx-level ops, returns
+   on the chain path).
+5. **Track 4** — `docs/PUBLIC_API.md`, a reason on every bare `:unsupported`
+   (seven sites), the `detect_meta/2` spec. pathmc-ex-17 is building the arm
+   field on their side; Track 1 item 4 (the arm in this sampler's stats map,
+   from `Exmc.JIT.describe/0`) should land so both projects report one string.
+6. **Track 6 leftovers** — 16 compile warnings before `--warnings-as-errors`
+   joins `mix check`; `:requires_f64` excluded-never-tagged; the seven
+   tagged-never-read tags.
+7. **phd.git** when 192.168.0.33 answers: `git push origin --force` the 17
+   branches and the tag, `git gc --prune=now` on both bare repos; then its
+   `exmc/NEXT.md` items 1–3 (lock agreement, the app's own suite, the
+   per-device application supervisor).
+
+**Do not**: push exmc to `upstream` (GitHub) — a release, the operator's;
+move the nx_vulkan lock without the suite; stage anything in pathmc_ex while
+`pathmc-ex-17` owns the tree; fetch phd's `origin` into a rewritten branch.
+
+---
+
 ## Status — 2026-09-12 (night), the Cauchy KS failure was the test's own statistic
 
 The one failure this suite has carried on super-io since 2026-09-07 —
