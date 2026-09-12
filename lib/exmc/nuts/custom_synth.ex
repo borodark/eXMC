@@ -523,7 +523,8 @@ defmodule Exmc.NUTS.CustomSynth do
           # observed RVs are likewise not free. That semantic means a
           # model with no latent priors has no free RVs — Plan-B'
           # catches this at compile time with a clearer error than a
-          # Rust panic. Filed against nx_vulkan/248_TODO.md.
+          # Rust panic. Was filed against nx_vulkan/248_TODO.md, which has
+          # since moved out of that repo (see its TODO_MOVED.md).
           priors == [] ->
             {:error, :no_free_rvs_in_custom_only_model}
 

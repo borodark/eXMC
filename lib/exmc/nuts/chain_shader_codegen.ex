@@ -20,10 +20,11 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
   * Phase D — observed-data models. Bakes likelihood data into
     the generated shader as constants.
 
-  Phases A + B require zero new shader code; the existing
-  `leapfrog_chain_*` shaders in `nx_vulkan/priv/shaders/` are
-  reused. C + D require GLSL emission via
-  `Nx.Vulkan.Codegen.compile_cached/1`.
+  Phases A + B originally reused nx_vulkan's hand-written
+  `leapfrog_chain_*` shaders; nx_vulkan deleted those (`8006a4d`,
+  2026-09-01) and every chain shader is now synthesised here and
+  compiled via `Nx.Vulkan.Codegen.compile_cached/1`, which is what
+  C + D always required.
   """
 
   alias Exmc.{IR, Node}

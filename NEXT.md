@@ -8,6 +8,118 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-12 (later), both pins moved and the three-repo sweep
+
+A cross-repo review of nx_vulkan, eXMC and pathmc_ex, with the pins moved
+forward first so the review saw today's code rather than last week's. The doc
+edits and `docs/REVIEW_PLAN.md` are committed; the `mix.lock` move is not
+(see the segfault below — the lock in the tree is back at `bae9221`).
+
+**nx_vulkan `5f65398` segfaults this suite; the lock stays at `bae9221`.**
+nx_vulkan's `main` moved again the same afternoon (16 commits: the two-GPU
+design branch merged, increment 2 "the context travels with the tensor",
+`77bb61f`). Moved the lock to it, rebuilt, ran `EXMC_COMPILER=vulkan mix
+test` twice: **SIGSEGV both times within 10 s**, before the device banner,
+exit 139. `coredumpctl` backtrace, MEASURED:
+
+    #0  0x0000000000000000
+    #1  libvulkan.so.1 + 0x2a192
+    #2  vkEnumerateInstanceExtensionProperties (libvulkan.so.1)
+    #3  libnx_vulkan_vulkano.so + 0x1eeb96
+
+`test/nuts/leapfrog_leaf_diff_test.exs` alone, `test/exmc/jit_vulkan_test.exs`
+alone, and a three-op `mix run` at the same rev all pass, so it is the
+suite's concurrency at first touch, not an op. The mechanism, INFERRED from
+`native/nx_vulkan_vulkano/src/lib.rs` at `5f65398`: `ctx_for/1` now goes
+through `slots()` → `enumerate_devices()`, and `default_slot()` →
+`resolve_default()`, and when no context is open yet `enumerate_devices()`
+builds a throwaway `VulkanLibrary::new()` + `Instance::new()` **outside the
+init mutex** that serialises `build_ctx()`. Under `max_cases: 176` every
+dirty-scheduler thread arriving first does that at once, and each temporary
+instance is dropped on return. The comment above the mutex in the same file
+describes this exact window — "a SIGSEGV was observed on mac-247 on
+2026-09-07 inside the Vulkan loader under
+`vkEnumerateInstanceExtensionProperties`" — as the thing the single-context
+design had closed. Increment 2 reopened it one call earlier. The fix is
+theirs: take the init mutex in `slots()`/`resolve_default()` when no context
+is open, or make the library handle `'static`. Reported in nx_vulkan
+`NEXT.md`. Until then a `bae9221` lock is the newest rev this suite passes on.
+
+**Pins.** `mix.lock` here follows nx_vulkan `bae9221` (from `9a8427c`, 52
+commits; `mix deps.update nx_vulkan`; not `5f65398`, see above). pathmc_ex follows eXMC `dc671b62c`
+(from `147305261`, 12 commits). The 2026-09-12 status below this one still
+says `9a8427c` and "selector on `feat/device-selector`"; both were true when
+written and are not now — the selector (`befb91b`) was merged to nx_vulkan
+`main` in `70c96e9` on 2026-09-11 23:42, before that status was written, so
+the "unpinned here" half was right and the "sits on a branch" half was not.
+`docs/HANDOVER_ASUS.md` now says `NXV_DEVICE=name:M4000`, as it asked to on the
+pin move.
+
+**MEASURED on super-io, RTX 3060 Ti, driver 580.178.04, nx_vulkan `bae9221`:**
+
+| run | result |
+|---|---|
+| `mix test`, auto-detected Vulkan (`EXMC_COMPILER` unset) | 723 tests, **2** failures, 957 s |
+| `EXMC_COMPILER=vulkan mix test`, the fleet's arm | 723 tests, **1** failure (the Cauchy KS check) |
+| `mix test test/custom_dist_test.exs:190`, same arm | 1 failure |
+| same test, `EXMC_COMPILER=vulkan` | 0 failures |
+| pathmc_ex `mix check` on `dc671b62c` | green (584 tests, 9 sampling, dialyzer) |
+| pathmc_ex shader probe on `dc671b62c` | unchanged: single-equation synthesises, multi `:multiple_custom_nodes` |
+| pathmc_ex `guide/02` on `dc671b62c`, as committed | **fails**, line 246, exactly as `994305de4` said it would |
+| pathmc_ex `guide/02` after the fix | passes |
+
+The two failures: the Cauchy KS check in `ValidatorTest`, host-specific to
+super-io and already recorded above; and `CustomDistTest` "custom dist works
+with NUTS sampler", which is **not a regression from the bump** but an
+arm difference. The model is a single Custom RV with no priors, and
+`CustomSynth.extract_components/1` refuses it as
+`:no_free_rvs_in_custom_only_model`; whether that refusal falls back to the
+per-op path or raises `SynthUnsupportedError` depends on
+`:allow_vulkan_perop_sampling`, which `config/runtime.exs` sets **only when
+`EXMC_COMPILER=vulkan` is in the environment**. `test_helper.exs` keys its
+excludes off the *detected* backend precisely so the arm cannot be misread, but
+this flag is keyed off the env var, so a Vulkan host running plain `mix test`
+is one failure away from the fleet's documented arm. The fleet script sets the
+variable and never sees it. The fix is either to set the flag from the detected
+backend, or to tag that test — it is open.
+
+**The nx_vulkan bump itself is clean.** The pin→HEAD diff in nx_vulkan `lib/`
+touches `device.ex` (new), `native_v.ex` (additive: device NIFs and
+`NXV_NIF_PROFILE`), `shader.ex` (docstring); the Rust diff is additive device
+selection; no leapfrog NIF, no precision default, no release profile changed.
+Every nx_vulkan function this repo calls has the same arity and semantics at
+both revs.
+
+**The deeper review is planned in `docs/REVIEW_PLAN.md`** (arms explicit →
+format → EXLA arm re-measured → cross-arm parity → public API → nx_vulkan
+contract), with sibling plans in nx_vulkan and pathmc_ex that share its
+CPU / EXLA / Vulkan vocabulary.
+
+**What the sweep found that is ours to fix** (the cross-repo list is in the
+handoff to the user, 2026-09-12):
+
+- `CHANGELOG.md` Unreleased was empty across 40 commits including
+  `994305de4`, which broke a downstream notebook. Filled in this tree.
+- Four docstrings cited nx_vulkan state that no longer exists
+  (`leapfrog_chain_*` shaders, Stage 1.5.4 "expected to fail",
+  `Spirv.validate_file/1` "lands in f2c0c69", `248_TODO.md`). Fixed.
+- `@moduletag :vulkan` on four modules is excluded by nothing;
+  `jit_vulkan_test.exs` says `mix test` skips it. Bulkhead and server tests
+  fail rather than skip off-GPU. Open.
+- `mix format --check-formatted` fails on **26 files** at `dc671b62c`, before
+  any edit here — `tree.ex`, `sampler.ex`, `custom_synth.ex`, `leapfrog.ex`,
+  the poker modules, seven test files among them. There is no format gate in
+  this repo and nothing has run the formatter for some time. Open; a
+  whole-tree `mix format` is its own commit.
+- `mix.exs` admits rustler 0.37 (`~> 0.36`); nx_vulkan pins `~> 0.36.0` and
+  says 0.37 is broken. exmc's own NIF builds on rustc 1.90, which nx_vulkan's
+  toolchain pin says rustler 0.36 cannot do — one of those two claims is
+  stale. Open.
+- README describes neither the dependency wiring nor the Vulkan path at all.
+  Open.
+
+---
+
 ## Status — 2026-09-12, asus moved to 580 and the confound may already be broken
 
 `docs/HANDOVER_ASUS.md` is the handover; this is the one-paragraph version.

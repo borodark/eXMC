@@ -38,11 +38,11 @@ defmodule Exmc.NUTS.FusedChainDiagTest do
 
   ## Acceptance criterion
 
-  Once Stage 1.5.4 of `nx_vulkan/PLAN_FUSED_LEAPFROG.md` is
-  resolved, the fused-chain assertion should pass under the
-  bound `var in [0.7, 1.3]`. Until then it's expected to fail
-  (var ≈ 0.5 per the May 2026 measurement) and the test is
-  excluded from normal CI via `:diag`.
+  Stage 1.5.4 of `nx_vulkan/PLAN_FUSED_LEAPFROG.md` was resolved
+  on 2026-05-03 (var = 1.03 there, after ≈ 0.5 before), so the
+  fused-chain assertion is expected to pass under the bound
+  `var in [0.7, 1.3]`. It stays excluded from the default run via
+  `:diag` because of its cost, not because it is expected to fail.
   """
 
   use ExUnit.Case, async: false

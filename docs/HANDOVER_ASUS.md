@@ -138,32 +138,20 @@ Expected on a working device:
 which is what super-io returns. Anything else — including a *finite, plausible,
 wrong* triple — is a new finding and more interesting than the crash was.
 
-**Selecting the M4000.** The script's header suggests `NXV_DEVICE_INDEX=1`.
-**That variable does not exist** in the nx_vulkan eXMC pins (`9a8427c`):
-`build_ctx()` calls `min_by_key` on device *type* only, and both cards are
-`DiscreteGpu`, so it silently takes whichever the loader enumerates first — the
-1660 Ti, always. The nx_vulkan session has since built a real `NXV_DEVICE`
-selector (`name:` / `uuid:` / `pci:` / index, refusing rather than falling back
-on no match), but it is on `feat/device-selector` @ `befb91b` and **not in the
-rev eXMC pins**.
+**Selecting the M4000.** The script's header suggests `NXV_DEVICE_INDEX=1`;
+that variable never existed. As of 2026-09-12 eXMC's `mix.lock` follows
+nx_vulkan `bae9221`, which carries the real selector (`befb91b`, merged to
+their `main` in `70c96e9`):
 
-Use the loader instead. MEASURED on asus, and it works:
+    NXV_DEVICE=name:M4000 ...          # also uuid:<prefix>, pci:<address>, or a bare index
 
-    $ VK_LOADER_DEVICE_SELECT=0x10de:0x13f1 vulkaninfo --summary | grep deviceName
-        deviceName = Quadro M4000            <- first
-        deviceName = NVIDIA GeForce GTX 1660 Ti
-        deviceName = llvmpipe (LLVM 19.1.7, 256 bits)
-
-Since `min_by_key` returns the *first* minimum on a tie, reordering the
-enumeration is enough to select the card with no code change:
-
-    VK_LOADER_DEVICE_SELECT=0x10de:0x13f1 ...   # Quadro M4000
-    VK_LOADER_DEVICE_SELECT=0x10de:0x2182 ...   # GTX 1660 Ti
+It refuses rather than falling back on no match. The
+`VK_LOADER_DEVICE_SELECT=0x10de:0x13f1` loader trick that stood in for it under
+the `9a8427c` pin is retired; the paragraph describing it was deleted here on
+the pin move, as it asked to be.
 
 **Confirm from the `[nx_vulkan_vulkano] device:` banner every time.** A run that
-does not print the card you meant is not evidence about that card. This
-mechanism is a workaround with a shelf life: when eXMC's nx_vulkan pin moves
-past `befb91b`, switch to `NXV_DEVICE=name:M4000` and delete this paragraph.
+does not print the card you meant is not evidence about that card.
 
 ### Task 2 — the first FreeBSD-580 suite row, on both cards
 

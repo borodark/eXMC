@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+Everything since 0.4.0, from `git log v0.4.0..HEAD`; short shas are the
+commits to read.
+
+**Fixed**
+
+- `stats.divergences` counted warmup, and every consumer divided it by the
+  number of kept samples. It now counts kept draws only (`994305de4`). A
+  downstream notebook that asserted the old behaviour (pathmc_ex `guide/02`)
+  broke on the next pin bump, as the commit predicted.
+- Vectorized chains sampled from a state warmup never saw their own warmup
+  state — the frozen-chain bug pathmc_ex reproduced (`cbc858ee7`).
+- `Nx.pow` in a likelihood killed the shader; our own docs had taught the idiom
+  (`da6ea6887`).
+- The synthesiser's refusal reason was discarded on the way out and a
+  placeholder was over-refused; multi-equation models now come back as
+  `{:unsupported, :multiple_custom_nodes}` rather than a bare atom
+  (`147305261`).
+- Two posteriordb bench fixes: one slow posterior no longer kills the other 32,
+  and the crashing posterior is named (`4c658c0d7`, `45c7b7566`).
+
+**Added**
+
+- Vector-valued RVs and `Nx.dot` over a captured design matrix reach the fused
+  shader (`f04d080a5`, `371785ff5`).
+- The observation buffer is populated from a Custom RV's own observations,
+  with two new refusals for the shapes that cannot be (`d299f4fc4`,
+  `d410b183a`).
+- Observation-axis loops that share a trip count are fused; measured 1.83×,
+  against a plan that predicted otherwise (`f2ae139d7`, `e10dfee35`).
+- The leapfrog leaf-diff harness is a test that can fail:
+  `test/nuts/leapfrog_leaf_diff_test.exs`, `:requires_vulkan`, with
+  fixture-calibrated tolerances measured on four hosts (`671150a0d`,
+  `acccf8348`, `267634cb0`).
+- `scripts/fleet_verify.sh` drives the fleet suite with a non-vacuity gate; the
+  posteriordb fixtures are committed (`699f3a870`, `702fb780f`).
+- The env tripwire snapshots the whole application env rather than a list
+  somebody wrote (`5f2545b47`).
+
+**Changed**
+
+- nx_vulkan pin: `36c6805` → `bc54f34` → `9a8427c` (`745376bb5`, `f1e9b2207`,
+  `144d441db`); nx pinned to three components, `~> 0.13.1` (`745376bb5`).
+- Bench scripts no longer carry the `EXMC_COMPILER` workarounds that
+  `config/runtime.exs` made redundant (`3eb9a6ec1`).
+
+**Known**
+
+- Multi-equation models (more than one Custom likelihood node) are refused
+  with `:multiple_custom_nodes`; single-equation models synthesise.
+
 ## 0.4.0 (2026-09-06) — A Backend That Says What It Ran
 
 The headline is not a feature. It is that the fused Vulkan chain path was

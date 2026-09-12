@@ -26,8 +26,8 @@ defmodule Exmc.NUTS.CustomSynth.Compile do
   Not reachable today — since captures moved to the extras SSBO
   (docs/SHADER_CONSTANT_INLINING.md) nothing here emits a large constant
   array at all, and the largest we ever emitted was ~1350 elements. Closing
-  it needs `Nx.Vulkan.Spirv.validate_file/1`, which lands in nx_vulkan
-  f2c0c69; we are on 91f29d3. Do it on the next bump.
+  it needs `Nx.Vulkan.Spirv.validate_file/1`, available since nx_vulkan
+  `f2c0c69` and in every pin from `9a8427c` on. Not wired up yet.
   """
 
   @cache_dir Path.expand("~/.exmc/gpu_node/spv")
