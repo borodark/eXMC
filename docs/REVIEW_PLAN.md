@@ -137,7 +137,13 @@ Existing pieces: `bench/nuts_truth.exs` and `bench/observed_model_evidence.exs`
    crit 0.0975 at n 800). Test: a fused-shape row in the divergence script
    (a·b+c with a=1+2⁻²⁷, b=1−2⁻²⁷, c=−1), and confirm the reference arm is
    `:none` on every host. The four-arm Validator run on asus (per card,
-   `:f32_cast` vs `:polynomial`) is still worth having, now as a control. nx_vulkan's elementwise f64 shaders make the same trade
+   `:f32_cast` vs `:polynomial`) is still worth having, now as a control.
+   **Resolved 2026-09-12 (night):** neither hardware hypothesis; the KS
+   sized its bound by raw n on autocorrelated chains — 3 of 8 seeds rejected
+   at nominal α = 0.001 on one box. `check_ks/2` now uses ESS (D92's rule);
+   `bench/validator_ks_seeds.exs` reproduces the table; NEXT.md has it. Open
+   from it: seed 46 (a 4× ESS gap between arms), and the leaf-diff outlier,
+   for which `inversesqrt` inside a synthesised body is the remaining test. nx_vulkan's elementwise f64 shaders make the same trade
    (`MISSION.md` §3.2 there), but eXMC's chain path never calls them; they are
    reached only by the per-op fallback, where `Nx.pow(t, 2)` falls back to
    the host (exact, 604x slower) and `t * t` stays on the GPU (exact f64).

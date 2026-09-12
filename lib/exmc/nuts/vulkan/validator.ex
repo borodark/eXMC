@@ -380,14 +380,27 @@ defmodule Exmc.NUTS.Vulkan.Validator do
   Two-sample Kolmogorov–Smirnov test.
 
   Computes the maximum absolute difference between the two empirical
-  CDFs, then compares against the asymptotic critical value at
-  α = 0.001:
+  CDFs over every draw, then compares against the asymptotic critical
+  value at α = 0.001 sized by the **effective** sample sizes:
 
-      D > c(α) · sqrt((n + m) / (n · m))     where c(0.001) ≈ 1.95
+      D > c(α) · sqrt((n_eff + m_eff) / (n_eff · m_eff))     where c(0.001) ≈ 1.95
+
+  `n_eff = ess(a)`, `m_eff = ess(b)` — the same rule D92 applied to the
+  mean, variance, median and IQR checks, which this check had been left out
+  of. The inputs are MCMC chains, not i.i.d. samples, and with raw lengths
+  the test is anti-conservative by sqrt(n / n_eff): MEASURED 2026-09-12 on
+  super-io, Cauchy(0, 1), 300/800, Evaluator vs the f64 chain shader, eight
+  seeds — 3 of 8 rejected at a nominal α = 0.001 with raw n (ESS ≈ 65–545),
+  1 of 8 with ESS-sized n. The suite's one standing failure on that host
+  (seed 42, d = 0.1000 vs crit 0.0975) was this, not the shader: with a
+  fixed seed the two arms' trajectories decorrelate chaotically, and which
+  side of a too-tight bound the seed lands on is decided by 1e-15 bit
+  differences between GPUs. `bench/validator_ks_seeds.exs` reproduces the
+  table.
 
   Returns `:ok` if the test does *not* reject (i.e. the samples are
   statistically indistinguishable at this α), `{:error, ...}` if it
-  rejects.
+  rejects. The error map carries both the raw and the effective sizes.
   """
   @spec check_ks([number()], [number()]) :: :ok | {:error, map()}
   def check_ks(a, b) do
@@ -397,14 +410,16 @@ defmodule Exmc.NUTS.Vulkan.Validator do
     m = length(sb)
 
     d = ks_statistic(sa, sb, n, m)
-    crit = @ks_c_001 * :math.sqrt((n + m) / (n * m))
+    n_eff = ess(a)
+    m_eff = ess(b)
+    crit = @ks_c_001 * :math.sqrt((n_eff + m_eff) / (n_eff * m_eff))
 
     if d <= crit do
       :ok
     else
       # Asymptotic p-value approximation (Kolmogorov 1933 series, first term).
       # Used purely for diagnostic reporting — the gate is `d <= crit`.
-      lambda = d * :math.sqrt(n * m / (n + m))
+      lambda = d * :math.sqrt(n_eff * m_eff / (n_eff + m_eff))
       p = 2.0 * :math.exp(-2.0 * lambda * lambda)
 
       {:error,
@@ -415,7 +430,9 @@ defmodule Exmc.NUTS.Vulkan.Validator do
          alpha: 0.001,
          approx_p: p,
          n: n,
-         m: m
+         m: m,
+         n_eff: n_eff,
+         m_eff: m_eff
        }}
     end
   end

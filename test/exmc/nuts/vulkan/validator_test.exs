@@ -231,12 +231,18 @@ defmodule Exmc.NUTS.Vulkan.ValidatorTest do
     end
 
     test "check_ks computes D-statistic correctly on a known case" do
-      # Two perfectly non-overlapping samples → D = 1.0. With 50 each
-      # the critical value is c*sqrt(2/2500) ≈ 0.39 so D=1.0 rejects.
-      a = Enum.map(1..50, &(&1 * 1.0))
-      b = Enum.map(1..50, &(100.0 + &1))
-      assert {:error, %{check: :ks, d: d}} = Validator.check_ks(a, b)
+      # Two perfectly non-overlapping samples → D = 1.0. The critical value
+      # is sized by ESS (since 2026-09-12, the D92 rule), so the fixtures must
+      # look i.i.d.: with 200 pseudo-random draws each, ESS ≈ n and
+      # c*sqrt(2/200) ≈ 0.19, so D = 1.0 rejects. The previous fixtures were
+      # two monotone ramps, whose ESS is ≈ 2.5 by construction — under the
+      # ESS rule that widens the bound past 1.0, which is the rule working,
+      # not the test.
+      a = sample_normal(0.0, 1.0, 200, 7)
+      b = sample_normal(100.0, 1.0, 200, 11)
+      assert {:error, %{check: :ks, d: d, n_eff: n_eff}} = Validator.check_ks(a, b)
       assert_in_delta d, 1.0, 1.0e-9
+      assert n_eff > 100
     end
   end
 

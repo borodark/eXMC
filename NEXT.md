@@ -8,6 +8,66 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-12 (night), the Cauchy KS failure was the test's own statistic
+
+The one failure this suite has carried on super-io since 2026-09-07 —
+`ValidatorTest` "Cauchy(0, 1) — synthesized leapfrog_chain_synth", host-specific,
+passing on both Keplers and the Jetson — is closed, and it was never the
+shader.
+
+**How it was found.** Three hypotheses, in order, each killed by measurement
+with the nx_vulkan session (their `scripts/arch_float_divergence.exs`, run on
+asus and here): per-architecture f32 transcendentals — **dead**, sha256
+digests of `log`, `exp` and the Cauchy kernel identical on Ampere, Turing and
+Maxwell at f32 and f64; FMA contraction in the driver — **dead**, the
+fused-shape dot reads "NOT contracted" on all three; then the test itself.
+`Validator.check_ks/2` sized its critical value with raw lengths (n = m = 800)
+while D92 had moved every other check onto ESS. The inputs are NUTS chains on a
+1-D Cauchy with ESS ≈ 65–545, so the KS was anti-conservative by ~sqrt(8).
+
+**MEASURED**, `bench/validator_ks_seeds.exs`, super-io, both arms, eight seeds:
+
+| seed | d | crit raw n | verdict | ESS host / gpu | crit ESS | verdict |
+|---|---|---|---|---|---|---|
+| 42 | 0.1000 | 0.0975 | **FAIL** | 122 / 95 | 0.267 | pass |
+| 43 | 0.0875 | 0.0975 | pass | 160 / 365 | 0.185 | pass |
+| 44 | 0.0475 | 0.0975 | pass | 96 / 144 | 0.257 | pass |
+| 45 | 0.0687 | 0.0975 | pass | 173 / 145 | 0.220 | pass |
+| 46 | 0.3013 | 0.0975 | **FAIL** | 308 / 80 | 0.245 | **FAIL** |
+| 47 | 0.0550 | 0.0975 | pass | 289 / 150 | 0.196 | pass |
+| 48 | 0.0700 | 0.0975 | pass | 83 / 65 | 0.324 | pass |
+| 49 | 0.1175 | 0.0975 | **FAIL** | 544 / 337 | 0.135 | pass |
+
+Seed 42 is the suite's failure to four digits. 3 of 8 rejections at a nominal
+α = 0.001 is the statistic. Why host-specific: with a fixed seed the two arms'
+trajectories decorrelate chaotically after a few hundred steps, and where the
+seed lands relative to a too-tight bound is decided by 1e-15 bit differences
+between GPUs — the leaf-diff table's, not the transcendentals'.
+
+**Fixed:** `check_ks/2` sizes its critical value and p-value by `ess/1` (D92's
+rule, applied to the check it had missed); the error map carries `n_eff` and
+`m_eff`; the known-case unit test gets i.i.d.-shaped fixtures (its ramps had
+ESS ≈ 2.5, which under the rule correctly widened the bound past 1.0).
+Validator file: 28 tests, 0 failures on the Vulkan arm. Full `mix check`
+result below when it lands.
+
+**Two things left open by this.**
+- **Seed 46** rejects even ESS-sized (d = 0.30) with a 4× ESS gap between
+  arms on the same seed (host 308, GPU 80). A heavy-tail MCMC story — a stuck
+  or wandering chain on one arm — not a shader one, and it deserves its own
+  look rather than being filed with the seven.
+- **The leaf-diff outlier is still unexplained**, and it is the interesting
+  one: super-io is *closer* to the host reference (q 1.92e-15) than mac-247,
+  mac-248 and the Jetson (4.77e-15, identical to each other). nx_vulkan's rows
+  now show f64 division exactly rounded on Turing and discrete Maxwell, so
+  "older parts" is not the grouping — it is Kepler + Tegra specifically, or it
+  is `inversesqrt`, which the emitter calls (`:rsqrt`, glsl.ex:602) and which
+  nx_vulkan cannot probe for us because `Nx.rsqrt` at f64 host-falls-back
+  there. A three-constant `inversesqrt` inside a synthesised body is the one
+  remaining op-class test, and it belongs in this repo.
+
+---
+
 ## Status — 2026-09-12 (evening), handoff before a restart: what to do next, in order
 
 Everything below the line is committed and pushed unless it says otherwise.

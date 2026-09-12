@@ -7,6 +7,14 @@ commits to read.
 
 **Fixed**
 
+- `Exmc.NUTS.Vulkan.Validator.check_ks/2` sized its critical value by raw
+  sample length while every other check used ESS (D92). On MCMC chains that
+  is anti-conservative by sqrt(n / n_eff); on a 1-D Cauchy at 800 draws it
+  rejected 3 of 8 seeds at a nominal α = 0.001, and the suite's one standing
+  failure on super-io (seed 42) was this, not the shader — established after
+  per-architecture transcendentals and FMA contraction were both ruled out
+  by digest. Now ESS-sized; the error map carries `n_eff`/`m_eff`;
+  `bench/validator_ks_seeds.exs` reproduces the table.
 - The two ways of running the suite on a Vulkan host were different arms:
   `config/runtime.exs` set `:allow_vulkan_perop_sampling` under an explicit
   `EXMC_COMPILER=vulkan` and not under auto-detection, so plain `mix test`
