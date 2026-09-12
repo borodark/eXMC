@@ -123,11 +123,21 @@ Existing pieces: `bench/nuts_truth.exs` and `bench/observed_model_evidence.exs`
    alike — the f32-inside-f64 cast measured directly. `sqrt` is exact on all
    three (the Kepler 3-ULP divergence remains the only one observed). `exp`
    at f64: 1.3e-07 here, 1.8e-07 reported from asus (dtype of that figure
-   unconfirmed). So the hypothesis is weakened for `log`, not killed: a
-   max-over-seven-points statistic is not bit identity, and Kepler is
-   untested. The decisive run is the Validator's Cauchy case on asus, per
-   card, under `:f32_cast` and `:polynomial` — asked of the nx_vulkan
-   session. nx_vulkan's elementwise f64 shaders make the same trade
+   unconfirmed). **Then killed the same evening with digests** (nx_vulkan
+   `9611581`, sha256 of the raw f64 output per row): super-io's `log`, `exp`
+   and Cauchy-kernel digests are identical to both asus cards' at f32 and
+   f64 — bit-identical transcendentals on Ampere, Turing and Maxwell (the
+   `exp` discrepancy was a quoted f32 row). The KS check is seeded end to
+   end (`seed: 42` in the test, the Validator, and `:rand.seed_s` per chain),
+   so the failure is deterministic, not sampling luck. **Next candidate,
+   INFERRED:** arithmetic contraction. The leaf-diff fleet table has
+   mac-247, mac-248 and the Jetson agreeing to the last digit and super-io
+   alone differing at 1e-15 — the size of one FMA rounding per multiply-add,
+   accumulated along a trajectory, on a KS that fails marginally (d 0.0999 vs
+   crit 0.0975 at n 800). Test: a fused-shape row in the divergence script
+   (a·b+c with a=1+2⁻²⁷, b=1−2⁻²⁷, c=−1), and confirm the reference arm is
+   `:none` on every host. The four-arm Validator run on asus (per card,
+   `:f32_cast` vs `:polynomial`) is still worth having, now as a control. nx_vulkan's elementwise f64 shaders make the same trade
    (`MISSION.md` §3.2 there), but eXMC's chain path never calls them; they are
    reached only by the per-op fallback, where `Nx.pow(t, 2)` falls back to
    the host (exact, 604x slower) and `t * t` stays on the GPU (exact f64).
