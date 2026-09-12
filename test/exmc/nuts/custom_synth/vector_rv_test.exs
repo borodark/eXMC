@@ -53,7 +53,13 @@ defmodule Exmc.NUTS.CustomSynth.VectorRvTest do
   end
 
   defp normal_prior(ir, id, opts \\ []) do
-    Builder.rv(ir, id, Dist.Normal, %{mu: Nx.tensor(0.0, @f64), sigma: Nx.tensor(5.0, @f64)}, opts)
+    Builder.rv(
+      ir,
+      id,
+      Dist.Normal,
+      %{mu: Nx.tensor(0.0, @f64), sigma: Nx.tensor(5.0, @f64)},
+      opts
+    )
   end
 
   # beta as ONE vector RV, mu via Nx.dot over the {40,2} design matrix.
@@ -132,7 +138,9 @@ defmodule Exmc.NUTS.CustomSynth.VectorRvTest do
         s = Nx.to_number(Nx.Defn.jit_apply(fn a, b -> synth.(a, b) end, [q, obs]))
         h = Nx.to_number(host_fun.(q))
 
-        sg = Nx.Defn.jit_apply(fn a, b -> Nx.Defn.grad(a, fn aa -> synth.(aa, b) end) end, [q, obs])
+        sg =
+          Nx.Defn.jit_apply(fn a, b -> Nx.Defn.grad(a, fn aa -> synth.(aa, b) end) end, [q, obs])
+
         hg = Nx.Defn.jit_apply(fn a -> Nx.Defn.grad(a, host_fun) end, [q])
 
         {max(wl, abs(s - h) / max(abs(h), 1.0)),

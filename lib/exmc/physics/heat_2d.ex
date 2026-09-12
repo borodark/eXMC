@@ -51,14 +51,17 @@ defmodule Exmc.Physics.Heat2D do
   """
   def read_sensors(temperature, :bottom_row) do
     {ny, _nx} = Nx.shape(temperature)
+
     Nx.slice(temperature, [ny - 1, 0], [1, elem(Nx.shape(temperature), 1)])
     |> Nx.reshape({elem(Nx.shape(temperature), 1)})
   end
 
   def read_sensors(temperature, positions) when is_list(positions) do
-    values = Enum.map(positions, fn {row, col} ->
-      temperature[row][col] |> Nx.to_number()
-    end)
+    values =
+      Enum.map(positions, fn {row, col} ->
+        temperature[row][col] |> Nx.to_number()
+      end)
+
     Nx.tensor(values)
   end
 
@@ -76,47 +79,72 @@ defmodule Exmc.Physics.Heat2D do
     t = Nx.broadcast(t, {ny, nx})
 
     # Override left/right boundaries if specified
-    t = if bc_left do
-      col_vals = Nx.add(
-        Nx.multiply(bc_top, Nx.subtract(1.0, frac)),
-        Nx.multiply(bc_bottom, frac)
-      ) |> Nx.reshape({ny})
-      # Set left column — use put_slice-free approach
-      left_col = Nx.reshape(col_vals, {ny, 1})
-      left_mask = Nx.concatenate([Nx.broadcast(1.0, {ny, 1}), Nx.broadcast(0.0, {ny, nx - 1})], axis: 1)
-      Nx.add(Nx.multiply(t, Nx.subtract(1.0, left_mask)), Nx.multiply(Nx.broadcast(left_col, {ny, nx}), left_mask))
-    else
-      t
-    end
+    t =
+      if bc_left do
+        col_vals =
+          Nx.add(
+            Nx.multiply(bc_top, Nx.subtract(1.0, frac)),
+            Nx.multiply(bc_bottom, frac)
+          )
+          |> Nx.reshape({ny})
 
-    t = if bc_right do
-      col_vals = Nx.add(
-        Nx.multiply(bc_top, Nx.subtract(1.0, frac)),
-        Nx.multiply(bc_bottom, frac)
-      ) |> Nx.reshape({ny})
-      right_col = Nx.reshape(col_vals, {ny, 1})
-      right_mask = Nx.concatenate([Nx.broadcast(0.0, {ny, nx - 1}), Nx.broadcast(1.0, {ny, 1})], axis: 1)
-      Nx.add(Nx.multiply(t, Nx.subtract(1.0, right_mask)), Nx.multiply(Nx.broadcast(right_col, {ny, nx}), right_mask))
-    else
-      t
-    end
+        # Set left column — use put_slice-free approach
+        left_col = Nx.reshape(col_vals, {ny, 1})
+
+        left_mask =
+          Nx.concatenate([Nx.broadcast(1.0, {ny, 1}), Nx.broadcast(0.0, {ny, nx - 1})], axis: 1)
+
+        Nx.add(
+          Nx.multiply(t, Nx.subtract(1.0, left_mask)),
+          Nx.multiply(Nx.broadcast(left_col, {ny, nx}), left_mask)
+        )
+      else
+        t
+      end
+
+    t =
+      if bc_right do
+        col_vals =
+          Nx.add(
+            Nx.multiply(bc_top, Nx.subtract(1.0, frac)),
+            Nx.multiply(bc_bottom, frac)
+          )
+          |> Nx.reshape({ny})
+
+        right_col = Nx.reshape(col_vals, {ny, 1})
+
+        right_mask =
+          Nx.concatenate([Nx.broadcast(0.0, {ny, nx - 1}), Nx.broadcast(1.0, {ny, 1})], axis: 1)
+
+        Nx.add(
+          Nx.multiply(t, Nx.subtract(1.0, right_mask)),
+          Nx.multiply(Nx.broadcast(right_col, {ny, nx}), right_mask)
+        )
+      else
+        t
+      end
 
     t
   end
 
   defp interior_mask(ny, nx) do
     # 1 for interior points, 0 for boundary
-    row_mask = Nx.concatenate([
-      Nx.broadcast(0.0, {1, nx}),
-      Nx.broadcast(1.0, {ny - 2, nx}),
-      Nx.broadcast(0.0, {1, nx})
-    ])
+    row_mask =
+      Nx.concatenate([
+        Nx.broadcast(0.0, {1, nx}),
+        Nx.broadcast(1.0, {ny - 2, nx}),
+        Nx.broadcast(0.0, {1, nx})
+      ])
 
-    col_mask = Nx.concatenate([
-      Nx.broadcast(0.0, {ny, 1}),
-      Nx.broadcast(1.0, {ny, nx - 2}),
-      Nx.broadcast(0.0, {ny, 1})
-    ], axis: 1)
+    col_mask =
+      Nx.concatenate(
+        [
+          Nx.broadcast(0.0, {ny, 1}),
+          Nx.broadcast(1.0, {ny, nx - 2}),
+          Nx.broadcast(0.0, {ny, 1})
+        ],
+        axis: 1
+      )
 
     Nx.multiply(row_mask, col_mask)
   end
@@ -141,10 +169,11 @@ defmodule Exmc.Physics.Heat2D do
     k_right = Nx.concatenate([Nx.slice(kappa, [0, 1], [ny, nx - 1]), zeros_col], axis: 1)
 
     # Weighted average: T_new = sum(k_neighbor * T_neighbor) / sum(k_neighbor)
-    numerator = Nx.add(
-      Nx.add(Nx.multiply(k_up, up), Nx.multiply(k_down, down)),
-      Nx.add(Nx.multiply(k_left, left), Nx.multiply(k_right, right))
-    )
+    numerator =
+      Nx.add(
+        Nx.add(Nx.multiply(k_up, up), Nx.multiply(k_down, down)),
+        Nx.add(Nx.multiply(k_left, left), Nx.multiply(k_right, right))
+      )
 
     denominator = Nx.add(Nx.add(k_up, k_down), Nx.add(k_left, k_right))
     safe_denom = Nx.max(denominator, 1.0e-10)

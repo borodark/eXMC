@@ -13,7 +13,9 @@ defmodule Exmc.NUTS.Leapfrog do
   """
   def step(vag_fn, q, p, grad, epsilon, inv_mass) do
     eps = Nx.tensor(epsilon, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
-    half_eps = Nx.divide(eps, Nx.tensor(2.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
+
+    half_eps =
+      Nx.divide(eps, Nx.tensor(2.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
 
     # half step for momentum
     p_half = Nx.add(p, Nx.multiply(half_eps, grad))

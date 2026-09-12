@@ -138,7 +138,9 @@ defmodule Exmc.Poker.ActionModel do
   def action_probs(vpip, pfr, agg, bluff, hand_strength) do
     fold_logit = 0.0
     call_logit = vpip * 3.0 + hand_strength * 2.0 - 1.0
-    raise_logit = pfr * 3.0 + agg * hand_strength * 2.0 + bluff * (1.0 - hand_strength) * 3.0 - 1.5
+
+    raise_logit =
+      pfr * 3.0 + agg * hand_strength * 2.0 + bluff * (1.0 - hand_strength) * 3.0 - 1.5
 
     max_l = Enum.max([fold_logit, call_logit, raise_logit])
     exp_f = :math.exp(fold_logit - max_l)

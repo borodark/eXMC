@@ -319,7 +319,9 @@ defmodule Exmc.NUTS.CustomSynth.BatchedShaderTest do
 
         n_inst = unquote(n_inst)
 
-        {:ok, {:synthesised, _, layout, _, _, obs_bin, _capt} = single} = CustomSynth.synthesise(ir)
+        {:ok, {:synthesised, _, layout, _, _, obs_bin, _capt} = single} =
+          CustomSynth.synthesise(ir)
+
         {:ok, batched} = CustomSynth.synthesise_batched(ir)
 
         d = length(layout)

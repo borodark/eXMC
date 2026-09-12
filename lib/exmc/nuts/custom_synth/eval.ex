@@ -96,12 +96,14 @@ defmodule Exmc.NUTS.CustomSynth.Eval do
 
   defp do_eval(:min, [a, b], layout) do
     with {:ok, av} <- evaluate(a, layout),
-         {:ok, bv} <- evaluate(b, layout), do: {:ok, broadcast2(av, bv, &min/2)}
+         {:ok, bv} <- evaluate(b, layout),
+         do: {:ok, broadcast2(av, bv, &min/2)}
   end
 
   defp do_eval(:max, [a, b], layout) do
     with {:ok, av} <- evaluate(a, layout),
-         {:ok, bv} <- evaluate(b, layout), do: {:ok, broadcast2(av, bv, &max/2)}
+         {:ok, bv} <- evaluate(b, layout),
+         do: {:ok, broadcast2(av, bv, &max/2)}
   end
 
   defp do_eval(:remainder, [a, b], layout) do
@@ -113,7 +115,8 @@ defmodule Exmc.NUTS.CustomSynth.Eval do
 
   defp do_eval(:atan2, [a, b], layout) do
     with {:ok, av} <- evaluate(a, layout),
-         {:ok, bv} <- evaluate(b, layout), do: {:ok, broadcast2(av, bv, &:math.atan2/2)}
+         {:ok, bv} <- evaluate(b, layout),
+         do: {:ok, broadcast2(av, bv, &:math.atan2/2)}
   end
 
   # --- Transcendentals ---

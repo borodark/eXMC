@@ -77,6 +77,7 @@ defmodule Exmc.NUTS.DivergenceAccountingTest do
       test "with no warmup, the reported count equals the flagged draws" do
         for {reported, flagged, kept} <- run(@vectorized, 0, 300) do
           assert kept == 300
+
           assert reported == flagged,
                  "reported #{reported} divergences, #{flagged} kept draws flagged"
         end

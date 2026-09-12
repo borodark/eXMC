@@ -49,7 +49,10 @@ defmodule Exmc.NUTS.CustomSynth.SlotLayoutTest do
     test "a vector RV occupies as many layout entries as it has coordinates" do
       ir =
         IR.new()
-        |> Builder.rv("beta", Dist.Normal, %{mu: Nx.tensor(0.0, @f64), sigma: Nx.tensor(5.0, @f64)},
+        |> Builder.rv(
+          "beta",
+          Dist.Normal,
+          %{mu: Nx.tensor(0.0, @f64), sigma: Nx.tensor(5.0, @f64)},
           shape: {3}
         )
         |> Builder.rv("s", Dist.HalfNormal, %{sigma: Nx.tensor(1.0, @f64)})

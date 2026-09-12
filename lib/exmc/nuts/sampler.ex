@@ -234,16 +234,28 @@ defmodule Exmc.NUTS.Sampler do
           prev_epsilon = warm_start.step_size
 
           state = %{
-            q: q, logp: logp, grad: grad, rng: rng,
-            divergences: 0, recoveries: 0
+            q: q,
+            logp: logp,
+            grad: grad,
+            rng: rng,
+            divergences: 0,
+            recoveries: 0
           }
 
           short_warmup = min(num_warmup, 50)
 
           if short_warmup > 0 do
             run_warmup(
-              active_step_fn, state, prev_epsilon, prev_inv_mass, d,
-              short_warmup, max_tree_depth, target_accept, use_dense, active_multi
+              active_step_fn,
+              state,
+              prev_epsilon,
+              prev_inv_mass,
+              d,
+              short_warmup,
+              max_tree_depth,
+              target_accept,
+              use_dense,
+              active_multi
             )
           else
             {state, prev_epsilon, prev_inv_mass, nil}
@@ -279,13 +291,25 @@ defmodule Exmc.NUTS.Sampler do
             find_reasonable_epsilon_with_rng(active_step_fn, q, logp, grad, inv_mass_diag, rng)
 
           state = %{
-            q: q, logp: logp, grad: grad, rng: rng,
-            divergences: 0, recoveries: 0
+            q: q,
+            logp: logp,
+            grad: grad,
+            rng: rng,
+            divergences: 0,
+            recoveries: 0
           }
 
           run_warmup(
-            active_step_fn, state, epsilon, inv_mass_diag, d,
-            num_warmup, max_tree_depth, target_accept, use_dense, active_multi
+            active_step_fn,
+            state,
+            epsilon,
+            inv_mass_diag,
+            d,
+            num_warmup,
+            max_tree_depth,
+            target_accept,
+            use_dense,
+            active_multi
           )
         end
 
@@ -574,7 +598,10 @@ defmodule Exmc.NUTS.Sampler do
   defp build_generic_step_fn(vag_fn) do
     fn q, p, grad, epsilon, inv_mass ->
       eps = Nx.tensor(epsilon, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
-      half_eps = Nx.divide(eps, Nx.tensor(2.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
+
+      half_eps =
+        Nx.divide(eps, Nx.tensor(2.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend))
+
       p_half = Nx.add(p, Nx.multiply(half_eps, grad))
       q_new = Nx.add(q, Nx.multiply(eps, Leapfrog.mass_times_p(inv_mass, p_half)))
       {logp_new, grad_new} = vag_fn.(q_new)
@@ -1263,7 +1290,10 @@ defmodule Exmc.NUTS.Sampler do
         {logp0, grad0} = vag_fn.(q0)
         logp0 = Nx.backend_copy(logp0, Nx.BinaryBackend)
         grad0 = Nx.backend_copy(grad0, Nx.BinaryBackend)
-        inv_mass_diag = Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
+
+        inv_mass_diag =
+          Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
+
         active_step_fn = if use_dense, do: build_generic_step_fn(vag_fn), else: step_fn
 
         {epsilon, rng0} =
@@ -1497,7 +1527,10 @@ defmodule Exmc.NUTS.Sampler do
       {logp, grad} = vag_fn.(q)
       logp = Nx.backend_copy(logp, Nx.BinaryBackend)
       grad = Nx.backend_copy(grad, Nx.BinaryBackend)
-      inv_mass_diag = Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
+
+      inv_mass_diag =
+        Nx.broadcast(Nx.tensor(1.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
+
       active_step_fn = if use_dense, do: build_generic_step_fn(vag_fn), else: step_fn
       active_multi = if use_dense, do: nil, else: multi_step_fn
 
@@ -1616,7 +1649,9 @@ defmodule Exmc.NUTS.Sampler do
 
   defp resolve_trace_value(v, trace) when is_binary(v), do: Map.fetch!(trace, v)
   defp resolve_trace_value(%Nx.Tensor{} = v, _trace), do: v
-  defp resolve_trace_value(v, _trace) when is_number(v), do: Nx.tensor(v, type: Exmc.JIT.precision())
+
+  defp resolve_trace_value(v, _trace) when is_number(v),
+    do: Nx.tensor(v, type: Exmc.JIT.precision())
 
   # Topological sort for NCP entries: process entries whose NCP dependencies are resolved first
   defp ncp_topo_order(ncp_info) do
@@ -1668,7 +1703,8 @@ defmodule Exmc.NUTS.Sampler do
   #
   # Math: variance of the unconstrained-space target at the prior mode.
   # Source: nx_vulkan/research/gpu_node/beta_gamma_adaptation.md.
-  defp prior_inv_mass({:beta, alpha, beta_param}) when is_number(alpha) and is_number(beta_param) do
+  defp prior_inv_mass({:beta, alpha, beta_param})
+       when is_number(alpha) and is_number(beta_param) do
     # Beta(α, β) on logit-uc: Var ≈ 1/(α+β)
     1.0 / (alpha + beta_param)
   end
@@ -1692,7 +1728,7 @@ defmodule Exmc.NUTS.Sampler do
 
   defp prior_inv_mass({:weibull, k, _lambda, _logp_const}) when is_number(k) do
     # Weibull(k, λ) on log-uc: asymptotic Var = (π²/6) / k²
-    (:math.pi() * :math.pi() / 6.0) / (k * k)
+    :math.pi() * :math.pi() / 6.0 / (k * k)
   end
 
   defp prior_inv_mass({:studentt, _mu, sigma, nu, _logp_const})
@@ -1790,10 +1826,17 @@ defmodule Exmc.NUTS.Sampler do
 
   defp scalar_param(params, key) do
     case Map.fetch!(params, key) do
-      v when is_number(v) -> v * 1.0
-      %Nx.Tensor{shape: {}} = t -> Nx.to_number(t) * 1.0
-      %Nx.Tensor{} = t -> t |> Nx.flatten() |> Nx.slice([0], [1]) |> Nx.squeeze() |> Nx.to_number() |> Kernel.*(1.0)
-      _ -> 1.0
+      v when is_number(v) ->
+        v * 1.0
+
+      %Nx.Tensor{shape: {}} = t ->
+        Nx.to_number(t) * 1.0
+
+      %Nx.Tensor{} = t ->
+        t |> Nx.flatten() |> Nx.slice([0], [1]) |> Nx.squeeze() |> Nx.to_number() |> Kernel.*(1.0)
+
+      _ ->
+        1.0
     end
   end
 end

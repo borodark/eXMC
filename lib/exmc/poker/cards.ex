@@ -67,13 +67,22 @@ defmodule Exmc.Poker.Cards do
   defp grouped_kickers(ranks, group_size) do
     freq = Enum.frequencies(ranks)
     {main, _} = Enum.find(freq, fn {_, v} -> v == group_size end)
-    others = freq |> Enum.reject(fn {_, v} -> v == group_size end) |> Enum.map(&elem(&1, 0)) |> Enum.sort(:desc)
+
+    others =
+      freq
+      |> Enum.reject(fn {_, v} -> v == group_size end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.sort(:desc)
+
     [main | others]
   end
 
   defp two_pair_kickers(ranks) do
     freq = Enum.frequencies(ranks)
-    pairs = freq |> Enum.filter(fn {_, v} -> v == 2 end) |> Enum.map(&elem(&1, 0)) |> Enum.sort(:desc)
+
+    pairs =
+      freq |> Enum.filter(fn {_, v} -> v == 2 end) |> Enum.map(&elem(&1, 0)) |> Enum.sort(:desc)
+
     {kicker, _} = Enum.find(freq, fn {_, v} -> v == 1 end)
     pairs ++ [kicker]
   end
@@ -88,6 +97,7 @@ defmodule Exmc.Poker.Cards do
   @doc "Generate all k-element combinations from a list."
   def combinations(_list, 0), do: [[]]
   def combinations([], _k), do: []
+
   def combinations([h | t], k) do
     (combinations(t, k - 1) |> Enum.map(&[h | &1])) ++ combinations(t, k)
   end

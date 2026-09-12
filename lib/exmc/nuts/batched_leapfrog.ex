@@ -100,7 +100,8 @@ defmodule Exmc.NUTS.BatchedLeapfrog do
     i = Nx.tensor(0, type: :s64)
 
     {{_q, _p, _grad, all_q, all_p, all_logp, all_grad, _i, _half_eps, _eps, _inv_mass, _half,
-      _n_steps, _data}} =
+      _n_steps,
+      _data}} =
       while {{q, p, grad, all_q, all_p, all_logp, all_grad, i, half_eps, eps, inv_mass, half,
               n_steps, data}},
             i < n_steps do

@@ -24,7 +24,10 @@ defmodule Exmc.Poker.Simulator do
           |> Enum.map(fn _ ->
             # Random hand strength (simplified: uniform [0,1])
             hs = :rand.uniform()
-            action = ActionModel.sample_action(params.vpip, params.pfr, params.agg, params.bluff, hs)
+
+            action =
+              ActionModel.sample_action(params.vpip, params.pfr, params.agg, params.bluff, hs)
+
             {hs, action}
           end)
           |> Enum.unzip()
@@ -72,6 +75,7 @@ defmodule Exmc.Poker.Simulator do
             hand = Enum.take(d, n)
             {acc ++ [hand], Enum.drop(d, n)}
           end)
+
         {dealt, rest}
       end
 

@@ -120,7 +120,11 @@ defmodule Exmc.Poker do
         BLUFF: true=#{true_p.bluff} post=#{bluff_post}
       """)
 
-      %{player: label, true: true_p, posterior_mean: %{vpip: vpip_post, pfr: pfr_post, agg: agg_post, bluff: bluff_post}}
+      %{
+        player: label,
+        true: true_p,
+        posterior_mean: %{vpip: vpip_post, pfr: pfr_post, agg: agg_post, bluff: bluff_post}
+      }
     end)
   end
 end

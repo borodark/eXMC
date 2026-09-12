@@ -559,7 +559,10 @@ defmodule Exmc.NUTS.Tree do
         dir_sign = if direction == :fwd, do: 1.0, else: -1.0
 
         eps_t =
-          Nx.tensor(dir_sign * spec_buf.epsilon, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+          Nx.tensor(dir_sign * spec_buf.epsilon,
+            type: Exmc.JIT.precision(),
+            backend: Nx.BinaryBackend
+          )
 
         n_t = Nx.tensor(batch_size, type: :s64)
 
@@ -609,7 +612,10 @@ defmodule Exmc.NUTS.Tree do
         dir_sign = if direction == :fwd, do: 1.0, else: -1.0
 
         eps_t =
-          Nx.tensor(dir_sign * spec_buf.epsilon, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+          Nx.tensor(dir_sign * spec_buf.epsilon,
+            type: Exmc.JIT.precision(),
+            backend: Nx.BinaryBackend
+          )
 
         n_t = Nx.tensor(to_compute, type: :s64)
 
@@ -683,7 +689,14 @@ defmodule Exmc.NUTS.Tree do
     do_dispatch(
       fused_leapfrog_meta(),
       Exmc.JIT.detect_compiler(),
-      spec_buf, q, p, grad, eps_t, n_t, k, dir_sign
+      spec_buf,
+      q,
+      p,
+      grad,
+      eps_t,
+      n_t,
+      k,
+      dir_sign
     )
   end
 
@@ -734,7 +747,13 @@ defmodule Exmc.NUTS.Tree do
          {:normal, _mu, _sigma} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -744,7 +763,13 @@ defmodule Exmc.NUTS.Tree do
          {:exponential, _lambda} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -754,7 +779,13 @@ defmodule Exmc.NUTS.Tree do
          {:studentt, _mu, _sigma, _nu, _logp_const} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -764,7 +795,13 @@ defmodule Exmc.NUTS.Tree do
          {:cauchy, _loc, _scale, _log_pi_scale} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -774,7 +811,13 @@ defmodule Exmc.NUTS.Tree do
          {:weibull, _weibull_k, _lambda, _logp_const} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -784,7 +827,13 @@ defmodule Exmc.NUTS.Tree do
          {:halfnormal, _sigma, _log_const} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -795,7 +844,13 @@ defmodule Exmc.NUTS.Tree do
          {:beta, _alpha, _beta} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -805,7 +860,13 @@ defmodule Exmc.NUTS.Tree do
          {:gamma, _alpha, _beta} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -815,7 +876,13 @@ defmodule Exmc.NUTS.Tree do
          {:lognormal, _mu, _sigma} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -828,7 +895,13 @@ defmodule Exmc.NUTS.Tree do
          {:synthesised, _sha, _layout, _push_spec, _spv_path, _obs_bin, _captures} = meta,
          Nx.Vulkan,
          %{d: d, epsilon: epsilon, inv_mass_diag: inv_mass} = spec_buf,
-         q, p, grad, eps_t, n_t, k, dir_sign
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign
        )
        when is_integer(d) and d <= 256 do
     route_chain(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
@@ -862,21 +935,68 @@ defmodule Exmc.NUTS.Tree do
     case Process.get(:exmc_chain_coord) do
       {coord_pid, obs} when is_pid(coord_pid) ->
         case Exmc.NUTS.Vulkan.BatchCoordinator.request_synth_chain(
-               coord_pid, meta, q, p, inv_mass, obs, epsilon, k, dir_sign
+               coord_pid,
+               meta,
+               q,
+               p,
+               inv_mass,
+               obs,
+               epsilon,
+               k,
+               dir_sign
              ) do
           {:fallback, _reason} ->
-            route_chain_direct(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+            route_chain_direct(
+              meta,
+              d,
+              epsilon,
+              inv_mass,
+              q,
+              p,
+              grad,
+              eps_t,
+              n_t,
+              k,
+              dir_sign,
+              spec_buf
+            )
 
           result ->
             result
         end
 
       _ ->
-        route_chain_direct(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf)
+        route_chain_direct(
+          meta,
+          d,
+          epsilon,
+          inv_mass,
+          q,
+          p,
+          grad,
+          eps_t,
+          n_t,
+          k,
+          dir_sign,
+          spec_buf
+        )
     end
   end
 
-  defp route_chain_direct(meta, d, epsilon, inv_mass, q, p, grad, eps_t, n_t, k, dir_sign, spec_buf) do
+  defp route_chain_direct(
+         meta,
+         d,
+         epsilon,
+         inv_mass,
+         q,
+         p,
+         grad,
+         eps_t,
+         n_t,
+         k,
+         dir_sign,
+         spec_buf
+       ) do
     cond do
       suspect_evicted?(meta) ->
         spec_buf.multi_step_fn.(q, p, grad, eps_t, spec_buf.inv_mass_diag, n_t)
@@ -1074,7 +1194,10 @@ defmodule Exmc.NUTS.Tree do
 
       q_new = Nx.slice(sliced_q, [idx, 0], [1, d]) |> Nx.reshape({d})
       p_new = Nx.slice(sliced_p, [idx, 0], [1, d]) |> Nx.reshape({d})
-      logp_new = Nx.tensor(elem(raw_logps, idx), type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+
+      logp_new =
+        Nx.tensor(elem(raw_logps, idx), type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+
       grad_new = Nx.slice(sliced_grad, [idx, 0], [1, d]) |> Nx.reshape({d})
 
       ke = Nx.multiply(half, Nx.sum(Nx.multiply(p_new, Nx.multiply(inv_mass_diag, p_new))))
@@ -1087,7 +1210,8 @@ defmodule Exmc.NUTS.Tree do
     # pre-sliced buffer by atomic counter. We pass dummy q; p and grad are
     # used only for the initial subtree structure (not passed to step_fn at
     # depth 0 — step_fn is called, but it ignores q/p/grad args).
-    dummy_q = Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
+    dummy_q =
+      Nx.broadcast(Nx.tensor(0.0, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend), {d})
 
     build_subtree(
       cached_step_fn,
@@ -1576,7 +1700,10 @@ defmodule Exmc.NUTS.Tree do
 
       q_new = Nx.slice(all_q, [idx, 0], [1, d]) |> Nx.reshape({d})
       p_new = Nx.slice(all_p, [idx, 0], [1, d]) |> Nx.reshape({d})
-      logp_new = Nx.tensor(elem(raw_logps, idx), type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+
+      logp_new =
+        Nx.tensor(elem(raw_logps, idx), type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+
       grad_new = Nx.slice(all_grad, [idx, 0], [1, d]) |> Nx.reshape({d})
 
       ke = Nx.multiply(half, Nx.sum(Nx.multiply(p_new, Nx.multiply(inv_mass_diag, p_new))))
@@ -1638,7 +1765,14 @@ defmodule Exmc.NUTS.Tree do
     # The actual GPU dispatch — one vkQueueSubmit per call.
     {all_q, all_p, all_logp, all_grad} =
       Exmc.NUTS.Vulkan.Dispatch.chain(
-        chain_meta, d, abs_eps, inv_mass_diag, q, p, n_steps, dir_sign
+        chain_meta,
+        d,
+        abs_eps,
+        inv_mass_diag,
+        q,
+        p,
+        n_steps,
+        dir_sign
       )
 
     # Copy to BinaryBackend for cheap Elixir-side arithmetic.
@@ -1657,7 +1791,10 @@ defmodule Exmc.NUTS.Tree do
 
       q_new = Nx.slice(all_q, [idx, 0], [1, d]) |> Nx.reshape({d})
       p_new = Nx.slice(all_p, [idx, 0], [1, d]) |> Nx.reshape({d})
-      logp_new = Nx.tensor(elem(raw_logps, idx), type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+
+      logp_new =
+        Nx.tensor(elem(raw_logps, idx), type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
+
       grad_new = Nx.slice(all_grad, [idx, 0], [1, d]) |> Nx.reshape({d})
 
       ke = Nx.multiply(half, Nx.sum(Nx.multiply(p_new, Nx.multiply(inv_mass_diag, p_new))))
@@ -1889,7 +2026,7 @@ defmodule Exmc.NUTS.Tree do
     # When subtree outweighs trajectory, always accept. This reduces "sticky" q_0
     # selection and improves ESS. See Betancourt 2017 Appendix A.3.2.
     {rand_val, rng} = :rand.uniform_s(rng)
-    use_subtree = :math.log(rand_val) < (subtree.log_sum_weight - traj.log_sum_weight)
+    use_subtree = :math.log(rand_val) < subtree.log_sum_weight - traj.log_sum_weight
 
     {q_prop, logp_prop, grad_prop} =
       if use_subtree do
@@ -1999,9 +2136,11 @@ defmodule Exmc.NUTS.Tree do
   # contribution is mathematically irrelevant; we just need to not
   # crash Erlang arithmetic.
   defp zip_add([], []), do: []
+
   defp zip_add([a | as_], [b | bs]) when is_number(a) and is_number(b) do
     [a + b | zip_add(as_, bs)]
   end
+
   defp zip_add([a | as_], [b | bs]) do
     [finite_or_zero(a) + finite_or_zero(b) | zip_add(as_, bs)]
   end

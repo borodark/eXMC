@@ -89,7 +89,16 @@ defmodule Exmc.NUTS.Distributed do
         chain_opts = Keyword.put(sampler_opts, :seed, seed)
 
         Task.async(fn ->
-          run_chain_on_node(ir, target_node, tuning, init_values, chain_opts, compile_opts, timeout, global_id)
+          run_chain_on_node(
+            ir,
+            target_node,
+            tuning,
+            init_values,
+            chain_opts,
+            compile_opts,
+            timeout,
+            global_id
+          )
         end)
       end)
 
@@ -159,7 +168,16 @@ defmodule Exmc.NUTS.Distributed do
 
   # Run a single chain on a target node.
   # Falls back to coordinator on failure.
-  defp run_chain_on_node(ir, target_node, tuning, init_values, opts, compile_opts, timeout, global_id) do
+  defp run_chain_on_node(
+         ir,
+         target_node,
+         tuning,
+         init_values,
+         opts,
+         compile_opts,
+         timeout,
+         global_id
+       ) do
     if target_node == node() do
       run_chain_local(ir, tuning, init_values, opts, compile_opts)
     else

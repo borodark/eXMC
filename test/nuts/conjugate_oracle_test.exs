@@ -100,7 +100,10 @@ defmodule Exmc.NUTS.ConjugateOracleTest do
 
     ir =
       IR.new()
-      |> Builder.rv("beta", Dist.Normal, %{mu: Nx.tensor(0.0, @f64), sigma: Nx.tensor(prior_sd, @f64)},
+      |> Builder.rv(
+        "beta",
+        Dist.Normal,
+        %{mu: Nx.tensor(0.0, @f64), sigma: Nx.tensor(prior_sd, @f64)},
         shape: {2}
       )
       |> Dist.Custom.rv("Y", loglik, %{beta: "beta"})
@@ -134,7 +137,8 @@ defmodule Exmc.NUTS.ConjugateOracleTest do
     assert max_bias <= @max_bias_sds,
            "mean off by #{Float.round(max_bias, 4)} analytic sds (max #{@max_bias_sds}). #{detail}"
 
-    assert Enum.all?(ratios, &(&1 >= lo and &1 <= hi)), "sd ratio outside #{inspect({lo, hi})}. #{detail}"
+    assert Enum.all?(ratios, &(&1 >= lo and &1 <= hi)),
+           "sd ratio outside #{inspect({lo, hi})}. #{detail}"
   end
 
   describe "closed-form Gaussian posterior" do

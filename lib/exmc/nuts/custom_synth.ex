@@ -369,74 +369,77 @@ defmodule Exmc.NUTS.CustomSynth do
       if n_obs == 0 and obs_axis_used? do
         {:unsupported, :custom_reads_empty_obs_axis}
       else
-      # THE MIXED-BOUND CHECK, and it is the one thing populating the obs
-      # buffer makes newly dangerous.
-      #
-      # `reduce_bounds/4` bounds a marker that reads captures by the CAPTURE
-      # length, baked as a literal, because captures carry no runtime length.
-      # A marker that reads `obs_j` as well -- `obs_j - (col0*b0 + col1*b1)`,
-      # which is the ordinary regression residual -- then has two candidate
-      # trip counts: that literal, and `pc.n_obs`. MEASURED: such a marker
-      # exists and gets the literal.
-      #
-      # While the obs buffer was empty the question could not arise. Now that
-      # it is populated the two must AGREE, or the loop runs off the end of one
-      # region and into the next -- silently, since both live in the same flat
-      # extras buffer.
-      #
-      # They agree whenever the response and the design-matrix columns have the
-      # same length, which is every well-formed regression. Refusing the rest
-      # costs a host fallback and keeps the failure loud.
-      mixed_bound_mismatch? =
-        ~r/for \(uint j = 0u; j < (\d+)u; j\+\+\) \{(.*?)\n\s*\}/s
-        |> Regex.scan(glsl)
-        |> Enum.any?(fn [_full, literal, body] ->
-          uses_obs? =
-            body
-            |> String.replace(~r/double obs_j = obs_inv_mass\[[^\]]*\];/, "")
-            |> String.contains?("obs_j")
+        # THE MIXED-BOUND CHECK, and it is the one thing populating the obs
+        # buffer makes newly dangerous.
+        #
+        # `reduce_bounds/4` bounds a marker that reads captures by the CAPTURE
+        # length, baked as a literal, because captures carry no runtime length.
+        # A marker that reads `obs_j` as well -- `obs_j - (col0*b0 + col1*b1)`,
+        # which is the ordinary regression residual -- then has two candidate
+        # trip counts: that literal, and `pc.n_obs`. MEASURED: such a marker
+        # exists and gets the literal.
+        #
+        # While the obs buffer was empty the question could not arise. Now that
+        # it is populated the two must AGREE, or the loop runs off the end of one
+        # region and into the next -- silently, since both live in the same flat
+        # extras buffer.
+        #
+        # They agree whenever the response and the design-matrix columns have the
+        # same length, which is every well-formed regression. Refusing the rest
+        # costs a host fallback and keeps the failure loud.
+        mixed_bound_mismatch? =
+          ~r/for \(uint j = 0u; j < (\d+)u; j\+\+\) \{(.*?)\n\s*\}/s
+          |> Regex.scan(glsl)
+          |> Enum.any?(fn [_full, literal, body] ->
+            uses_obs? =
+              body
+              |> String.replace(~r/double obs_j = obs_inv_mass\[[^\]]*\];/, "")
+              |> String.contains?("obs_j")
 
-          uses_obs? and String.to_integer(literal) != n_obs
-        end)
+            uses_obs? and String.to_integer(literal) != n_obs
+          end)
 
-      if mixed_obs_sources? do
-        {:unsupported, :both_standard_and_custom_observations}
-      else
-      if mixed_bound_mismatch? do
-        {:unsupported, :obs_capture_length_mismatch}
-      else
-    k = Keyword.get(opts, :K, 32)
-    eps = Keyword.get(opts, :eps, 0.05)
+        if mixed_obs_sources? do
+          {:unsupported, :both_standard_and_custom_observations}
+        else
+          if mixed_bound_mismatch? do
+            {:unsupported, :obs_capture_length_mismatch}
+          else
+            k = Keyword.get(opts, :K, 32)
+            eps = Keyword.get(opts, :eps, 0.05)
 
-    push_spec =
-      Exmc.NUTS.CustomSynth.Push.build(components, K: k, eps: eps, n_obs: n_obs)
+            push_spec =
+              Exmc.NUTS.CustomSynth.Push.build(components, K: k, eps: eps, n_obs: n_obs)
 
-    # No width rejection here any more. The push block is the fixed 24-byte
-    # header; prior parameters reach the shader baked in as literals. This
-    # used to reject models past ~14 prior floats and degrade them to per-op
-    # sampling, which cost an 8-RV model 13.1x. See Exmc.NUTS.CustomSynth.Push.
-    {:ok, _bin, _n} = Exmc.NUTS.CustomSynth.Push.pack(push_spec)
+            # No width rejection here any more. The push block is the fixed 24-byte
+            # header; prior parameters reach the shader baked in as literals. This
+            # used to reject models past ~14 prior floats and degrade them to per-op
+            # sampling, which cost an 8-RV model 13.1x. See Exmc.NUTS.CustomSynth.Push.
+            {:ok, _bin, _n} = Exmc.NUTS.CustomSynth.Push.pack(push_spec)
 
-    obs_bin =
-      case ir.data do
-        %Nx.Tensor{} = t ->
-          t |> Nx.as_type(:f64) |> Nx.to_binary()
+            obs_bin =
+              case ir.data do
+                %Nx.Tensor{} = t ->
+                  t |> Nx.as_type(:f64) |> Nx.to_binary()
 
-        _ ->
-          observed_obs_bin(observed) <> custom_obs_bin(custom_obs)
-      end
+                _ ->
+                  observed_obs_bin(observed) <> custom_obs_bin(custom_obs)
+              end
 
-    if length(components.layout) > 256 do
-      # See the sibling guard above: 256 is the shader's thread tile.
-      {:unsupported, :d_exceeds_tile}
-    else
-      with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
-        sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
-        {:ok, {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin, captures_bin}}
-      end
-      end
-      end
-      end
+            if length(components.layout) > 256 do
+              # See the sibling guard above: 256 is the shader's thread tile.
+              {:unsupported, :d_exceeds_tile}
+            else
+              with {:ok, spv_path} <- Exmc.NUTS.CustomSynth.Compile.compile_glsl(glsl) do
+                sha = :crypto.hash(:sha256, glsl) |> Base.encode16(case: :lower)
+
+                {:ok,
+                 {:synthesised, sha, components.layout, push_spec, spv_path, obs_bin,
+                  captures_bin}}
+              end
+            end
+          end
+        end
       end
     end
   end

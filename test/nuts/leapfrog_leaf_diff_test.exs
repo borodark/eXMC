@@ -221,7 +221,14 @@ defmodule Exmc.NUTS.LeapfrogLeafDiffTest do
     end
 
     test "adapted step size, from the tail" do
-      assert_agrees(three_observed_ir(), 1, 1.1391216000810296, [3.99], [0.1], "eps=1.139 q0=3.99")
+      assert_agrees(
+        three_observed_ir(),
+        1,
+        1.1391216000810296,
+        [3.99],
+        [0.1],
+        "eps=1.139 q0=3.99"
+      )
     end
   end
 

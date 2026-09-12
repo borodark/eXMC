@@ -267,7 +267,12 @@ defmodule Exmc.NUTS.Vulkan.Scheduler do
 
           devices = Map.put(state.devices, dev_id, %{pool | active: pool.active + 1})
 
-          %{state | devices: devices, monitors: monitors, total_acquired: state.total_acquired + 1}
+          %{
+            state
+            | devices: devices,
+              monitors: monitors,
+              total_acquired: state.total_acquired + 1
+          }
         else
           state = %{state | devices: Map.put(state.devices, dev_id, pool)}
           grant_next(state, dev_id)
@@ -332,7 +337,12 @@ defmodule Exmc.NUTS.Vulkan.Scheduler do
           pool = state.devices[dev_id]
           devices = Map.put(state.devices, dev_id, %{pool | active: pool.active + 1})
 
-          %{state | devices: devices, monitors: monitors, total_acquired: state.total_acquired + 1}
+          %{
+            state
+            | devices: devices,
+              monitors: monitors,
+              total_acquired: state.total_acquired + 1
+          }
         else
           # Dead process — try stealing another
           steal_from_other(state, dev_id)

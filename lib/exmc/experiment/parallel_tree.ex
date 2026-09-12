@@ -116,23 +116,50 @@ defmodule Exmc.Experiment.ParallelTree do
   # --- Termination clauses ---
 
   defp do_build_parallel(
-         _step_fn, traj, _eps, _inv_mass, max_depth, _rng, _rngs,
-         _joint_logp_0, depth, _inv_mass_list, speculation_stats
+         _step_fn,
+         traj,
+         _eps,
+         _inv_mass,
+         max_depth,
+         _rng,
+         _rngs,
+         _joint_logp_0,
+         depth,
+         _inv_mass_list,
+         speculation_stats
        )
        when depth >= max_depth do
     {result_map(traj, depth), speculation_stats}
   end
 
   defp do_build_parallel(
-         _step_fn, %{divergent: true} = traj, _eps, _inv_mass, _max_depth, _rng, _rngs,
-         _joint_logp_0, depth, _inv_mass_list, speculation_stats
+         _step_fn,
+         %{divergent: true} = traj,
+         _eps,
+         _inv_mass,
+         _max_depth,
+         _rng,
+         _rngs,
+         _joint_logp_0,
+         depth,
+         _inv_mass_list,
+         speculation_stats
        ) do
     {result_map(traj, depth), speculation_stats}
   end
 
   defp do_build_parallel(
-         _step_fn, %{turning: true} = traj, _eps, _inv_mass, _max_depth, _rng, _rngs,
-         _joint_logp_0, depth, _inv_mass_list, speculation_stats
+         _step_fn,
+         %{turning: true} = traj,
+         _eps,
+         _inv_mass,
+         _max_depth,
+         _rng,
+         _rngs,
+         _joint_logp_0,
+         depth,
+         _inv_mass_list,
+         speculation_stats
        ) do
     {result_map(traj, depth), speculation_stats}
   end
@@ -140,8 +167,17 @@ defmodule Exmc.Experiment.ParallelTree do
   # --- Main recursive case with speculation ---
 
   defp do_build_parallel(
-         step_fn, traj, epsilon, inv_mass_diag, max_depth, rng, rngs,
-         joint_logp_0, depth, inv_mass_list, speculation_stats
+         step_fn,
+         traj,
+         epsilon,
+         inv_mass_diag,
+         max_depth,
+         rng,
+         rngs,
+         joint_logp_0,
+         depth,
+         inv_mass_list,
+         speculation_stats
        ) do
     # Random direction for THIS depth
     {rand_val, rng} = :rand.uniform_s(rng)
@@ -198,13 +234,21 @@ defmodule Exmc.Experiment.ParallelTree do
         spec_dir_epsilon = if next_go_right, do: epsilon, else: -epsilon
         spec_rng = next_rng_rest
 
-        task = Task.async(fn ->
-          build_subtree_plain(
-            step_fn, spec_q, spec_p, spec_grad,
-            spec_dir_epsilon, inv_mass_diag, depth,
-            spec_rng, joint_logp_0, inv_mass_list
-          )
-        end)
+        task =
+          Task.async(fn ->
+            build_subtree_plain(
+              step_fn,
+              spec_q,
+              spec_p,
+              spec_grad,
+              spec_dir_epsilon,
+              inv_mass_diag,
+              depth,
+              spec_rng,
+              joint_logp_0,
+              inv_mass_list
+            )
+          end)
 
         {task, Map.update!(speculation_stats, :speculated, &(&1 + 1))}
       else
@@ -214,9 +258,16 @@ defmodule Exmc.Experiment.ParallelTree do
     # Build current subtree (blocking)
     {subtree, rng} =
       build_subtree_plain(
-        step_fn, start_q, start_p, start_grad,
-        dir_epsilon, inv_mass_diag, depth,
-        rng, joint_logp_0, inv_mass_list
+        step_fn,
+        start_q,
+        start_p,
+        start_grad,
+        dir_epsilon,
+        inv_mass_diag,
+        depth,
+        rng,
+        joint_logp_0,
+        inv_mass_list
       )
 
     # Merge current subtree into trajectory
@@ -244,18 +295,43 @@ defmodule Exmc.Experiment.ParallelTree do
 
         # Merge speculative subtree into trajectory
         {new_traj2, rng} =
-          merge_trajectories(new_traj, next_subtree, next_go_right, inv_mass_diag, rng, inv_mass_list)
+          merge_trajectories(
+            new_traj,
+            next_subtree,
+            next_go_right,
+            inv_mass_diag,
+            rng,
+            inv_mass_list
+          )
 
         # Skip ahead by 2 depths (current + speculative both done)
         do_build_parallel(
-          step_fn, new_traj2, epsilon, inv_mass_diag, max_depth,
-          rng, rngs, joint_logp_0, depth + 2, inv_mass_list, speculation_stats
+          step_fn,
+          new_traj2,
+          epsilon,
+          inv_mass_diag,
+          max_depth,
+          rng,
+          rngs,
+          joint_logp_0,
+          depth + 2,
+          inv_mass_list,
+          speculation_stats
         )
       else
         # No speculative result — recurse normally for remaining depths
         do_build_parallel(
-          step_fn, new_traj, epsilon, inv_mass_diag, max_depth,
-          rng, rngs, joint_logp_0, depth + 1, inv_mass_list, speculation_stats
+          step_fn,
+          new_traj,
+          epsilon,
+          inv_mass_diag,
+          max_depth,
+          rng,
+          rngs,
+          joint_logp_0,
+          depth + 1,
+          inv_mass_list,
+          speculation_stats
         )
       end
     end
@@ -266,7 +342,18 @@ defmodule Exmc.Experiment.ParallelTree do
   # Build a subtree using plain step_fn calls (no speculative buffer).
   # This reimplements the core recursive subtree build to avoid depending
   # on Tree's private functions.
-  defp build_subtree_plain(step_fn, q, p, grad, epsilon, inv_mass_diag, 0, rng, joint_logp_0, _inv_mass_list) do
+  defp build_subtree_plain(
+         step_fn,
+         q,
+         p,
+         grad,
+         epsilon,
+         inv_mass_diag,
+         0,
+         rng,
+         joint_logp_0,
+         _inv_mass_list
+       ) do
     {q_new, p_new, logp_new, grad_new, joint_logp_t} =
       step_fn.(q, p, grad, epsilon, inv_mass_diag)
 
@@ -314,11 +401,33 @@ defmodule Exmc.Experiment.ParallelTree do
     {subtree, rng}
   end
 
-  defp build_subtree_plain(step_fn, q, p, grad, epsilon, inv_mass_diag, depth, rng, joint_logp_0, inv_mass_list)
+  defp build_subtree_plain(
+         step_fn,
+         q,
+         p,
+         grad,
+         epsilon,
+         inv_mass_diag,
+         depth,
+         rng,
+         joint_logp_0,
+         inv_mass_list
+       )
        when depth > 0 do
     # Build first half
     {first, rng} =
-      build_subtree_plain(step_fn, q, p, grad, epsilon, inv_mass_diag, depth - 1, rng, joint_logp_0, inv_mass_list)
+      build_subtree_plain(
+        step_fn,
+        q,
+        p,
+        grad,
+        epsilon,
+        inv_mass_diag,
+        depth - 1,
+        rng,
+        joint_logp_0,
+        inv_mass_list
+      )
 
     if first.divergent or first.turning do
       {first, rng}
@@ -332,7 +441,18 @@ defmodule Exmc.Experiment.ParallelTree do
         end
 
       {second, rng} =
-        build_subtree_plain(step_fn, next_q, next_p, next_grad, epsilon, inv_mass_diag, depth - 1, rng, joint_logp_0, inv_mass_list)
+        build_subtree_plain(
+          step_fn,
+          next_q,
+          next_p,
+          next_grad,
+          epsilon,
+          inv_mass_diag,
+          depth - 1,
+          rng,
+          joint_logp_0,
+          inv_mass_list
+        )
 
       {merged, rng} = merge_subtrees(first, second, epsilon, inv_mass_diag, rng, inv_mass_list)
       {merged, rng}
@@ -360,11 +480,13 @@ defmodule Exmc.Experiment.ParallelTree do
 
     rho_list = zip_add(first.rho_list, second.rho_list)
 
-    {q_left, p_left, grad_left, q_left_list, p_left_list,
-     q_right, p_right, grad_right, q_right_list, p_right_list} =
+    {q_left, p_left, grad_left, q_left_list, p_left_list, q_right, p_right, grad_right,
+     q_right_list,
+     p_right_list} =
       if epsilon > 0 do
         {first.q_left, first.p_left, first.grad_left, first.q_left_list, first.p_left_list,
-         second.q_right, second.p_right, second.grad_right, second.q_right_list, second.p_right_list}
+         second.q_right, second.p_right, second.grad_right, second.q_right_list,
+         second.p_right_list}
       else
         {second.q_left, second.p_left, second.grad_left, second.q_left_list, second.p_left_list,
          first.q_right, first.p_right, first.grad_right, first.q_right_list, first.p_right_list}
@@ -392,11 +514,19 @@ defmodule Exmc.Experiment.ParallelTree do
       end
 
     merged = %{
-      q_left: q_left, p_left: p_left, grad_left: grad_left,
-      q_left_list: q_left_list, p_left_list: p_left_list,
-      q_right: q_right, p_right: p_right, grad_right: grad_right,
-      q_right_list: q_right_list, p_right_list: p_right_list,
-      q_prop: q_prop, logp_prop: logp_prop, grad_prop: grad_prop,
+      q_left: q_left,
+      p_left: p_left,
+      grad_left: grad_left,
+      q_left_list: q_left_list,
+      p_left_list: p_left_list,
+      q_right: q_right,
+      p_right: p_right,
+      grad_right: grad_right,
+      q_right_list: q_right_list,
+      p_right_list: p_right_list,
+      q_prop: q_prop,
+      logp_prop: logp_prop,
+      grad_prop: grad_prop,
       rho_list: rho_list,
       depth: max(first.depth, second.depth) + 1,
       log_sum_weight: combined_log_weight,
@@ -416,7 +546,7 @@ defmodule Exmc.Experiment.ParallelTree do
     combined_divergent = traj.divergent or subtree.divergent
 
     {rand_val, rng} = :rand.uniform_s(rng)
-    use_subtree = :math.log(rand_val) < (subtree.log_sum_weight - traj.log_sum_weight)
+    use_subtree = :math.log(rand_val) < subtree.log_sum_weight - traj.log_sum_weight
 
     {q_prop, logp_prop, grad_prop} =
       if use_subtree do
@@ -427,14 +557,17 @@ defmodule Exmc.Experiment.ParallelTree do
 
     rho_list = zip_add(traj.rho_list, subtree.rho_list)
 
-    {q_left, p_left, grad_left, q_left_list, p_left_list,
-     q_right, p_right, grad_right, q_right_list, p_right_list} =
+    {q_left, p_left, grad_left, q_left_list, p_left_list, q_right, p_right, grad_right,
+     q_right_list,
+     p_right_list} =
       if go_right do
         {traj.q_left, traj.p_left, traj.grad_left, traj.q_left_list, traj.p_left_list,
-         subtree.q_right, subtree.p_right, subtree.grad_right, subtree.q_right_list, subtree.p_right_list}
+         subtree.q_right, subtree.p_right, subtree.grad_right, subtree.q_right_list,
+         subtree.p_right_list}
       else
-        {subtree.q_left, subtree.p_left, subtree.grad_left, subtree.q_left_list, subtree.p_left_list,
-         traj.q_right, traj.p_right, traj.grad_right, traj.q_right_list, traj.p_right_list}
+        {subtree.q_left, subtree.p_left, subtree.grad_left, subtree.q_left_list,
+         subtree.p_left_list, traj.q_right, traj.p_right, traj.grad_right, traj.q_right_list,
+         traj.p_right_list}
       end
 
     iml = inv_mass_list || Nx.to_flat_list(inv_mass_diag)
@@ -459,11 +592,19 @@ defmodule Exmc.Experiment.ParallelTree do
       end
 
     merged = %{
-      q_left: q_left, p_left: p_left, grad_left: grad_left,
-      q_left_list: q_left_list, p_left_list: p_left_list,
-      q_right: q_right, p_right: p_right, grad_right: grad_right,
-      q_right_list: q_right_list, p_right_list: p_right_list,
-      q_prop: q_prop, logp_prop: logp_prop, grad_prop: grad_prop,
+      q_left: q_left,
+      p_left: p_left,
+      grad_left: grad_left,
+      q_left_list: q_left_list,
+      p_left_list: p_left_list,
+      q_right: q_right,
+      p_right: p_right,
+      grad_right: grad_right,
+      q_right_list: q_right_list,
+      p_right_list: p_right_list,
+      q_prop: q_prop,
+      logp_prop: logp_prop,
+      grad_prop: grad_prop,
       rho_list: rho_list,
       depth: traj.depth + 1,
       log_sum_weight: combined_log_weight,

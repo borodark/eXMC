@@ -573,9 +573,24 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
   # --- Element-wise unary ops ---
 
   unary_ops_fn = [
-    :exp, :log, :log1p, :expm1, :sqrt, :rsqrt,
-    :sin, :cos, :tan, :asin, :acos, :atan,
-    :sinh, :cosh, :tanh, :abs, :floor, :ceil
+    :exp,
+    :log,
+    :log1p,
+    :expm1,
+    :sqrt,
+    :rsqrt,
+    :sin,
+    :cos,
+    :tan,
+    :asin,
+    :acos,
+    :atan,
+    :sinh,
+    :cosh,
+    :tanh,
+    :abs,
+    :floor,
+    :ceil
   ]
 
   for op <- unary_ops_fn do
@@ -703,7 +718,11 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
   #
   # Both operand orders are matched because the contraction is symmetric and
   # unambiguous: whichever side is rank 2 supplies the columns.
-  defp do_emit(:slice, [%T{data: %Expr{op: :dot, args: dot_args}} = _src, starts, lens, strides], layout)
+  defp do_emit(
+         :slice,
+         [%T{data: %Expr{op: :dot, args: dot_args}} = _src, starts, lens, strides],
+         layout
+       )
        when is_list(dot_args) do
     with true <- all_ones?(strides) || {:error, :strided_slice},
          true <- all_ones?(lens) || {:error, :multi_element_slice},
@@ -784,7 +803,9 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
   defp all_ones?(list) when is_list(list), do: Enum.all?(list, &(&1 == 1))
   defp all_ones?(_), do: false
 
-  defp single_start_idx([%T{data: %Expr{op: :constant, args: [n]}}]) when is_integer(n), do: {:ok, n}
+  defp single_start_idx([%T{data: %Expr{op: :constant, args: [n]}}]) when is_integer(n),
+    do: {:ok, n}
+
   defp single_start_idx([n]) when is_integer(n), do: {:ok, n}
   defp single_start_idx(other), do: {:error, {:non_constant_start_idx, other}}
 

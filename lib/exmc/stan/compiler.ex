@@ -48,7 +48,14 @@ defmodule Exmc.Stan.Compiler do
 
   # --- Statement compilation ---
 
-  defp compile_stmt({:sample, target_expr, dist_name, arg_exprs}, ir, data, data_vars, param_vars, param_constraints) do
+  defp compile_stmt(
+         {:sample, target_expr, dist_name, arg_exprs},
+         ir,
+         data,
+         data_vars,
+         param_vars,
+         param_constraints
+       ) do
     {dist_mod, param_names} = DistMap.lookup!(dist_name)
 
     # Resolve distribution arguments to params map
@@ -81,7 +88,14 @@ defmodule Exmc.Stan.Compiler do
     end
   end
 
-  defp compile_stmt({:target_incr, _expr}, _ir, _data, _data_vars, _param_vars, _param_constraints) do
+  defp compile_stmt(
+         {:target_incr, _expr},
+         _ir,
+         _data,
+         _data_vars,
+         _param_vars,
+         _param_constraints
+       ) do
     raise ArgumentError,
           "target += is not yet supported. Use sampling statements (x ~ dist(...)) instead. " <>
             "Custom log-probability increments will be added in a future version."
@@ -124,7 +138,9 @@ defmodule Exmc.Stan.Compiler do
     val = resolve_expr(inner, data, data_vars, param_vars)
 
     case val do
-      %Nx.Tensor{} = t -> Nx.negate(t)
+      %Nx.Tensor{} = t ->
+        Nx.negate(t)
+
       _ ->
         raise ArgumentError,
               "negation of parameter references is not yet supported (e.g., normal(-mu, sigma)). " <>

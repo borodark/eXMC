@@ -224,7 +224,9 @@ defmodule Exmc.NUTS.CustomSynth.MultiRvCustomSpec do
     # exactly the old behaviour for the all-scalar models those tests use.
     slots =
       Map.get(components, :slots) ||
-        layout |> Enum.with_index() |> Enum.map(fn {id, i} ->
+        layout
+        |> Enum.with_index()
+        |> Enum.map(fn {id, i} ->
           %{id: id, offset: i, length: 1, shape: {}}
         end)
 

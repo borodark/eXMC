@@ -173,7 +173,9 @@ defmodule Exmc.NUTS.P0CorrectnessTest do
     test "the widths this used to refuse now pack fine" do
       # The exact boundaries the old cap enforced: 7 Normals (was 6 max),
       # 14 one-parameter priors (was 13), 4 TruncatedNormals (was 3).
-      assert {:ok, _, 24} = pack(Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}, 7)
+      assert {:ok, _, 24} =
+               pack(Exmc.Dist.Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)}, 7)
+
       assert {:ok, _, 24} = pack(Exmc.Dist.HalfNormal, %{sigma: Nx.tensor(1.0)}, 14)
 
       tn = %{

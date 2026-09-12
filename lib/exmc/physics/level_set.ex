@@ -85,10 +85,11 @@ defmodule Exmc.Physics.LevelSet do
       left = Nx.slice(phi, [1, 0], [ny - 2, nx - 2])
       right = Nx.slice(phi, [1, 2], [ny - 2, nx - 2])
 
-      laplacian = Nx.subtract(
-        Nx.add(Nx.add(up, down), Nx.add(left, right)),
-        Nx.multiply(4.0, center)
-      )
+      laplacian =
+        Nx.subtract(
+          Nx.add(Nx.add(up, down), Nx.add(left, right)),
+          Nx.multiply(4.0, center)
+        )
 
       Nx.multiply(-0.5, Nx.multiply(lambda, Nx.sum(Nx.pow(laplacian, 2))))
     end
@@ -150,9 +151,16 @@ defmodule Exmc.Physics.LevelSet do
 
     phi_dist = Dist.Custom.new(phi_prior_logpdf, support: :real)
 
-    ir = Dist.Custom.rv(ir, "phi", phi_dist, %{
-      lambda: "lambda"
-    }, shape: {n})
+    ir =
+      Dist.Custom.rv(
+        ir,
+        "phi",
+        phi_dist,
+        %{
+          lambda: "lambda"
+        },
+        shape: {n}
+      )
 
     # Observation noise
     ir = Builder.rv(ir, "sigma_obs", Dist.HalfCauchy, %{scale: sigma_obs_scale}, transform: :log)
@@ -169,6 +177,7 @@ defmodule Exmc.Physics.LevelSet do
 
       resid = Nx.subtract(obs, predictions)
       n_obs = Nx.size(obs)
+
       Nx.subtract(
         Nx.sum(Nx.negate(Nx.divide(Nx.pow(resid, 2), Nx.multiply(2.0, Nx.pow(sigma, 2))))),
         Nx.multiply(n_obs, Nx.log(sigma))
@@ -176,11 +185,14 @@ defmodule Exmc.Physics.LevelSet do
     end
 
     ll_dist = Dist.Custom.new(likelihood_logpdf, support: :real)
-    ir = Dist.Custom.rv(ir, "ll", ll_dist, %{
-      phi: "phi",
-      sigma_obs: "sigma_obs",
-      data: data
-    })
+
+    ir =
+      Dist.Custom.rv(ir, "ll", ll_dist, %{
+        phi: "phi",
+        sigma_obs: "sigma_obs",
+        data: data
+      })
+
     ir = Builder.obs(ir, "ll_obs", "ll", Nx.tensor(0.0))
 
     ir
