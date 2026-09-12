@@ -106,6 +106,20 @@ Existing pieces: `bench/nuts_truth.exs` and `bench/observed_model_evidence.exs`
    the EXLA arm on the same box. If the KS check passes on EXLA and fails on
    Vulkan with identical seeds, the draws differ by arm and the "bit-identical
    q/p/grad" claim needs a scope note; if both fail, it is the test.
+   **Hypothesis to test first (INFERRED, 2026-09-12):** the chain shader's
+   transcendentals are f32-cast by default (`:chain_shader_transcendentals`
+   is `:f32_cast`; `multi_rv_custom_spec.ex:945`), Cauchy's logpdf is
+   `log(1 + z²)`, and f32 `log` approximations differ by GPU architecture —
+   which would make draws host-specific in exactly the observed pattern
+   (fails on Ampere, passes on two Keplers and the Jetson, same seeds). The
+   leaf-diff fixtures are Normal-family and never exercise `log` of a sampled
+   value, so their 1e-15 agreement does not speak to this. Measure: a
+   leaf-diff fixture with a Cauchy or Student-t likelihood, per host, and the
+   same under `:polynomial` on asus (the only box where that lever does not
+   segfault). nx_vulkan's elementwise f64 shaders make the same trade
+   (`MISSION.md` §3.2 there), but eXMC's chain path never calls them; they are
+   reached only by the per-op fallback, where `Nx.pow(t, 2)` falls back to
+   the host (exact, 604x slower) and `t * t` stays on the GPU (exact f64).
 4. Retire `:vulkan_known_failure` as a concept or generalise it:
    `:known_failure` with an arm and a host in the tag value, read by
    `test_helper.exs`.
