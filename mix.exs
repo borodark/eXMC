@@ -4,6 +4,13 @@ defmodule Exmc.MixProject do
   @version "0.4.0"
   @source_url "https://github.com/borodark/eXMC"
 
+  # `mix check` runs its `test` step in :test; without this Mix refuses with
+  # '"mix test" is running in the "dev" environment' (measured on the alias's
+  # first run, 2026-09-12).
+  def cli do
+    [preferred_envs: [check: :test]]
+  end
+
   def project do
     [
       app: :exmc,
