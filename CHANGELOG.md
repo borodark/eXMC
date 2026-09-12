@@ -7,6 +7,15 @@ commits to read.
 
 **Fixed**
 
+- The two ways of running the suite on a Vulkan host were different arms:
+  `config/runtime.exs` set `:allow_vulkan_perop_sampling` under an explicit
+  `EXMC_COMPILER=vulkan` and not under auto-detection, so plain `mix test`
+  reported one more failure than the fleet's invocation for the same tree
+  (`CustomDistTest`, a Custom-only model the synthesiser refuses by design).
+  The one test that needs the fallback now sets the flag for itself, scoped;
+  the config block is gone; both invocations print `perop_fallback=false`
+  and report the same failures. A consumer that wants a refused model to
+  degrade to per-op sampling still sets the key explicitly.
 - `stats.divergences` counted warmup, and every consumer divided it by the
   number of kept samples. It now counts kept draws only (`994305de4`). A
   downstream notebook that asserted the old behaviour (pathmc_ex `guide/02`)

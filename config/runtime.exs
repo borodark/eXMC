@@ -47,7 +47,7 @@ case System.get_env("EXMC_COMPILER") do
     """
 end
 
-# Deliberately NOT moved out of :test.
+# On `:allow_vulkan_perop_sampling`, which this file no longer sets.
 #
 # This flag lets a model that CustomSynth refuses fall through to per-op
 # dispatch instead of raising `SynthUnsupportedError`, so a full-suite backend
@@ -65,6 +65,14 @@ end
 # 5b99e02af. The fleet convention for Vulkan-only hosts is therefore the
 # explicit form. `Exmc.JIT.describe/0` now prints `perop_fallback=` so the two
 # paths are distinguishable from the banner.
-if config_env() == :test and System.get_env("EXMC_COMPILER") == "vulkan" do
-  config :exmc, allow_vulkan_perop_sampling: true
-end
+# REMOVED 2026-09-12: the block that set `allow_vulkan_perop_sampling: true`
+# under `config_env() == :test and EXMC_COMPILER == "vulkan"`. It was
+# deliberate (see above) and it made the two Vulkan invocations different
+# arms: plain `mix test` on a Vulkan host reported one more failure than
+# `EXMC_COMPILER=vulkan mix test` for the same tree, and `test_helper.exs`,
+# which keys its excludes off the DETECTED backend so the arm cannot be
+# misread, could not see the difference. Exactly one test needed the
+# allowance — `CustomDistTest` "custom dist works with NUTS sampler", a
+# Custom-only model with no free RVs — and it now sets the flag for itself
+# with `put_env_scoped/2`. `PlanBPrimeGuardTest` sets and restores it
+# explicitly as it always did. Nothing else in the suite reads it.

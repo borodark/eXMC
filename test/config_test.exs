@@ -17,7 +17,8 @@ defmodule Exmc.ConfigTest do
     assert Application.get_env(:exmc, :test_config_loaded) == true, """
     config/test.exs is not being loaded. It sets `config :exmc, test_config_loaded: true`
     as its first line and that has not arrived, so every other setting in that
-    file — the EXMC_COMPILER switch, allow_vulkan_perop_sampling — is dead too.
+    file — the EXLA host client — is dead too. (The EXMC_COMPILER switch lives
+    in config/runtime.exs, which Mix loads on its own.)
 
     Restore the `import_config "test.exs"` in config/config.exs.
     """

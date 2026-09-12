@@ -1,6 +1,8 @@
 defmodule Exmc.CustomDistTest do
   use ExUnit.Case, async: false
 
+  import Exmc.TestHelper, only: [put_env_scoped: 2]
+
   alias Exmc.Builder
   alias Exmc.Compiler
   alias Exmc.Dist.Custom
@@ -188,6 +190,20 @@ defmodule Exmc.CustomDistTest do
   describe "NUTS sampling" do
     @tag timeout: 120_000
     test "custom dist works with NUTS sampler" do
+      # This model is a single Custom RV with no standard-family prior, so
+      # `CustomSynth.extract_components/1` refuses it as
+      # `:no_free_rvs_in_custom_only_model` and the fused f64 chain shader has
+      # nothing to run. On the Vulkan arm that refusal raises
+      # `SynthUnsupportedError` unless per-op sampling is allowed. The
+      # allowance is THIS test's need, so it is set here and restored after,
+      # rather than for the whole arm: until 2026-09-12 `config/runtime.exs`
+      # set it for every test under an explicit `EXMC_COMPILER=vulkan` and not
+      # under auto-detection, so the same suite on the same GPU reported one
+      # more failure depending on how it was invoked (16/1 vs 16/0, measured
+      # on mac-248 and super-io). On the EXLA and Evaluator arms the flag is
+      # read by nothing.
+      put_env_scoped(:allow_vulkan_perop_sampling, true)
+
       # Simple model: x ~ Custom Normal(0, 1)
       dist = Custom.new(normal_logpdf())
       ir = Builder.new_ir()

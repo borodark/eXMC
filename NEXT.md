@@ -76,12 +76,18 @@ arm difference. The model is a single Custom RV with no priors, and
 `:no_free_rvs_in_custom_only_model`; whether that refusal falls back to the
 per-op path or raises `SynthUnsupportedError` depends on
 `:allow_vulkan_perop_sampling`, which `config/runtime.exs` sets **only when
-`EXMC_COMPILER=vulkan` is in the environment**. `test_helper.exs` keys its
-excludes off the *detected* backend precisely so the arm cannot be misread, but
-this flag is keyed off the env var, so a Vulkan host running plain `mix test`
-is one failure away from the fleet's documented arm. The fleet script sets the
-variable and never sees it. The fix is either to set the flag from the detected
-backend, or to tag that test — it is open.
+`EXMC_COMPILER=vulkan` is in the environment**. That asymmetry is deliberate
+and documented — the comment above it in `runtime.exs` and `Exmc.JIT.describe/0`'s
+moduledoc both record the same 16/1 vs 16/0 measurement on mac-248 and say
+"the fleet convention for Vulkan-only hosts is the explicit form". So this is
+not a regression and not undocumented; it is a convention that `test_helper.exs`
+(which keys its excludes off the *detected* backend so the arm cannot be
+misread) does not share. What was open was the shape: one test needs the
+per-op fallback, and the whole arm carried the flag for it. **Done the same
+day** (`docs/REVIEW_PLAN.md` Track 1 item 1): `CustomDistTest` sets the flag
+for itself with `put_env_scoped/2`, the block is out of `runtime.exs`, and
+plain `mix test` on this host is now **723 tests, 1 failure** (the Cauchy KS
+check) — identical to the explicit form, MEASURED.
 
 **The nx_vulkan bump itself is clean.** The pin→HEAD diff in nx_vulkan `lib/`
 touches `device.ex` (new), `native_v.ex` (additive: device NIFs and

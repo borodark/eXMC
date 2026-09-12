@@ -265,17 +265,17 @@ defmodule Exmc.JIT do
 
   ## `perop_fallback=` predicts whether an unsupported model raises
 
-  `config/test.exs` sets `:allow_vulkan_perop_sampling` only when
-  `EXMC_COMPILER` names a compiler explicitly. So on a Vulkan-only host that
-  AUTO-DETECTS, the flag is false and a model `CustomSynth` refuses raises
-  `SynthUnsupportedError` instead of degrading to per-op sampling.
-
-  Measured on mac-248 (FreeBSD, GT 750M, Vulkan-only), same tree, same file:
-  `mix test test/custom_dist_test.exs` gives 16 tests / 1 failure under
-  auto-detect and 16 / 0 under `EXMC_COMPILER=vulkan`. The old banner showed
-  the cause -- `(configured: nil)` -- and hid the consequence, so the failure
-  read as a code regression. It is not: that model has been `:unsupported`
-  since 5b99e02af.
+  Nothing in `config/` sets `:allow_vulkan_perop_sampling` any more. Until
+  2026-09-12 `config/runtime.exs` set it under an explicit
+  `EXMC_COMPILER=vulkan` and not under auto-detection, so on a Vulkan host
+  the same suite reported one more failure depending on how it was invoked
+  (measured on mac-248 and on super-io: `mix test test/custom_dist_test.exs`
+  16 tests / 1 failure under auto-detect, 16 / 0 under the explicit form).
+  The one test that needs the fallback now sets the flag for itself, scoped;
+  a consumer that wants a refused model to degrade to per-op sampling sets
+  it explicitly. So `perop_fallback=false` in this banner is the normal
+  state, and a `SynthUnsupportedError` under it means what it says: the
+  model has no chain-shader form, and the Plan B' guard refused it.
 
   ## Both observed reads are process-local
 
