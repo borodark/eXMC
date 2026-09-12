@@ -8,6 +8,70 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-11 (later), the leaf-diff harness is a gate that can fail
+
+`bench/leapfrog_leaf_diff.exs` is now `test/nuts/leapfrog_leaf_diff_test.exs`
+(`acccf8348`), tagged `:requires_vulkan`. The bench copy is deleted rather than
+left beside it — two copies drifting is the failure that started this. **The
+prerequisite named in `docs/OBS_LOOP_FUSION.md` §6 and in the 2026-09-07 status
+below is met**; the obs-axis parallelism it gates is not, and is now the whole
+of the remaining performance opportunity.
+
+### The threshold came from four machines, not from this one
+
+The bench flagged at `1e-6`. That was not slack when written — the GLSL then
+carried its distribution constants at f32 and packed the obs buffer from f32
+tensors, so ~`1e-7` was the floor the path could reach. The f64 migration
+removed the floor and nobody revisited the number.
+
+Measured at `994305de4`, worst relative Δ over three (eps, q0, p0) settings:
+
+| host | q | p | grad | logp | offset spread |
+|---|---|---|---|---|---|
+| super-io | 1.92e-15 | 2.22e-15 | 3.07e-15 | 9.20e-16 | 1.78e-14 |
+| mac-247 | 4.77e-15 | 4.22e-15 | 6.72e-15 | 1.53e-15 | 2.84e-14 |
+| mac-248 | 4.77e-15 | 4.22e-15 | 6.72e-15 | 1.53e-15 | 2.84e-14 |
+| jetson | 4.77e-15 | 4.22e-15 | 6.72e-15 | 1.53e-15 | 2.84e-14 |
+
+`@tol 1.0e-13` is ~15x the fleet worst, `@offset_tol 1.0e-12` ~35x the worst
+spread. Three of those hosts agree to the last digit and the fourth does not,
+which is why the bound is not taken from whichever machine you happen to be on.
+
+### Three mutations, and two of them corrected the plan
+
+1. Perturb the host reference's step by 1e-7 → all five tests fail. Live.
+2. **All three sigmas at 1.0 → `grad` 1.212e-13, over the bound.** Trajectory
+   geometry on a legitimate model, not a defect: a tighter posterior at
+   eps=1.139 travels further per step. So the bounds are **fixture-calibrated**
+   and the headroom is not generous — measure a new fixture before adding it.
+   Not loosened: a bound widened for a model that is not in the file buys
+   nothing and costs sharpness for the models that are.
+3. `logp_chain[k]` lagging its position by one — the historical defect that
+   read as "Ampere over-dispersion" for three weeks → all five fail.
+
+Mutation 3 also falsified the plan's claim that the offset-constancy check is
+the sharpest assertion in the file. It never fires: the element-wise `logp`
+assertion catches the lag first, and as written the offset check is *implied*
+by it. It is kept as a standby — it becomes load-bearing only if the
+element-wise bound is ever relaxed to permit a constant normaliser, which
+today's measurements say is unnecessary (the normaliser is 0.0 on every host
+and arm).
+
+Two fixtures were added for the paths with the least element-wise coverage and
+the most recent churn: a vector RV with `Nx.dot` over a captured design matrix
+(`371785ff5`) and a Custom likelihood that reads its observations
+(`d299f4fc4`).
+
+**One process note worth keeping.** `671150a0d`, the commit before it, shipped
+only the deletion: its `git add` listed the already-`git rm`'d bench path
+beside the new files, git aborts the whole invocation on an unmatched pathspec,
+and the commit took what was already staged while the message described a
+promotion the diff did not contain. Fixed forward rather than amended, because
+the fleet fast-forwards from origin and a rewrite is a manual repair on four
+machines. Stage explicit paths, then read `git show --stat` before pushing.
+
+---
+
 ## Status — 2026-09-11, the multi-equation constraint is `:multiple_custom_nodes`
 
 MEASURED by the pathmc_ex session at `147305261`, on real `Compile.Exmc`
@@ -484,10 +548,9 @@ traversals, not operations.
 
 That makes obs-axis parallelism the whole of the remaining opportunity rather
 than a second-order term: what is left is arithmetic run by one invocation
-while 255 idle. The leaf-diff harness was promoted to
-`test/nuts/leapfrog_leaf_diff_test.exs` on 2026-09-11 with fleet-derived
-tolerances, so that prerequisite is met; the parallelism work itself, which is
-not bit-identical, is still open.
+while 255 idle. Promoting `bench/leapfrog_leaf_diff.exs` into a test that can
+fail is still open, and is a prerequisite for THAT change, which is not
+bit-identical.
 
 Two hypotheses were tested and refuted along the way; §1 of that document
 records them so they are not re-derived.

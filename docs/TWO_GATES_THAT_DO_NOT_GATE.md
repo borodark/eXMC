@@ -16,6 +16,20 @@ because a permanently-red test trains everyone to skim the suite output.
 
 ## Part 1 — `bench/leapfrog_leaf_diff.exs`
 
+> **RESOLVED 2026-09-11, `acccf8348`.** Promoted to
+> `test/nuts/leapfrog_leaf_diff_test.exs` with `@tol 1.0e-13` /
+> `@offset_tol 1.0e-12`, derived from four hosts rather than from super-io
+> alone, and mutation-checked three ways. Both defects this section names are
+> closed. One claim below did **not** survive the mutations: the
+> offset-constancy check is called the sharpest assertion here, and it is not —
+> the element-wise `logp` assertion catches the one-step lag first, and as
+> written the offset check is implied by it. It is kept as a standby for a
+> future in which the element-wise bound is relaxed to permit a normaliser.
+> A second thing the plan could not have known: the bounds are
+> **fixture-calibrated**. Identical sigmas reach 1.212e-13 on trajectory
+> geometry alone. The rest of this part is left as written, as the record of
+> what was known on 2026-09-10.
+
 ### What it is, and why it is the one that matters
 
 It is the only harness in this repository that dispatches a synthesised chain

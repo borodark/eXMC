@@ -53,9 +53,11 @@ slower host path) if the correspondence ever breaks.
 
 ### Verification
 
-`bench/leapfrog_leaf_diff.exs` — all four arrays agree with the host leapfrog
-to ~1e-15 across three (eps, q0, p0) settings, and the logp offset is constant
-along the trajectory, so the Metropolis ratio is equivalent.
+`test/nuts/leapfrog_leaf_diff_test.exs` — all four arrays agree with the host
+leapfrog to ~1e-15 across three (eps, q0, p0) settings, and the logp offset is
+constant along the trajectory, so the Metropolis ratio is equivalent. This ran
+as a bench that asserted nothing when the above was written; since `acccf8348`
+it is a test, and the agreement is bounded at 1e-13 from fleet measurement.
 
 The posterior, 300 warmup + 500 samples, seed 42, `compiler: :vulkan`:
 

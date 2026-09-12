@@ -246,16 +246,28 @@ step 3 (the sweep, above), step 4 (SPIR-V fell: d=2 41992 -> 35392, d=3
 568456 -> 492552) and the local half of step 5 (super-io Vulkan arm 688/1,
 the same Cauchy KS failure that predates the change; an `ess/1` flake on an
 unseeded `:rand.normal()` passed 3/3 on re-run). **Step 1 was NOT done** —
-the goldens are a one-shot external check, not a gate in the suite, and
-promoting `leapfrog_leaf_diff.exs` remains open. Step 5's fleet and
+the goldens are a one-shot external check, not a gate in the suite.
+(Promoting `leapfrog_leaf_diff.exs` was open when this was written; it landed
+2026-09-11 as `acccf8348` — see item 1 below.) Step 5's fleet and
 posteriordb arms remain open.
 
-1. **A gate that can fail, first.** `bench/leapfrog_leaf_diff.exs` is the only
-   shader-vs-host numerical harness and it computes `ok_q/ok_p/ok_g/ok_lp` and
-   *returns* them — nothing asserts. Promote it into `test/` with those
-   booleans asserted **before** touching the emitter, and confirm it fails when
-   deliberately broken. `NEXT.md` already carries this as Wave 2 work; it is a
-   prerequisite here, not a follow-up.
+1. ~~**A gate that can fail, first.**~~ **DONE 2026-09-11, `acccf8348`** —
+   `test/nuts/leapfrog_leaf_diff_test.exs`, tagged `:requires_vulkan`, five
+   tests. The bench copy is deleted. Two things this step learned that the
+   plan did not anticipate, and that the emitter work has to respect:
+
+   * the threshold is **fixture-calibrated**, not a property of the shader.
+     `1e-13` / `1e-12` are ~15x and ~35x the fleet worst, but making the three
+     sigmas identical — still a legitimate model — reaches 1.212e-13 on
+     geometry alone. Measure any fixture added here; do not widen the bound
+     for a model that is not in the file.
+   * the assertion that catches a wrong trajectory is the **element-wise
+     `logp`** one, not the offset-constancy check the plan named. Confirmed by
+     mutation: a one-step `logp` lag fails all five tests before reaching the
+     offset check.
+
+   Since this change is *not* bit-identical, that is the instrument the
+   obs-axis work is measured against — and 1e-13 is what it has to clear.
 2. **Bit-identity, which is the whole claim.** For each of the three models
    above, render the GLSL before and after, compile both, dispatch both with
    the same q/p/eps/K, and assert the four output buffers are **byte-identical**
