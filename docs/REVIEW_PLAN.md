@@ -116,7 +116,18 @@ Existing pieces: `bench/nuts_truth.exs` and `bench/observed_model_evidence.exs`
    value, so their 1e-15 agreement does not speak to this. Measure: a
    leaf-diff fixture with a Cauchy or Student-t likelihood, per host, and the
    same under `:polynomial` on asus (the only box where that lever does not
-   segfault). nx_vulkan's elementwise f64 shaders make the same trade
+   segfault). **First measurement, 2026-09-12, nx_vulkan
+   `scripts/arch_float_divergence.exs`:** max rel. error vs host for `log`
+   and the Cauchy kernel is **1.5e-06 to the digit on Ampere (super-io),
+   Turing and Maxwell (asus, one process, both cards)**, at f32 and f64
+   alike — the f32-inside-f64 cast measured directly. `sqrt` is exact on all
+   three (the Kepler 3-ULP divergence remains the only one observed). `exp`
+   at f64: 1.3e-07 here, 1.8e-07 reported from asus (dtype of that figure
+   unconfirmed). So the hypothesis is weakened for `log`, not killed: a
+   max-over-seven-points statistic is not bit identity, and Kepler is
+   untested. The decisive run is the Validator's Cauchy case on asus, per
+   card, under `:f32_cast` and `:polynomial` — asked of the nx_vulkan
+   session. nx_vulkan's elementwise f64 shaders make the same trade
    (`MISSION.md` §3.2 there), but eXMC's chain path never calls them; they are
    reached only by the per-op fallback, where `Nx.pow(t, 2)` falls back to
    the host (exact, 604x slower) and `t * t` stays on the GPU (exact f64).
