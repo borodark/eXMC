@@ -184,7 +184,15 @@ Dialyzer would enforce; no bare `:unsupported` remains.
    `Exmc.NUTS.BatchCoordinator` handles `:cross_device` as a refusal or a bug.
    `scripts/fleet_verify.sh` should pin the device per host by UUID the way
    nx_vulkan's item 4 proposes, and refuse on mismatch; on asus it currently
-   tests whichever card enumerates first.
+   tests whichever card enumerates first. **Read nx_vulkan
+   `docs/MULTI_DEVICE.md` (`3c5ae2d`) first** — it is the consumer description
+   of the surface: `Nx.Vulkan.Device.resolve/1` (selector or slot →
+   `{:ok, slot, info}`), `ChainTrace.dispatch_f64/7`, `Node` per device,
+   `Device.{class,f64?,weak?}/1` for a named device, and the startup cost
+   (13 s for the first Vulkan client in a BEAM). One rough edge it records:
+   `:cross_device` is a return on the NIF and chain paths this repo uses, but
+   a raise (a `MatchError` carrying the tuple) on Nx-level ops — irrelevant
+   while this repo stays on the chain path, and to be said so if that changes.
 3. Rustler range: `~> 0.36` here admits 0.37, which nx_vulkan says is broken.
    Narrow to `~> 0.36.0` or measure 0.37.
 4. Docstrings that cite nx_vulkan state were fixed 2026-09-12; add a grep to
