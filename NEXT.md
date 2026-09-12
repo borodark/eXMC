@@ -48,8 +48,10 @@ between GPUs — the leaf-diff table's, not the transcendentals'.
 rule, applied to the check it had missed); the error map carries `n_eff` and
 `m_eff`; the known-case unit test gets i.i.d.-shaped fixtures (its ramps had
 ESS ≈ 2.5, which under the rule correctly widened the bound past 1.0).
-Validator file: 28 tests, 0 failures on the Vulkan arm. Full `mix check`
-result below when it lands.
+Validator file: 28 tests, 0 failures on the Vulkan arm. Full `mix check` at
+`f79fdc27b`, auto-detected Vulkan, nx_vulkan `16d13f3`: **723 tests, 0
+failures**, exit 0, 820 s — the first fully green run of this suite on
+super-io. MEASURED.
 
 **Two things left open by this.**
 - **Seed 46** rejects even ESS-sized (d = 0.30) with a 4× ESS gap between
