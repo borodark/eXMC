@@ -61,7 +61,7 @@ super-io, and reused: the data and the posterior are identical everywhere.
 | host | OS, CPU | GPU | exmc arms | PyMC arms | tables |
 |---|---|---|---|---|---|
 | **super-io** | Linux x86_64 | RTX 3060 Ti | **EXLA** (headline), Vulkan (information) | default NUTS, nutpie | single-chain, 4-chain |
-| **asus** | FreeBSD 15 | GTX 1660 Ti + Quadro M4000, driver 580 (to confirm) | **Vulkan**, pinned by uuid; CPU host tree | default NUTS; nutpie if it builds | single-chain, 4-chain |
+| **asus** | FreeBSD 15, Xeon E5-2699 v3 (18 cores / 36 threads), 64 GiB | **GTX 1660 Ti** (uuid `cd6c2df3`), driver 580.178.04; the Quadro M4000 is not raced (a slower class) | **Vulkan**, pinned by uuid; CPU host tree | default NUTS; nutpie if it builds | single-chain, 4-chain |
 | **NUC** | FreeBSD 15, i3-6100U (2 cores / 4 threads), 8 GB | HD 520, Mesa ANV | **Vulkan**; CPU host tree | default NUTS; nutpie if it builds | single-chain only |
 
 **Why the FreeBSD hosts matter.** FreeBSD has no EXLA and no CUDA. There the
@@ -87,9 +87,13 @@ the error.
 
 **asus** is shared (the nx_vulkan two-GPU work, the ex_pathmc session). Its
 `~/exmc_oss` belongs to the two-GPU work, so the race uses a separate checkout
-(`~/exmc_race`) and a venv under it. It needs an agreed window with the box
-otherwise idle. Pending the nx_vulkan session's answer on CPU, RAM, toolchain
-and window.
+(`~/exmc_race`) and a venv under it (agreed by the nx_vulkan session;
+`~/exmc_oss` and `~/nx_vulkan` stay untouched). Toolchain there: python3.12
+from pkg with bundled pip via venv, clang 19.1.7 (gcc13 also present), cargo
+1.94.0. **The window is the operator's to schedule**: the box is shared with
+the nx_vulkan session (background cargo builds and suites on the M4000) and
+ex-pathmc-39 (sampling tests on the 1660 Ti). Never `nvidia-smi -pm 1` there;
+it is host-fatal (nx_vulkan NEXT.md §0a).
 
 **The NUC** goes last and overnight. The 4-chain table is skipped there (four
 chains would saturate its two cores and turn the table into a contention
@@ -209,6 +213,14 @@ gate 1 and warm-ups ≈ 10 min. **About 2.5–3 hours of super-io**, plus the
 harness work before it. asus: similar or somewhat longer (no EXLA; the CPU
 host-tree arm is slow on logistic and SV). The NUC: several times that,
 overnight, single-chain table only.
+
+## Step 1 — DONE 2026-09-13, super-io
+
+`bench/pymc_race/.venv`, lock in `bench/pymc_race/requirements.lock`:
+Python 3.12.3, **pymc 6.3.2, pytensor 3.3.1, arviz 1.3.0, nutpie 0.16.11**,
+numpy 2.5.3. Both samplers sample a Normal/Exponential model. `pm.sample` now
+returns a `DataTree` (ArviZ 1.x), and `arviz.ess(idata, method="bulk")` works on
+it; that is the call score.py uses for both frameworks.
 
 ## Order of work
 
