@@ -33,30 +33,21 @@ The BEAM gives us lightweight processes, isolation, and message passing. That ch
 
 ## Performance
 
-Seven-model benchmark against PyMC (1-chain, 5-seed medians, 1000 warmup + 1000 draws):
+**Not published at the moment, deliberately.** The PyMC comparison that used to
+sit here (seven models, February 2026) was measured before two NUTS correctness
+fixes that change which states a trajectory draws, so its ESS-per-second figures
+describe a sampler that no longer exists. It is kept, with that banner, in
+[`STANDARD_BENCHMARKS.md`](STANDARD_BENCHMARKS.md).
 
-```
-                PyMC ESS/s   eXMC ESS/s   Ratio    Winner
-                ──────────────────────────────────────────
-simple (d=2)         576          469      0.81x    PyMC
-medium (d=5)         157          298      1.90x    eXMC
-stress (d=8)         185          215      1.16x    eXMC
-eight_schools (d=10)   5           12      2.55x    eXMC
-funnel (d=10)          6            2      0.40x    PyMC
-logistic (d=21)      336           69      0.21x    PyMC
-sv (d=102)             1            1      1.20x    eXMC
-```
+It is being re-run against the latest PyMC release, with a committed harness,
+the same ESS estimator for both frameworks, a correctness check on every run,
+and the commit, host and arm recorded ([`docs/PYMC_RACE_PLAN.md`](docs/PYMC_RACE_PLAN.md)).
+Numbers return here when that run exists.
 
-**eXMC wins 4 models to PyMC's 3**, including the canonical Eight Schools benchmark (2.55x) and 102-dimensional stochastic volatility (1.20x). PyMC wins on throughput-bound models where compiled C++ per-step speed dominates. eXMC wins on adaptation-bound models where posterior geometry is hard.
-
-With 5-node distribution, eXMC achieves 2.88x average scaling:
-
-```
-                1ch ESS/s   5-node ESS/s   PyMC 4ch   Dist vs PyMC
-                ─────────────────────────────────────────────────────
-medium              271           841          680       1.24x eXMC
-funnel              1.6           5.4          4.1       1.32x eXMC
-```
+What is measured today, with its provenance, is the GPU arm's reach
+([`docs/ARMS.md`](docs/ARMS.md)): on hosts without EXLA, NUTS on the fused chain
+shader against the host tree. That is not a speed claim against EXLA, which wins
+wherever it exists.
 
 ## Quick Start
 
@@ -173,7 +164,7 @@ end
 - **Prior and posterior predictive.** `Exmc.Predictive.prior_samples/2` and `posterior_predictive/2` for model checking.
 - **Custom distributions.** `Exmc.Dist.Custom` takes a `logpdf` closure — any differentiable density. Used for Bernoulli likelihoods, random walk models, and domain-specific densities.
 - **Fault-tolerant tree building.** Four layers: IEEE 754 NaN/Inf detection, subtree early termination, trajectory-level divergence tracking, process-level crash recovery via `try/rescue`.
-- **Deterministic seeding.** Erlang `:rand` with explicit state threading. Every chain is reproducible given `{seed, tuning_params, ir}`.
+- **Deterministic seeding.** Erlang `:rand` with explicit state threading. On one host, one build and one arm, a chain is reproducible bit-for-bit given `{seed, tuning_params, ir}`. Across hosts it is reproducible statistically, not bitwise — see [Reproducibility](#reproducibility).
 
 ## Architecture
 
@@ -249,9 +240,69 @@ EXLA > Vulkan > Evaluator unless `config :exmc, :compiler` names it:
 
 All three are f64. `Exmc.JIT.describe/0` prints which arm a process has,
 and `test/test_helper.exs` prints it at the top of every suite run — read
-that line before reading a failure. EMLX (Apple Metal) is postponed until
-there is hardware to test on; Apple GPUs are expected to arrive through
-nx_vulkan and MoltenVK instead (`lib/exmc/jit.ex` has the reasoning).
+that line before reading a failure.
+
+The GPU arm is about **reach, not speed**. Where EXLA exists, use it: on the
+same machine, EXLA on the CPU beats the Vulkan per-op path at every model size
+measured. The Vulkan arm exists for hardware EXLA cannot reach, and there it is
+the difference between a GPU and the interpreter: NUTS on the fused chain
+shader ran 9–10x faster end to end than the host tree on a FreeBSD GT 750M and
+on an Intel HD 520 ([`docs/ARMS.md`](docs/ARMS.md)).
+
+### Where it runs
+
+Support is stated per platform and arm, and it is what the fleet measures, not
+what ought to work. Every row names the hardware it was measured on; the
+expected suite result per host, and the commit it was measured at, are in
+[`docs/ARMS.md`](docs/ARMS.md).
+
+| tier | platform | arm | measured on |
+|---|---|---|---|
+| **1** | Linux x86_64 | EXLA | RTX 3060 Ti host (CUDA build, host client in tests) |
+| **1** | FreeBSD 15 amd64, NVIDIA | Vulkan | GeForce GT 650M, GT 750M (Kepler, driver 470) |
+| **2** | FreeBSD 15 amd64, Intel iGPU | Vulkan (Mesa ANV) | HD Graphics 520 (Skylake) |
+| **2** | Linux aarch64, NVIDIA Tegra | Vulkan | Jetson Nano, Tegra X1 (L4T 32.7) |
+| **2** | Linux x86_64, NVIDIA | Vulkan | RTX 3060 Ti — run for comparison against EXLA on the same box |
+| — | anywhere OTP 27 and Elixir 1.18 run | CPU | the reference arm; no native code |
+
+- **Tier 1** is a release gate: the full suite and the consumer-path smoke test
+  (`scripts/vulkan_smoke.exs`, sampling under `mix run`) run at the release
+  commit, and a result that differs from `docs/ARMS.md` blocks the release.
+- **Tier 2** runs in the same fleet with the same gates, and its known issues
+  are documented rather than release-blocking: slow-host timeouts on the
+  Jetson; on Mesa ANV, `log`/`exp` and f64 division that differ from NVIDIA in
+  the last bits (exmc's chain shaders never emit GLSL `pow`, so ANV's
+  negative-base `pow` cannot reach them).
+- **Commodity integrated GPUs are a target class.** Intel and AMD iGPUs on
+  Mesa are the largest installed base of GPUs without CUDA, which is exactly
+  the hardware the Vulkan arm exists for. Intel (ANV) is Tier 2 today; AMD
+  (RADV) joins the table when a fleet host runs it.
+- **Not supported, because never run:** macOS and Apple GPUs (EMLX is
+  postponed for want of hardware, and nothing has run through MoltenVK), AMD
+  GPUs (Mesa RADV) until the above, Windows, and Vulkan devices without f64.
+  Some of these may work; none is claimed until a host in the fleet runs it.
+
+### Reproducibility
+
+- **Same host, same build, same arm, same seed:** identical draws, bit for bit.
+- **Across hosts, or across arms:** the same posterior, statistically — not the
+  same draws. Chains start identical and diverge once a last-bit difference
+  flips an accept/reject decision, which a long chain eventually does. The
+  differences are measured, not hypothetical: the host `libm` returns different
+  bits for `log`, `exp` and `pow` on glibc 2.39 x86_64, glibc 2.27 aarch64 and
+  FreeBSD's msun (only `sqrt`, which IEEE 754 requires to be correctly rounded,
+  agrees), and GPU vendors differ in `log`/`exp` and division. This holds on
+  the CPU arm too; it is not a GPU artifact.
+
+So compare runs from different machines the way you would compare two
+independent samplers: posterior means within their Monte-Carlo standard errors
+(ESS-sized), not equal to the digit. That is also how exmc is validated: the
+suite's statistical checks are sized by ESS, and `bench/nuts_truth.exs` and
+`bench/nuts_width_race.exs` score posteriors against closed-form truth on every
+host. Every sampler result carries `stats.provenance` (arm, device, versions,
+host, seed), and `test/reproducibility_contract_test.exs` enforces the same-host
+promise on every arm. For an exact replay, match that record and `mix.lock`.
+The measurements are in [`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md).
 
 ### Dependencies and how they are wired
 
@@ -295,8 +346,9 @@ scripts/fleet_verify.sh           # the fleet gate: every GPU box, counts compar
 and excludes `:vulkan_known_failure` instead. The two Vulkan invocations
 above are the same arm and report the same failures (since 2026-09-12; before
 that the explicit form allowed per-op fallback for one refused model and the
-auto-detected form did not). The current per-host results and their known
-failures are in the dated Status sections at the top of [`NEXT.md`](NEXT.md).
+auto-detected form did not). `fleet_verify.sh` also pins each host's GPU by
+uuid and runs the consumer-path smoke test before the suite. The expected
+per-host results and their known failures are in [`docs/ARMS.md`](docs/ARMS.md).
 
 ## The Ecosystem: _Three Comrades_
 
