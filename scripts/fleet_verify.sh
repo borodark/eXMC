@@ -39,7 +39,8 @@
 #      time the fix was to re-run the whole suite to recover names that had
 #      already been printed once.
 #
-# Exit status is the suite's, so a caller can gate on it. Read the output for
+# Exit status is the suite's, so a caller can gate on it -- or 4 when the suite
+# is green and the consumer-path smoke (section 4) failed. Read the output for
 # the failure names -- the summary line alone tells you a count, not a fact.
 #
 # ONE THING THIS SCRIPT CANNOT GUARD: the caller's own timeout. A
@@ -235,7 +236,24 @@ if [ -n "$device_fail" ]; then
   exit 2
 fi
 
-# --- 4. the suite, unfiltered -----------------------------------------------
+# --- 4. the consumer path ---------------------------------------------------
+#
+# `mix run`, not `mix test`: the path a release, a consumer project and every
+# bench take. On 2026-09-13 the suite was green on every FreeBSD host while this
+# path could not sample on the GPU at all (`:crypto` undeclared; `mix test`
+# loads it regardless). scripts/vulkan_smoke.exs samples two models through the
+# chain shader and checks synthesis, chain-dispatch count and loose moments.
+#
+# It does not stop the suite -- a broken consumer path and a failing suite are
+# both worth knowing in one run -- but it gates the exit status: a smoke failure
+# with a green suite exits 4.
+echo "### SMOKE START"
+EXMC_COMPILER=vulkan MIX_ENV=test mix run --no-compile scripts/vulkan_smoke.exs </dev/null 2>&1 |
+  grep -vE '^\[nx_vulkan_vulkano\]'
+smoke_status=${PIPESTATUS[0]}
+echo "### SMOKE EXIT $smoke_status"
+
+# --- 5. the suite, unfiltered -----------------------------------------------
 
 echo "### SUITE START"
 
@@ -267,7 +285,7 @@ rm -f "$suite_log"
 
 echo "### NOTE: read the failure blocks above the summary line, not the count alone"
 
-# --- 5. posteriordb, opt-in --------------------------------------------------
+# --- 6. posteriordb, opt-in --------------------------------------------------
 
 if [ "$pdb" = "1" ]; then
   n_fixtures=$(ls benchmark/posteriordb/posteriordb_processed 2>/dev/null | wc -l)
@@ -288,4 +306,10 @@ if [ "$pdb" = "1" ]; then
   echo "### PDB EXIT $?"
 fi
 
+# The suite's status first, since its failures say more; a green suite over a
+# broken consumer path is not green.
+if [ "$suite_status" = "0" ] && [ "$smoke_status" != "0" ]; then
+  echo "### EXIT 4: suite green, consumer-path smoke FAILED -- see ### SMOKE above"
+  exit 4
+fi
 exit $suite_status
