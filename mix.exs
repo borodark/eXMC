@@ -30,8 +30,16 @@ defmodule Exmc.MixProject do
     ]
   end
 
+  # `:crypto` because CustomSynth hashes every synthesised shader with
+  # `:crypto.hash/2` (content-addressed SPIR-V). Undeclared, it only worked where
+  # something else put crypto on the code path: `xla` (exla's dependency)
+  # declares it. On FreeBSD exla is off the dependency list, so under `mix run`
+  # synthesis raised "module :crypto is not available". `try_synthesise`
+  # swallowed the error, the model fell back to a family meta nothing
+  # dispatches, and the first chain died in `Dispatch.do_chain/8`. MEASURED
+  # 2026-09-13, bench/nuts_truth.exs COMPILER=vulkan on the NUC and mac-248.
   def application do
-    [extra_applications: [:logger]]
+    [extra_applications: [:logger, :crypto]]
   end
 
   defp package do
