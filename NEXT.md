@@ -66,7 +66,8 @@ unchanged and follow these.
    one.** The `ld.so.conf.d` entry alone left `nvshmem_bootstrap_uid.so.3`
    and `nvshmem_transport_ibrc.so.3` unresolved, because `ldconfig` skips
    names without a `lib` prefix. Two symlinks in `/usr/lib/x86_64-linux-gnu`
-   finished it (`docs/EXLA_CPU_BUILD.md` has both steps and why). Verified
+   finished it (`docs/EXLA_CPU_BUILD.md` has both steps and why;
+   `bench_results/EXLA_LOADER_FIX.md` records exactly what changed, and how to undo it). Verified
    from a shell with no `LD_LIBRARY_PATH`: `ldd` reports nothing missing,
    `client: :cuda` computes on the 3060 Ti, and `Exmc.JIT.describe/0` says
    `compiler=EXLA (configured: nil)`. **A bare `mix check` here is now the

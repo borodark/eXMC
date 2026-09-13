@@ -34,7 +34,9 @@ as "not installed":
 find / -name 'libnvshmem_host.so.3' 2>/dev/null
 ```
 
-Make them visible to the system loader, once per host. It takes two steps,
+Make them visible to the system loader, once per host (what was actually
+done on super-io, with timestamps and before/after output, is recorded in
+`bench_results/EXLA_LOADER_FIX.md`). It takes two steps,
 because `ldconfig` only indexes files whose names start with `lib`, and two of
 the four do not:
 
