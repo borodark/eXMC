@@ -59,8 +59,10 @@ CmdStan).** `bench/pymc_race/reference_compare.py`:
 3. **JAX baseline** (operator, 2026-09-13 night). Set up `.venv-jax` on super-io
    and run gate 1b.
 4. **exmc tree-health gate**: a test on mean tree depth, steps per draw and
-   divergence rate. ex-pathmc-39 measured the swapped-endpoint defect as 161x
-   fewer leapfrog steps per draw on a weakly identified model.
+   divergence rate. ex-pathmc-39 measured 161x fewer steps per draw at
+   `d85630ab6` than at `509e22b26`. That range holds three changes and is not
+   yet attributed. exmc's own ridge probe could not tell the old tree from the
+   fixed one (docs/PYMC_RACE_PLAN.md step 6).
 5. **Harness, pilot, full super-io run**; then asus (the reciprocal reference
    run first), then the NUC.
 6. **Remaining work.** Land `wip/shader-size`. Fix SV synthesis on the Vulkan

@@ -383,13 +383,20 @@ Jacobian, JAX backend against the C backend:
    backward subtrees with swapped endpoints.
 5. ~~**JAX baseline setup, super-io**~~ DONE: `.venv-jax`, numpyro on CPU and
    CUDA, gate 1b PASS on all seven (Step 5 above).
-6. **exmc tree-health gate** (from ex-pathmc-39's evidence on the same defect:
-   its mediation model went from 1.95 leapfrog steps per draw and 94 of 150
-   divergent at `d85630ab6` to 314.5 steps and 19 at `509e22b26`, while its test
-   checked only names). An exmc test asserts mean tree depth, steps per draw
-   and divergence rate on a weakly identified model, within bounds measured on
-   the fixed tree and on the Elixir tree. It lands before the pilot, so a tree
-   regression cannot quietly produce race numbers.
+6. **exmc tree-health gate.** ex-pathmc-39's mediation model went from 1.95
+   leapfrog steps per draw and 94 of 150 divergent at `d85630ab6` to 314.5
+   steps and 19 at `509e22b26`, while its test checked only names.
+   - **Not yet attributed.** That range also holds the vector-RV NCP
+     reconstruction fix (`134f9d3aa`) and the Rustler 0.38 bump.
+   - **A probe that did not discriminate.** exmc's own weakly identified
+     regression (a ridge, 300 + 300, 3 seeds, EXLA and CPU arms) gave the same
+     tree statistics with the old `going_right=true` as with the fix: about
+     90–140 steps per draw, depth about 6.2, no divergences.
+   - **So:** the gate needs a model shown to fail on a real regression. The
+     candidate is pathmc's mediation model, once a one-commit comparison
+     (`05944d18a` against `509e22b26`) says which change it measured.
+   - **Until then**, nuts_test 21b (speculative and direct NIF trees identical)
+     is the regression test for the direction defect.
 7. **Harness:** `run_pymc.py` (arms: default, nutpie, numpyro-cpu,
    numpyro-cuda; blackjax control), `run_exmc.exs`, `score.py`.
 8. Pilot: one seed, all arms, all models, end to end through `score.py`.
