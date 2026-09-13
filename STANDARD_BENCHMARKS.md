@@ -1,3 +1,12 @@
+> **HISTORICAL — do not quote as current.** Measured in February 2026, before
+> two NUTS correctness fixes (2026-08: an invalid doubling was still merged into
+> the trajectory, and the chain shader paired each draw with the previous step's
+> log-density; MISSION.md §6.1). Both change which states are drawn, and so the
+> ESS these figures are built on. No commit, host or backend was recorded, and
+> the harness lives outside this repository. The README no longer publishes
+> these numbers; they are superseded by the race planned in
+> [`docs/PYMC_RACE_PLAN.md`](docs/PYMC_RACE_PLAN.md) once it has run.
+
 # The Standard Tests
 
 *In which a probabilistic programming framework built on the wrong virtual machine submits itself to the canonical benchmarks, and discovers what it is made of*
