@@ -263,8 +263,16 @@ defmodule Exmc.NUTS.Vulkan.ValidatorTest do
 
   describe "ess/1 — standard errors must not assume iid draws" do
     test "iid samples report ESS ~ n" do
-      xs = for _ <- 1..2000, do: :rand.normal()
-      assert_in_delta Validator.ess(xs) / 2000, 1.0, 0.15
+      # Seeded: this used to draw from the unseeded process :rand, so ExUnit's
+      # run seed picked the fixture, and `assert_in_delta ..., 1.0, 0.15` failed
+      # on 71 of 2000 seeds (3.55%). Geyer's estimator is noisy on iid draws at
+      # n = 2000 and clamps at n from above. MEASURED 2026-09-13 over 2000
+      # seeds: ESS/n min 0.724, 0.1% quantile 0.747, 1% 0.802, median 1.0,
+      # none below 0.70. The failure first surfaced on the NUC (seed 716078,
+      # ESS/n 0.784) and reproduced on super-io to the last digit.
+      xs = sample_normal(0.0, 1.0, 2000, 11)
+      ratio = Validator.ess(xs) / 2000
+      assert ratio >= 0.70 and ratio <= 1.0, "ESS/n #{ratio} for iid draws"
     end
 
     test "an AR(1) chain reports the autocorrelation-corrected ESS" do
