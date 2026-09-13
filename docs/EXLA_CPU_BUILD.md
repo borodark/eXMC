@@ -34,15 +34,39 @@ as "not installed":
 find / -name 'libnvshmem_host.so.3' 2>/dev/null
 ```
 
-Register those directories with the system loader, once per host:
+Make them visible to the system loader, once per host. It takes two steps,
+because `ldconfig` only indexes files whose names start with `lib`, and two of
+the four do not:
 
 ```sh
 NV=/home/io/.local/lib/python3.12/site-packages/nvidia
+# 1. the lib-prefixed ones (libnvshmem_host.so.3, libnvrtc-builtins.so.12.9)
 printf '%s\n' "$NV/nvshmem/lib" "$NV/cuda_nvrtc/lib" |
   sudo tee /etc/ld.so.conf.d/zz-nvidia-pip-wheels.conf
 sudo ldconfig
-ldd _build/test/lib/exla/priv/libexla.so | grep 'not found'   # prints nothing
+# 2. the two ldconfig will never index; the loader still searches its
+#    built-in directories by exact name (`ld.so --help` lists them)
+sudo ln -s $NV/nvshmem/lib/nvshmem_bootstrap_uid.so.3 \
+           $NV/nvshmem/lib/nvshmem_transport_ibrc.so.3 /usr/lib/x86_64-linux-gnu/
+# from the exmc checkout root; prints nothing
+ldd _build/test/lib/exla/priv/libexla.so | grep 'not found'
 ```
+
+Step 1 alone leaves `nvshmem_bootstrap_uid.so.3` and
+`nvshmem_transport_ibrc.so.3` unresolved; that was measured on 2026-09-12,
+after an earlier version of this page gave step 1 as the whole fix. Both are
+`NEEDED` by `libxla_extension.so`, not by `libexla.so`. The distro package
+`libnvshmem3-cuda-12` (3.7.2), if installed, does not help: it keeps its files
+under `nvshmem/12/`, where nothing searches, and ships
+`nvshmem_transport_ibrc.so.6`, while XLA was linked against `.so.3`.
+
+No new shell is needed after either step. Neither touches the environment; the
+loader reads the cache and its directories when each process starts.
+
+A per-checkout alternative with no sudo: `libxla_extension.so`'s RUNPATH
+already looks for a pip layout at `$ORIGIN/../../nvidia`, so `ln -s $NV
+deps/exla/cache/nvidia` also works. But every checkout needs its own link, and
+`mix deps.clean exla` removes it.
 
 **Why the loader and not `LD_LIBRARY_PATH`.** This host ran on an exported
 `LD_LIBRARY_PATH` for a month, and it failed the same way every time: a shell
@@ -50,7 +74,9 @@ that had not exported it — an agent, `nohup`, cron, a fresh terminal — got a
 different backend, silently. The loader reads that variable once at process
 start, so nothing inside the BEAM can set it, and `test/distributed_test.exs`
 starts `:exla` on `:peer` nodes that inherit whatever the launching shell had.
-An `ld.so.conf.d` entry has no such gap.
+The loader's own configuration has no such gap. Verified 2026-09-12 from a
+non-interactive shell with no `LD_LIBRARY_PATH`: EXLA starts, `client: :cuda`
+computes on the RTX 3060 Ti, and `Exmc.JIT.describe/0` reports `compiler=EXLA`.
 
 **Why `zz-`.** The `cuda_nvrtc` wheel also carries `libnvrtc.so.12` (12.9),
 and the system has its own (12.6, `/usr/local/cuda`). Files are read in sort

@@ -62,12 +62,16 @@ unchanged and follow these.
 
 **Next, in order**
 
-1. **Install the loader entry** (needs sudo; not done before the reboot). Use
-   the three-line block in `docs/EXLA_CPU_BUILD.md`. Then, from a shell with
-   no `LD_LIBRARY_PATH`: `ldd _build/test/lib/exla/priv/libexla.so | grep
-   'not found'` prints nothing. Then update the agent memory
-   `exla-ld-library-path-super-io` to say the loader entry is the mechanism.
-2. **Track 3 — the EXLA arm at HEAD**, now unblocked by 1:
+1. ~~Install the loader entry~~ **DONE 20:00, and it took two steps, not
+   one.** The `ld.so.conf.d` entry alone left `nvshmem_bootstrap_uid.so.3`
+   and `nvshmem_transport_ibrc.so.3` unresolved, because `ldconfig` skips
+   names without a `lib` prefix. Two symlinks in `/usr/lib/x86_64-linux-gnu`
+   finished it (`docs/EXLA_CPU_BUILD.md` has both steps and why). Verified
+   from a shell with no `LD_LIBRARY_PATH`: `ldd` reports nothing missing,
+   `client: :cuda` computes on the 3060 Ti, and `Exmc.JIT.describe/0` says
+   `compiler=EXLA (configured: nil)`. **A bare `mix check` here is now the
+   EXLA arm.**
+2. **Track 3 — the EXLA arm at HEAD**, unblocked by 1:
    `EXMC_COMPILER=exla mix check`, no exports. Last measured at `a178a0833`
    (652 tests). Note that **a bare `mix check` on super-io becomes the EXLA
    arm** once EXLA loads, because auto-detect prefers it. Every Vulkan count
