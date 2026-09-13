@@ -31,6 +31,7 @@ deps/exla/cache/*
 /cuda_sdk_lib/
 /data/*
 bench/pymc_race/.venv/
+bench/pymc_race/.venv-jax/
 bench/pymc_race/parity_points.json
 bench/pymc_race/__pycache__/
 bench/pymc_race/reference/

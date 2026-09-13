@@ -171,7 +171,7 @@ headline and (b) a one-seed control, reported beside it.
 | eXMC, Vulkan arm on super-io | information only, not in the headline | optional |
 | **PyMC 6.3.2 + numpyro 0.21.0 on JAX 0.11.1, CPU** | `pm.sample(nuts_sampler="numpyro")`, JAX on the same pinned cores | super-io |
 | **PyMC 6.3.2 + numpyro 0.21.0 on JAX 0.11.1, CUDA** | the same on the RTX 3060 Ti | super-io |
-| PyMC + blackjax 1.6.2 on JAX | `nuts_sampler="blackjax"` | one-seed control, not scored |
+| PyMC + blackjax 1.5 on JAX | `nuts_sampler="blackjax"` | one-seed control, not scored |
 
 A second table, same arms, **4 chains in parallel** (`chains=4, cores=4`
 against `sample_chains/3`), total ESS/s. That is where the BEAM claim lives.
@@ -324,6 +324,37 @@ minus exmc's own Jacobian), on exmc's CPU arm with NCP off:
 Also measured: February's exmc funnel clamped y/2 to [-20, 20]; the race's
 does not.
 
+## Step 5 — DONE 2026-09-13 (night), super-io: the JAX venv, and gate 1b passes
+
+**The venv.** `bench/pymc_race/.venv-jax`, lock `requirements-jax.lock`:
+pymc 6.3.2, pytensor 3.3.1, arviz 1.3.0, numpy 2.5.3 and scipy 1.18.1, the same
+as the main venv. Also jax and jaxlib 0.11.1 with the CUDA 13 plugin,
+numpyro 0.21.0 and **blackjax 1.5**.
+- **Why not blackjax 1.6.x.** 1.6, 1.6.1 and 1.6.2 all fail inside PyMC 6.3.2's
+  blackjax path: `TypeError: build_kernel.<locals>.kernel() got an unexpected
+  keyword argument 'progress_bar'`. 1.5 and 1.4 sample, so 1.5 is the newest
+  that works with the latest PyMC.
+- **Smoke test on `simple`, 1000 + 1000, one chain.** numpyro gave mu 3.144,
+  sigma 1.164 on CPU and mu 3.140, sigma 1.165 on CUDA (reference mu 3.136,
+  sigma 1.169). PyMC switches on `jax_enable_x64` itself, and the draws are
+  float64.
+- **Device check.** `jax.devices()` read CudaDevice(id=0) with the GPU visible
+  and CpuDevice with `CUDA_VISIBLE_DEVICES=""`.
+
+**Gate 1b** (`parity_jax.py`, tolerance 1e-9). Points: 200 around the initial
+point and 200 from the reference posteriors. Log density and gradient with the
+Jacobian, JAX backend against the C backend:
+
+| model | CPU logp | CPU dlogp | CUDA logp | CUDA dlogp | result |
+|---|---|---|---|---|---|
+| simple | 1.3e-15 | 1.5e-14 | 8.3e-16 | 1.1e-14 | PASS |
+| medium | 9.2e-16 | 1.5e-14 | 7.1e-16 | 1.3e-14 | PASS |
+| stress | 7.1e-16 | 1.8e-14 | 5.0e-16 | 1.4e-14 | PASS |
+| eight_schools | 5.3e-16 | 3.9e-15 | 3.0e-16 | 2.3e-15 | PASS |
+| funnel | 1.9e-15 | 2.1e-15 | 1.9e-15 | 2.6e-15 | PASS |
+| logistic | 1.6e-15 | 1.7e-14 | 1.6e-15 | 1.0e-14 | PASS |
+| sv | 2.0e-14 | 1.9e-12 | 2.9e-14 | 1.9e-12 | PASS |
+
 ## Order of work
 
 1. ~~venv, pins, `requirements.lock`; confirm PyMC 6.3.2 and nutpie import and
@@ -334,9 +365,8 @@ does not.
    exmc `509e22b26`: all seven AGREE (NEXT.md has the table). The references
    found an exmc sampler defect first: the speculative subtree NIF built
    backward subtrees with swapped endpoints.
-5. **JAX baseline setup, super-io:** `.venv-jax` and `requirements-jax.lock`;
-   numpyro samples `simple` on CPU and on CUDA (the device is checked, not
-   assumed); **gate 1b** on all seven.
+5. ~~**JAX baseline setup, super-io**~~ DONE: `.venv-jax`, numpyro on CPU and
+   CUDA, gate 1b PASS on all seven (Step 5 above).
 6. **exmc tree-health gate** (from ex-pathmc-39's evidence on the same defect:
    its mediation model went from 1.95 leapfrog steps per draw and 94 of 150
    divergent at `d85630ab6` to 314.5 steps and 19 at `509e22b26`, while its test
