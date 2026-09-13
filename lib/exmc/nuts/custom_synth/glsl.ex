@@ -521,6 +521,28 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
     end
   end
 
+  # --- the same contraction when the design matrix has ONE column ---
+  #
+  # With p >= 2 the gradient reaches the clause above as rank-1 per-column
+  # slices, because `slot_slice/2` stacks the coordinates and AD goes through
+  # the stack. With p = 1 Nx builds no stack node, and the gradient arrives as
+  # `dot r{n}, [0], [], X{n,1}, [0], []` -- the residual contracted with the
+  # whole one-column constant, shape {1}. That is `sum_j r_j * X[j,0]`, the
+  # identical obs-axis reduction, so it emits the same way with column 0 as the
+  # capture. Only p = 1: for wider X the result is a vector, which this
+  # scalar-valued emitter has no business guessing, and it stays refused.
+  # Measured 2026-09-13: detect_meta on a one-column regression answered
+  # {:unsupported, {:unsupported_op, :dot}} once the forward dot had been fixed.
+  defp do_emit(:dot, [%T{shape: {n}} = r, [0], [], x, [0], []], layout) do
+    with {:ok, %T{shape: {^n, 1}} = m} <- const_matrix(x),
+         {:ok, r_s} <- emit(r, layout) do
+      {:ok, "/*REDUCE_SUM*/((#{r_s}) * (#{register_capture(m[[.., 0]])}))"}
+    else
+      {:ok, %T{}} -> {:error, {:unsupported_op, :dot}}
+      err -> err
+    end
+  end
+
   defp const_matrix(%T{data: %Expr{op: :tensor, args: [%T{shape: {_n, _p}} = t]}}), do: {:ok, t}
   defp const_matrix(_other), do: {:error, {:unsupported_op, :dot}}
 
@@ -549,6 +571,18 @@ defmodule Exmc.NUTS.CustomSynth.Glsl do
 
   defp emit_param_vec(%T{data: %Expr{op: :reshape, args: [t | _]}}, layout),
     do: emit_param_vec(t, layout)
+
+  # A ONE-element parameter vector. For a `shape: {1}` RV, `slot_slice/2`'s
+  # `Nx.stack([q[off]]) |> Nx.reshape({1})` reaches here as a reshape of the
+  # scalar read itself: Nx builds no `:stack` node for a single operand. The
+  # reshape clause above unwraps it to that scalar, which then matched nothing,
+  # and every `shape: {1}` vector RV was refused as `{:unsupported_op,
+  # :param_vec}` (measured 2026-09-13, bench/nuts_width_race.exs at d=1). A
+  # rank-0 operand in a parameter-vector position is a vector of one; the
+  # `Nx.dot` clause still checks the element count against X's columns.
+  defp emit_param_vec(%T{shape: {}} = scalar, layout) do
+    with {:ok, str} <- emit(scalar, layout), do: {:ok, [str]}
+  end
 
   defp emit_param_vec(_other, _layout), do: {:error, {:unsupported_op, :param_vec}}
 

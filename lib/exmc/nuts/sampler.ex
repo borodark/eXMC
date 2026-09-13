@@ -1638,63 +1638,10 @@ defmodule Exmc.NUTS.Sampler do
     reconstruct_ncp(base_trace, ncp_info)
   end
 
-  # Reconstruct NCP'd variables: x = mu + sigma * z (in topological order)
-  defp reconstruct_ncp(trace, ncp_info) when map_size(ncp_info) == 0, do: trace
-
-  defp reconstruct_ncp(trace, ncp_info) do
-    order = ncp_topo_order(ncp_info)
-
-    Enum.reduce(order, trace, fn rv_id, trace ->
-      %{mu: mu_src, sigma: sigma_src} = ncp_info[rv_id]
-      z = Map.fetch!(trace, rv_id)
-      mu = resolve_trace_value(mu_src, trace)
-      sigma = resolve_trace_value(sigma_src, trace)
-      Map.put(trace, rv_id, Nx.add(mu, Nx.multiply(sigma, z)))
-    end)
-  end
-
-  defp resolve_trace_value(v, trace) when is_binary(v), do: Map.fetch!(trace, v)
-  defp resolve_trace_value(%Nx.Tensor{} = v, _trace), do: v
-
-  defp resolve_trace_value(v, _trace) when is_number(v),
-    do: Nx.tensor(v, type: Exmc.JIT.precision())
-
-  # Topological sort for NCP entries: process entries whose NCP dependencies are resolved first
-  defp ncp_topo_order(ncp_info) do
-    ncp_ids = MapSet.new(Map.keys(ncp_info))
-    remaining = Map.keys(ncp_info)
-    do_ncp_topo(remaining, ncp_info, ncp_ids, MapSet.new(), [])
-  end
-
-  defp do_ncp_topo([], _ncp_info, _ncp_ids, _done, acc), do: Enum.reverse(acc)
-
-  defp do_ncp_topo(remaining, ncp_info, ncp_ids, done, acc) do
-    ready =
-      Enum.filter(remaining, fn id ->
-        %{mu: mu, sigma: sigma} = ncp_info[id]
-        ncp_dep_resolved?(mu, ncp_ids, done) and ncp_dep_resolved?(sigma, ncp_ids, done)
-      end)
-
-    if ready == [] do
-      Enum.reverse(acc) ++ remaining
-    else
-      new_done = Enum.reduce(ready, done, &MapSet.put(&2, &1))
-
-      do_ncp_topo(
-        remaining -- ready,
-        ncp_info,
-        ncp_ids,
-        new_done,
-        Enum.reverse(Enum.sort(ready)) ++ acc
-      )
-    end
-  end
-
-  defp ncp_dep_resolved?(src, ncp_ids, done) when is_binary(src) do
-    not MapSet.member?(ncp_ids, src) or MapSet.member?(done, src)
-  end
-
-  defp ncp_dep_resolved?(_src, _ncp_ids, _done), do: true
+  # x = mu + sigma * z for NCP'd variables, trace (build_trace/3) or single
+  # point (sample_stream); shared with Exmc.MCLMC and Exmc.MAMS.
+  defp reconstruct_ncp(values, ncp_info),
+    do: Exmc.Rewrite.NonCenteredParameterization.reconstruct(values, ncp_info)
 
   # Per-family closed-form heuristic for the diagonal mass matrix.
   # Phase II Welford refinement still runs and will adjust; this

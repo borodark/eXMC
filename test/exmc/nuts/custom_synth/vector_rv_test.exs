@@ -109,6 +109,67 @@ defmodule Exmc.NUTS.CustomSynth.VectorRvTest do
     end
   end
 
+  describe "a shape: {1} vector RV (one coefficient)" do
+    # Nx builds no :stack node for a one-operand stack, so a shape: {1} RV
+    # reached the emitter as a reshape of a scalar read and was refused as
+    # {:unsupported_op, :param_vec} (bench/nuts_width_race.exs, d=1,
+    # 2026-09-13). A vector of one is still a vector.
+    defp one_column_ir(%{xcol: xcol, y: y}) do
+      xmat = Nx.reshape(xcol, {40, 1})
+
+      lik =
+        Dist.Custom.new(fn _x, p ->
+          r = Nx.subtract(y, Nx.dot(xmat, p.beta))
+          Nx.sum(Nx.divide(Nx.multiply(r, r), -2 * @sigma * @sigma))
+        end)
+
+      IR.new()
+      |> normal_prior("beta", shape: {1})
+      |> Dist.Custom.rv("Y", lik, %{beta: "beta"})
+      |> Builder.obs("Y_obs", "Y", y)
+    end
+
+    test "detect_meta synthesises, with one layout entry" do
+      # "beta", not "beta[0]": the layout suffixes an index only when an RV
+      # has more than one coordinate. d = length(layout) = 1 either way.
+      assert {:ok, {:synthesised, _sha, ["beta"], _push, _spv, _obs, _caps}} =
+               ChainShaderCodegen.detect_meta(one_column_ir(data()), [])
+    end
+
+    # Synthesis succeeding is not the shader working. This samples through the
+    # chain shader and checks it dispatched and landed on the least-squares
+    # slope (the Normal(0, 5) prior is negligible against 40 points at sigma 0.3).
+    @tag :requires_vulkan
+    @tag timeout: 300_000
+    test "samples through the chain shader, to the right slope" do
+      import Exmc.TestHelper
+      put_env_scoped(:compiler, :vulkan)
+      %{xcol: xcol, y: y} = d = data()
+
+      Exmc.NUTS.Vulkan.Dispatch.reset_dispatch_count()
+
+      {trace, _stats} =
+        Exmc.NUTS.Sampler.sample(one_column_ir(d), %{},
+          num_warmup: 200,
+          num_samples: 400,
+          seed: 5
+        )
+
+      assert Exmc.NUTS.Vulkan.Dispatch.dispatch_count() > 0
+
+      slope =
+        Nx.to_number(Nx.divide(Nx.sum(Nx.multiply(xcol, y)), Nx.sum(Nx.multiply(xcol, xcol))))
+
+      mean = trace["beta"] |> Nx.mean() |> Nx.to_number()
+      assert abs(mean - slope) < 0.02, "posterior mean #{mean}, least squares #{slope}"
+    end
+
+    test "logp and gradient agree with the host compiler" do
+      d = data()
+      assert_matches_host(one_column_ir(d), d.y)
+    end
+  end
+
   describe "the composed density matches the host compiler" do
     # 200 random draws, because a wrong column attribution or a mis-sliced
     # coordinate is finite and plausible rather than a crash. The gradient is

@@ -412,63 +412,8 @@ defmodule Exmc.MCLMC do
     reconstruct_ncp(base, ncp_info)
   end
 
-  defp reconstruct_ncp(trace, ncp) when map_size(ncp) == 0, do: trace
-
-  defp reconstruct_ncp(trace, ncp) do
-    ncp
-    |> ncp_order()
-    |> Enum.reduce(trace, fn id, acc ->
-      %{mu: mu_src, sigma: sigma_src} = ncp[id]
-      z = Map.fetch!(acc, id)
-      mu = ncp_value(mu_src, acc)
-      sigma = ncp_value(sigma_src, acc)
-      Map.put(acc, id, Nx.add(mu, Nx.multiply(sigma, z)))
-    end)
-  end
-
-  defp ncp_value(v, trace) when is_binary(v), do: Map.fetch!(trace, v)
-  defp ncp_value(%Nx.Tensor{} = v, _trace), do: v
-
-  defp ncp_value(v, _trace) when is_number(v),
-    do: Nx.tensor(v, type: Exmc.JIT.precision(), backend: Nx.BinaryBackend)
-
-  # Reconstruct in dependency order: an entry whose mu/sigma names another
-  # NCP'd variable must wait for it.
-  defp ncp_order(ncp) do
-    ids = MapSet.new(Map.keys(ncp))
-    do_order(Map.keys(ncp), ncp, ids, MapSet.new(), [])
-  end
-
-  defp do_order([], _ncp, _ids, _done, acc), do: Enum.reverse(acc)
-
-  defp do_order(remaining, ncp, ids, done, acc) do
-    {ready, blocked} =
-      Enum.split_with(remaining, fn id ->
-        %{mu: mu, sigma: sigma} = ncp[id]
-        dep_ready?(mu, ids, done) and dep_ready?(sigma, ids, done)
-      end)
-
-    case ready do
-      # A cycle should be impossible, but emitting the rest in whatever order
-      # remains beats looping forever.
-      [] ->
-        Enum.reverse(acc) ++ blocked
-
-      _ ->
-        do_order(
-          blocked,
-          ncp,
-          ids,
-          MapSet.union(done, MapSet.new(ready)),
-          Enum.reverse(ready) ++ acc
-        )
-    end
-  end
-
-  defp dep_ready?(src, ids, done) when is_binary(src),
-    do: not MapSet.member?(ids, src) or MapSet.member?(done, src)
-
-  defp dep_ready?(_src, _ids, _done), do: true
+  defp reconstruct_ncp(trace, ncp),
+    do: Exmc.Rewrite.NonCenteredParameterization.reconstruct(trace, ncp)
 
   defp init_position(_pm, _ncp, init_values, d, rng) when map_size(init_values) == 0 do
     {vals, rng} =
