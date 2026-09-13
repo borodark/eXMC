@@ -238,14 +238,14 @@ results =
   |> List.flatten()
 
 IO.puts(
-  "\n| d | n_obs | arm | status | chain | compile s | sample s | min ESS | ESS/s | max z | div |"
+  "\n| d | n_obs | arm | status | chain dispatches | compile s | sample s | min ESS | ESS/s | max z | div |"
 )
 
 IO.puts("|---|---|---|---|---|---|---|---|---|---|---|")
 
 for r <- Enum.sort_by(results, &{&1.d, &1.n, &1.arm}) do
   IO.puts(
-    "| #{r.d} | #{r.n} | #{r.arm} | #{r.status} | #{r[:chain] || ""} | " <>
+    "| #{r.d} | #{r.n} | #{r.arm} | #{r.status} | #{r[:dispatches] || ""} | " <>
       Enum.map_join(
         [:compile_s, :sample_s, :min_ess, :ess_per_s, :max_z, :divergences],
         " | ",
