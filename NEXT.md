@@ -47,15 +47,23 @@ CmdStan).** `bench/pymc_race/reference_compare.py`:
 - **Where the outputs live.** They are gitignored, in `bench/pymc_race/reference/`.
   The runs before the fix are kept in `reference/pre_509e22b/`.
 
-**Next, in order:**
-1. **Move the nx_vulkan lock to `bd17793`.** This is the asus start-up hang fix:
-   one Vulkan instance per process. It needs a new NIF on every host, and the
-   race provenance records the NIF sha. The Jetson NIF is cross-built with
-   `REF=bd17793 DEST_DIR='$HOME/exmc_oss/deps/nx_vulkan'`.
-2. **Fleet-verify exmc**, including asus, where the six start-up timeouts should
-   be gone.
-3. **PyMC race harness and a one-seed pilot on super-io**, then asus, then the NUC.
-4. **Remaining work.** Land `wip/shader-size`. Fix SV synthesis on the Vulkan
+**Next, in order** (docs/PYMC_RACE_PLAN.md *Order of work* has the detail):
+1. **nx_vulkan lock bump.** Done as `fb7733ea0`: nx_vulkan `f450e0c`, the
+   `bd17793` process-lifetime Vulkan instance. Vulkan suite on super-io 741/0.
+   Fleet runs are in progress on the NUC, both Macs, the Jetson (prebuilt NIF
+   `b1b9f168f99a`, the same bytes the nx_vulkan session built) and asus.
+2. **asus PyMC stack.** Python 3.12 packages from pkg (numpy 2.4.6, scipy
+   1.17.1, numba 0.67.0, pandas 2.3.3, xarray 2026.4.0, pyarrow 24.0.0) plus a
+   `--system-site-packages` venv at `~/pymc_race_venv` with pymc 6.3.2,
+   pytensor 3.3.1, arviz 1.3.0 and nutpie 0.16.11 (source build).
+3. **JAX baseline** (operator, 2026-09-13 night). Set up `.venv-jax` on super-io
+   and run gate 1b.
+4. **exmc tree-health gate**: a test on mean tree depth, steps per draw and
+   divergence rate. ex-pathmc-39 measured the swapped-endpoint defect as 161x
+   fewer leapfrog steps per draw on a weakly identified model.
+5. **Harness, pilot, full super-io run**; then asus (the reciprocal reference
+   run first), then the NUC.
+6. **Remaining work.** Land `wip/shader-size`. Fix SV synthesis on the Vulkan
    arm (GaussianRandomWalk in `compose_logp_defn`). Write up the width race.
 
 ## Status — 2026-09-13 (evening): Rustler 0.38 on main; two exmc defects fixed

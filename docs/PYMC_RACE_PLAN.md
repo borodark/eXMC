@@ -3,6 +3,9 @@
 **Written 2026-09-13**, at exmc `7db9ffcab`. Status: **PLAN, nothing run.**
 **Operator decisions, 2026-09-13: all five below are YES**, and the race also
 runs on two FreeBSD hosts (asus, then the NUC) — see *Hosts*.
+**Operator decision, 2026-09-13 (night): PyMC's JAX path is added as a
+baseline** (numpyro on JAX, CPU and CUDA, super-io only). See *Arms* and
+*The JAX baseline*.
 It replaces the February 2026 comparison the README used to publish
 (`STANDARD_BENCHMARKS.md`, now bannered historical).
 
@@ -44,6 +47,13 @@ README table is generated from the results file, losses included.
   the ESS call (`ess_bulk`/`ess_tail`) under 1.x before anything depends on it.
   `requirements.lock` is committed from `pip freeze`. The PyTensor compile
   cache is warmed by the untimed run, then left alone.
+- **PyMC on JAX:** a SECOND venv, `bench/pymc_race/.venv-jax`, with the same
+  `pymc==6.3.2` and `pytensor==3.3.1` pins plus `jax[cuda13]` 0.11.1 (jaxlib
+  0.11.1, the CUDA 13 plugin; super-io's driver is 580.178.04) and `numpyro`
+  0.21.0 (latest on PyPI at 2026-09-13). It is a separate venv so JAX's own
+  numpy and CUDA wheels cannot move the pins under the default and nutpie
+  arms. Its lock is `requirements-jax.lock`. PyMC declares no JAX extra, so
+  these pins are the harness's choice, recorded.
 - **eXMC side:** `MIX_ENV=prod`-shaped run via `mix run`, the consumer path.
   EXLA arm (host client), which is what a Linux user runs. The commit and
   `mix.lock` are recorded; `stats.provenance` goes into every result.
@@ -60,9 +70,15 @@ super-io, and reused: the data and the posterior are identical everywhere.
 
 | host | OS, CPU | GPU | exmc arms | PyMC arms | tables |
 |---|---|---|---|---|---|
-| **super-io** | Linux x86_64 | RTX 3060 Ti | **EXLA** (headline), Vulkan (information) | default NUTS, nutpie | single-chain, 4-chain |
-| **asus** | FreeBSD 15, Xeon E5-2699 v3 (18 cores / 36 threads), 64 GiB | **GTX 1660 Ti** (uuid `cd6c2df3`), driver 580.178.04; the Quadro M4000 is not raced (a slower class) | **Vulkan**, pinned by uuid; CPU host tree | default NUTS; nutpie if it builds | single-chain, 4-chain |
-| **NUC** | FreeBSD 15, i3-6100U (2 cores / 4 threads), 8 GB | HD 520, Mesa ANV | **Vulkan**; CPU host tree | default NUTS; nutpie if it builds | single-chain only |
+| **super-io** | Linux x86_64 | RTX 3060 Ti | **EXLA** (headline), Vulkan (information) | default NUTS, nutpie, **numpyro on JAX: CPU and CUDA** | single-chain, 4-chain |
+| **asus** | FreeBSD 15, Xeon E5-2699 v3 (18 cores / 36 threads), 64 GiB | **GTX 1660 Ti** (uuid `cd6c2df3`), driver 580.178.04; the Quadro M4000 is not raced (a slower class) | **Vulkan**, pinned by uuid; CPU host tree | default NUTS; nutpie if it builds; no JAX (below) | single-chain, 4-chain |
+| **NUC** | FreeBSD 15, i3-6100U (2 cores / 4 threads), 8 GB | HD 520, Mesa ANV | **Vulkan**; CPU host tree | default NUTS; nutpie if it builds; no JAX (below) | single-chain only |
+
+**No JAX on the FreeBSD hosts.** jaxlib 0.11.1 publishes wheels for manylinux
+x86_64 and aarch64, macOS arm64 and Windows only (PyPI, checked 2026-09-13).
+A source build means Bazel plus XLA on FreeBSD, which this race does not
+attempt. The JAX columns on asus and the NUC read "no jaxlib for FreeBSD". That
+is part of the reach question those hosts answer, not a gap in the protocol.
 
 **Why the FreeBSD hosts matter.** FreeBSD has no EXLA and no CUDA. There the
 race is the reach thesis itself, against a compiled competitor rather than
@@ -153,9 +169,47 @@ headline and (b) a one-seed control, reported beside it.
 | **PyMC + nutpie 0.16.11** | `pm.sample(nuts_sampler="nutpie")`, PyMC's fastest supported path | yes — leaving it out would race a weaker PyMC than users can install |
 | **eXMC, EXLA arm** | `Sampler.sample/3` | always |
 | eXMC, Vulkan arm on super-io | information only, not in the headline | optional |
+| **PyMC 6.3.2 + numpyro 0.21.0 on JAX 0.11.1, CPU** | `pm.sample(nuts_sampler="numpyro")`, JAX on the same pinned cores | super-io |
+| **PyMC 6.3.2 + numpyro 0.21.0 on JAX 0.11.1, CUDA** | the same on the RTX 3060 Ti | super-io |
+| PyMC + blackjax 1.6.2 on JAX | `nuts_sampler="blackjax"` | one-seed control, not scored |
 
 A second table, same arms, **4 chains in parallel** (`chains=4, cores=4`
 against `sample_chains/3`), total ESS/s. That is where the BEAM claim lives.
+
+## The JAX baseline
+
+**Why it is in.** It is the fastest path PyMC offers on a GPU, and on CPU it is
+what many PyMC users switch to for speed. A race without it would leave out the
+comparison a sceptical reader asks for first.
+
+**What it isolates.** exmc's EXLA arm and JAX both compile through XLA.
+- **exmc** compiles the gradient and leapfrog steps and runs the NUTS tree on
+  the BEAM host (with a Rust NIF for subtrees).
+- **numpyro** traces the whole NUTS transition, tree included, into one XLA
+  program.
+
+So the CPU pair holds the compiler fixed and measures the two framework
+designs. The CUDA arm pairs with exmc's Vulkan arm on the same card: GPU
+against GPU. That table is still information on super-io, as decision 5 says,
+but it is printed side by side. No outcome is predicted here; losses are
+published like wins.
+
+**What changes in the protocol:**
+- **Gate 1b.** PyTensor's JAX backend compiles the same graph, but not the
+  same arithmetic. Gate 1's points are re-evaluated with the model's logp
+  compiled for JAX (`jax_enable_x64` on), against the C backend: max relative
+  difference < 1e-9. A model that fails races on the other arms only, and is
+  recorded as such.
+- **Precision.** f64 on every arm, recorded; a float32 JAX run is not raced.
+- **Compile cost.** JAX compiles the sampler as well as the model. It is large,
+  and it is reported separately, as the protocol already does for every arm.
+- **Chains.** For the 4-chain table: `chain_method="parallel"` with
+  `XLA_FLAGS=--xla_force_host_platform_device_count=4` on CPU. On one GPU,
+  `"vectorized"` is the only multi-chain method, recorded as such.
+- **GPU hygiene.** `XLA_PYTHON_CLIENT_PREALLOCATE=false`. The card is otherwise
+  idle: no nx_vulkan runs, no fleet runs, and exmc's EXLA arm is the host
+  client. `nvidia-smi` is read before and after each block.
+- **Gate 2** unchanged: the same references, the same thresholds.
 
 ## Measurements, per run
 
@@ -210,7 +264,10 @@ simple a few seconds; logistic 4 s (PyMC) to 16 s (exmc); SV 35–54 s (PyMC)
 to 83–95 s (exmc). Ten seeds × seven models × three arms ≈ 45–60 min for the
 single-chain table; the 4-chain table about the same; reference runs ≈ 30 min;
 gate 1 and warm-ups ≈ 10 min. **About 2.5–3 hours of super-io**, plus the
-harness work before it. asus: similar or somewhat longer (no EXLA; the CPU
+harness work before it. **The two JAX arms add about 1–1.5 hours**
+(ESTIMATED: JAX's per-model compile is unmeasured here, and SV's may dominate),
+so **about 4–4.5 hours** in all. The JAX venv and gate 1b take about 30 min
+before the pilot. asus: similar or somewhat longer (no EXLA; the CPU
 host-tree arm is slow on logistic and SV). The NUC: several times that,
 overnight, single-chain table only.
 
@@ -269,17 +326,36 @@ does not.
 
 ## Order of work
 
-1. venv, pins, `requirements.lock`; confirm PyMC 6.3.2 and nutpie import and
-   sample `simple`.
-2. Port the seven models to `bench/pymc_race/models.{py,exs}`; freeze data.
-3. **Gate 1** on all seven. Fix or drop any model that fails it.
-4. Reference runs; check PyMC and exmc references agree.
-5. Pilot: one seed, all arms, all models, end to end through `score.py`.
-6. The full run, super-io idle.
-7. Results file, then README.
-8. asus, in its agreed window: `~/exmc_race` checkout, venv, gate 1 re-run on
-   that host, then the same run with the Vulkan and CPU arms.
-9. The NUC, overnight: single-chain table only.
+1. ~~venv, pins, `requirements.lock`; confirm PyMC 6.3.2 and nutpie import and
+   sample `simple`.~~ DONE.
+2. ~~Port the seven models to `bench/pymc_race/models.{py,exs}`; freeze data.~~ DONE.
+3. ~~**Gate 1** on all seven.~~ DONE, all PASS.
+4. ~~Reference runs; check PyMC and exmc references agree.~~ DONE, after
+   exmc `509e22b26`: all seven AGREE (NEXT.md has the table). The references
+   found an exmc sampler defect first: the speculative subtree NIF built
+   backward subtrees with swapped endpoints.
+5. **JAX baseline setup, super-io:** `.venv-jax` and `requirements-jax.lock`;
+   numpyro samples `simple` on CPU and on CUDA (the device is checked, not
+   assumed); **gate 1b** on all seven.
+6. **exmc tree-health gate** (from ex-pathmc-39's evidence on the same defect:
+   its mediation model went from 1.95 leapfrog steps per draw and 94 of 150
+   divergent at `d85630ab6` to 314.5 steps and 19 at `509e22b26`, while its test
+   checked only names). An exmc test asserts mean tree depth, steps per draw
+   and divergence rate on a weakly identified model, within bounds measured on
+   the fixed tree and on the Elixir tree. It lands before the pilot, so a tree
+   regression cannot quietly produce race numbers.
+7. **Harness:** `run_pymc.py` (arms: default, nutpie, numpyro-cpu,
+   numpyro-cuda; blackjax control), `run_exmc.exs`, `score.py`.
+8. Pilot: one seed, all arms, all models, end to end through `score.py`.
+9. The full run, super-io idle.
+10. Results file, then README.
+11. asus, in its agreed window: `~/exmc_race` checkout, venv (PyMC stack:
+    installed 2026-09-13, see *FreeBSD Python stack*), gate 1 re-run on that
+    host, then the same run with the Vulkan and CPU arms. The **reciprocal
+    reference run** comes first: exmc's CPU arm on FreeBSD, scored against
+    super-io's references (`REF_COMPILER=none`, `REF_OUT`, `EXMC_REF`), which
+    tests the cross-host statistical promise in docs/REPRODUCIBILITY.md.
+12. The NUC, overnight: single-chain table only.
 
 ## Decisions — resolved 2026-09-13, all YES
 
@@ -291,5 +367,7 @@ does not.
 4. A **scalar-RV exmc variant** runs too, and the graph-shape cost is published.
 5. The **Vulkan arm** runs on super-io as information; on asus and the NUC it
    is the headline exmc arm.
+6. **PyMC on JAX** (numpyro, CPU and CUDA) is a baseline arm on super-io
+   (decided 2026-09-13, night); blackjax is a one-seed control.
 
 Still open: the asus window and toolchain (asked of the nx_vulkan session).
