@@ -96,7 +96,68 @@ else
 fi
 
 mix deps.get </dev/null 2>&1 | tail -3
+
+# PREBUILT NIF, when one is provably CURRENT -- mirrors nx_vulkan's
+# scripts/fleet_verify.sh, keyed on THIS repo's lock rather than their HEAD.
+#
+# The Jetson compiles the nx_vulkan crate in ~12 min incremental, ~47 clean;
+# super-io cross-builds it in ~2. From an nx_vulkan checkout on super-io:
+#
+#   REF=<lock sha> DEST_DIR='$HOME/exmc_oss/deps/nx_vulkan' sh scripts/deploy_jetson_nif.sh
+#
+# ships the .so into this checkout's deps dir with a provenance marker beside
+# it: line 1 the commit it was built from, line 2 its sha256 as it landed.
+# (That script refuses unless deps/nx_vulkan is already at the built sha, so
+# `mix deps.get` at the lock comes first.)
+#
+# Use it only when the marker names the LOCK sha AND its hash matches the file
+# on disk. Both halves are load-bearing. `mix deps.get` on a lock bump checks
+# out the new commit but leaves priv/native alone -- TESTED by the nx_vulkan
+# session -- so a stale .so and its stale marker survive together, and only
+# the sha comparison sends that run to a native build. A native build
+# overwrites the .so and leaves the old marker beside it, and only the hash
+# comparison catches that. Anything else builds natively: slow and correct.
+nxv_lock=$(grep -o '"nx_vulkan": {:git[^}]*}' mix.lock | grep -oE '[0-9a-f]{40}' | head -1)
+nxv_so=deps/nx_vulkan/priv/native/libnx_vulkan_vulkano.so
+nxv_prov=$nxv_so.provenance
+nxv_hash() { { sha256sum "$nxv_so" 2>/dev/null || sha256 -q "$nxv_so" 2>/dev/null; } | cut -d' ' -f1; }
+
+prebuilt=0
+if [ -f "$nxv_prov" ] && [ -f "$nxv_so" ]; then
+  p_sha=$(sed -n 1p "$nxv_prov")
+  p_hash=$(sed -n 2p "$nxv_prov")
+  a_hash=$(nxv_hash)
+  [ "$p_sha" = "$nxv_lock" ] && [ "$p_hash" = "$a_hash" ] && prebuilt=1
+  echo "### PREBUILT marker=${p_sha:0:7} lock=${nxv_lock:0:7} hash_match=$([ "$p_hash" = "$a_hash" ] && echo yes || echo no) using=$prebuilt"
+else
+  echo "### PREBUILT none"
+fi
+
+# The skip is compile_env (see config/config.exs), baked into
+# Nx.Vulkan.NativeV. A box switching between prebuilt and native would fail to
+# boot against the other mode's compiled value, and neither `rm` of the beam
+# nor `touch` of the source recovers it (nx_vulkan's fleet_verify.sh records
+# both failing on the fleet). Wiping the app's ebin and manifests when the
+# mode changes does, and costs only the Elixir side.
+mode_marker=_build/test/.nxv_prebuilt_mode
+last_mode=$(cat "$mode_marker" 2>/dev/null || echo unknown)
+if [ "$last_mode" != "$prebuilt" ]; then
+  echo "### BUILDMODE $last_mode -> $prebuilt (clean nx_vulkan Elixir recompile)"
+  rm -rf _build/test/lib/nx_vulkan/ebin _build/test/lib/nx_vulkan/.mix
+fi
+
+if [ "$prebuilt" = "1" ]; then
+  export NXV_SKIP_NIF_BUILD=1
+fi
 MIX_ENV=test mix compile </dev/null 2>&1 | grep -iE "^\*\* |error:"
+mkdir -p _build/test && echo "$prebuilt" > "$mode_marker"
+
+# Proof the skip held: a compile that rebuilt the crate anyway changes the
+# hash. The suite below would then be valid -- a native build of the lock --
+# but this run would be reporting a prebuilt it did not use.
+if [ "$prebuilt" = "1" ] && [ "$(nxv_hash)" != "$p_hash" ]; then
+  echo "### PREBUILT IGNORED: the compile replaced $nxv_so -- the skip did not reach Rustler"
+fi
 
 # --- 3. the suite, unfiltered -----------------------------------------------
 

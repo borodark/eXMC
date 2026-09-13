@@ -19,3 +19,21 @@ import Config
 if config_env() == :test do
   import_config "test.exs"
 end
+
+# NXV_SKIP_NIF_BUILD=1: link the nx_vulkan `.so` already in
+# deps/nx_vulkan/priv/native instead of letting Rustler build the crate.
+# scripts/fleet_verify.sh sets it only when that `.so` is a cross-built artifact
+# whose provenance names this checkout's lock sha and whose hash still matches.
+#
+# nx_vulkan's own config/config.exs reads the same variable, but a dependency's
+# config files are never loaded by the project that depends on it. MEASURED
+# 2026-09-13: with the variable set, `Application.get_env(:nx_vulkan,
+# Nx.Vulkan.NativeV)` in this project is `nil`. Without this block the variable
+# does nothing here: Rustler rebuilds natively over the shipped artifact, and a
+# run reports "prebuilt" about a NIF it compiled itself.
+#
+# Rustler reads this with compile_env, so the value must be the same for
+# `mix compile` and for every `mix test` after it, or the VM refuses to boot.
+if System.get_env("NXV_SKIP_NIF_BUILD") == "1" do
+  config :nx_vulkan, Nx.Vulkan.NativeV, skip_compilation?: true
+end
