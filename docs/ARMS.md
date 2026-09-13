@@ -125,7 +125,7 @@ and starts epmd); super-io rows are `mix check` by hand. Time is ExUnit's
 | super-io, both arms | 723 / 0 | — (the EXLA arm needs epmd running, as every arm does) |
 | mac-248 | 723 / 0 | — |
 | mac-247 | 723 / 1 | `PokerTest` times out. The same failure, alone, at `144d441db`, `d410b183a` and `6eafcc29c` |
-| NUC | 723 / 0 | after `d68b86ccd`; not yet measured |
+| NUC | 723 / 0 | MEASURED at `d4eeba367` (983 s), after the `d68b86ccd` fix |
 | Jetson | 723 / 2 | `PokerTest` and `IntegrationTest` time out (at `144d441db`, `d410b183a` and `6eafcc29c`) |
 
 A timeout on a slow host is recorded here as expected so that a *new* failure
@@ -134,6 +134,40 @@ stands out. It is not a pass.
 **Not measured:** the CPU build of `exla` on super-io (Track 3 item 1's second
 row). Building it replaces the CUDA library both arms share, so it needs its
 own window. The CPU arm (`EXMC_COMPILER=none`) as a full suite on any host.
+
+### NUTS end-to-end race, NUC vs mac-248
+
+`bench/nuts_truth.exs` at `7aae323a6` (lock `8116a19`), seeds 1–6 pooled,
+500 warmup / 2000 samples, `MIX_ENV=test`, device pinned by uuid, both boxes
+otherwise idle except mac-248's standing `zedweb`/`MeshWorker` load. Wall
+time per arm includes `mix run` startup and, for `vulkan`, first-client
+Vulkan startup. All arms were within tolerance of analytic truth.
+
+| host | CPU | `vulkan` | `none` (host tree only) | none ÷ vulkan |
+|---|---|---|---|---|
+| NUC, HD 520 (ANV) | i3-6100U, 4 threads | 43 s | 402 s | 9.3× |
+| mac-248, GT 750M | i7-4870HQ, 8 threads | 30 s | 318 s | 10.6× |
+
+mac-248 is 1.43× faster on `vulkan` and 1.26× on `none`, so most of the gap is
+the CPU. What is left for the GPU is roughly 1.13×, and startup is inside it.
+
+**Agreement.** Both hosts' `vulkan` pooled moments are identical to every
+printed digit (Normal mean −0.000347, var 0.999222, ess 4809), and so are
+their `none` moments. super-io's `vulkan` run at the same seeds (NEXT.md,
+2026-09-12, lock `8116a19`) gave Normal mean −0.003061. On these three
+single-RV fixtures, ANV reproduces the Kepler and the Ampere is the outlier,
+the same grouping as the leaf-diff table's.
+
+**Not a general bit-identity claim across vendors.** nx_vulkan's
+`scripts/arch_float_divergence.exs` at `eddb973` measured the chain shaders'
+default f32-cast transcendentals (`log`, `log(1+z²)`, `exp`) on ANV: more
+accurate than NVIDIA (log relative error 1.0e-7 vs 1.5e-6), and not
+bit-identical to it. Models whose synthesised body takes `log` or `exp` of a
+sampled value should not be expected to reproduce NVIDIA draws on the NUC;
+`:chain_shader_transcendentals, :polynomial` would. The same run found ANV
+f64 division not always correctly rounded (`x/3` one f64 step off, where
+NVIDIA is exact; `1.0/x` identical). exmc never emits GLSL `pow`, so ANV's
+negative-base `pow` (nx_vulkan's 4 NUC failures) cannot reach a chain shader.
 
 ### Host notes
 

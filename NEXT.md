@@ -72,7 +72,17 @@ is what forces the rebuild.
    `kind=Cpu` device, a name mismatch or an unknown host. Six cases were
    exercised on super-io (pass, unpinned, and four refusals incl. llvmpipe); `docs/ARMS.md` has the table.
    Each host's row is proved on its next real run.
-2. **Rerun the NUC** to confirm the expected 723 / 0 after `d68b86ccd`.
+2. ~~Rerun the NUC~~ **DONE:** 723 / 0 at `d4eeba367`, 983 s.
+   **Also found the same day, by racing the NUC against mac-248** (`docs/ARMS.md`
+   has the table): `bench/nuts_truth.exs COMPILER=vulkan` died after 1 s on every
+   FreeBSD host, with FunctionClauseError in `Dispatch.do_chain/8`. The cause was
+   exmc not declaring `:crypto`. CustomSynth hashes every shader with it; on
+   Linux `xla` brings it in; FreeBSD drops exla, and `mix test` loads crypto
+   anyway, so the suite never saw it. Fixed in `7aae323a6` and verified on
+   mac-247 and in the race. **Still open:** a synthesis failure under Vulkan at
+   f64 falls back to a family meta that no dispatch clause accepts. It should
+   reach the Plan-B' refusal with the real reason; `try_synthesise` swallowing
+   the exception is what made this cost an investigation.
 3. **The exmc half of the Jetson prebuilt**, once nx_vulkan says the
    interface has landed.
 4. **Track 3 leftovers:** the CPU `exla` build row, which replaces the CUDA
