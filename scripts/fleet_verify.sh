@@ -82,7 +82,23 @@ dirty=$(git status --porcelain -uno)
 [ -n "$dirty" ] && { echo "### DIRTY (tracked changes present):"; echo "$dirty"; }
 
 git fetch -q origin || { echo "FATAL: fetch failed"; exit 2; }
-git merge --ff-only origin/gate1/reconcile-core || { echo "FATAL: not a fast-forward; resolve by hand"; exit 2; }
+
+# The working branch is `main`. `gate1/reconcile-core` was retired on
+# 2026-09-13, merged into main by fast-forward. Every fleet checkout had it
+# checked out, so a host still on it (or on anything else) is moved to main
+# here. A host's local `main` may be far behind (mac-247's was 145 commits), which
+# the fast-forward below takes care of. Tracked changes stop the checkout, and
+# that is the right outcome: the DIRTY block above has already printed them.
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" != "main" ]; then
+  echo "### BRANCH   $branch -> main (gate1/reconcile-core is retired)"
+  if git show-ref --verify --quiet refs/heads/main; then
+    git checkout -q main || { echo "FATAL: cannot check out main; resolve by hand"; exit 2; }
+  else
+    git checkout -q -b main origin/main || { echo "FATAL: cannot create main; resolve by hand"; exit 2; }
+  fi
+fi
+git merge --ff-only origin/main || { echo "FATAL: not a fast-forward; resolve by hand"; exit 2; }
 
 echo "### HEAD     $(git log --oneline -1)"
 echo "### NX_VULKAN $(grep -o '"nx_vulkan": {:git[^}]*}' mix.lock | grep -oE '[0-9a-f]{40}' | head -1)"

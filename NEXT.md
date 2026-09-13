@@ -8,6 +8,16 @@ stands rather than as the mission planned it.
 
 ---
 
+## Branch — 2026-09-13: `gate1/reconcile-core` is retired; work on `main`
+
+Merged into `main` by fast-forward at `325c48e56` (operator's decision). From
+here: commit on `main`, push `main` to `origin`. `origin/gate1/reconcile-core`
+is left in place, frozen, not deleted. `scripts/fleet_verify.sh` follows
+`origin/main` and moves any host still on the old branch onto `main` itself,
+so no host needs a manual checkout. Every "push gate1/reconcile-core and main
+together" instruction below this section is superseded. `upstream` (GitHub)
+is still not pushed; that remains a release, and the operator's.
+
 ## Status — 2026-09-13, both arms on super-io, the NUC joins, the whole fleet at one commit
 
 Supersedes the section below's items 1 and 2. Its item 3 (the "(last)"
