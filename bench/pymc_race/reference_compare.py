@@ -32,22 +32,26 @@ import numpy as np
 
 HERE = os.path.dirname(__file__)
 REF = os.path.join(HERE, "reference")
+# A second host's run, copied back: EXMC_REF / PYMC_REF name the directories
+# holding each framework's draws; summary.json goes into EXMC_REF.
+EXMC_REF = os.environ.get("EXMC_REF", REF)
+PYMC_REF = os.environ.get("PYMC_REF", REF)
 MODELS = ["simple", "medium", "stress", "eight_schools", "funnel", "logistic", "sv"]
 Z_MAX = 5.0
 
 
 def load_exmc(name):
-    meta = json.load(open(os.path.join(REF, f"exmc_{name}.json")))
+    meta = json.load(open(os.path.join(EXMC_REF, f"exmc_{name}.json")))
     out = {}
     for var, shape in meta["shapes"].items():
-        raw = np.fromfile(os.path.join(REF, f"exmc_{name}__{var}.bin"), dtype="<f8")
+        raw = np.fromfile(os.path.join(EXMC_REF, f"exmc_{name}__{var}.bin"), dtype="<f8")
         arr = raw.reshape(shape)  # (chains, draws, k)
         out[var] = arr[..., 0] if shape[-1] == 1 else arr
     return out, meta
 
 
 def load_pymc(name):
-    z = np.load(os.path.join(REF, f"pymc_{name}.npz"))
+    z = np.load(os.path.join(PYMC_REF, f"pymc_{name}.npz"))
     return {k: z[k] for k in z.files}
 
 
@@ -149,7 +153,7 @@ def main(names):
             ok_all = False
         summary["models"][name] = entry
 
-    with open(os.path.join(REF, "summary.json"), "w") as f:
+    with open(os.path.join(EXMC_REF, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
     if "funnel" in summary["models"] and "funnel_analytic" in summary["models"]["funnel"]:
         print("\nfunnel vs analytic:", json.dumps(summary["models"]["funnel"]["funnel_analytic"]))

@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from models import build  # noqa: E402
 
 HERE = os.path.dirname(__file__)
-OUT = os.path.join(HERE, "reference")
+OUT = os.environ.get("REF_OUT", os.path.join(HERE, "reference"))
 KW = dict(draws=10_000, tune=2_000, chains=4, cores=4, target_accept=0.9,
           random_seed=2026, progressbar=False, compute_convergence_checks=False)
 

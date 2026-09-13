@@ -19,10 +19,13 @@ Code.require_file("models.exs", __DIR__)
 alias Exmc.{Builder, Dist}
 alias Exmc.NUTS.Sampler
 
-Application.put_env(:exmc, :compiler, :exla)
+# REF_COMPILER picks the arm (exla, the default; none for the CPU arm on hosts
+# without EXLA, such as asus). REF_OUT writes somewhere other than reference/,
+# so a second host's run can be copied back and scored without overwriting.
+Application.put_env(:exmc, :compiler, String.to_existing_atom(System.get_env("REF_COMPILER", "exla")))
 
 here = __DIR__
-out_dir = Path.join(here, "reference")
+out_dir = System.get_env("REF_OUT", Path.join(here, "reference"))
 File.mkdir_p!(out_dir)
 data = here |> Path.join("data.json") |> File.read!() |> Jason.decode!()
 t = fn v -> Nx.tensor(v, type: :f64) end

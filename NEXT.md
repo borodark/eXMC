@@ -27,7 +27,9 @@ nutpie and CmdStan.
 - **Suites on super-io.** EXLA 741/0; Vulkan 741/0.
 
 **Reference posteriors (gate 2), exmc on `509e22b26`, EXLA arm on super-io, 4 x
-10,000 draws against PyMC 6.3.2 NUTS.** `bench/pymc_race/reference_compare.py`:
+10,000 draws against the PyMC 6.3.2 models sampled by nutpie (PyMC's default
+sampler when nutpie is installed; SV was also checked against PyMC's own NUTS and
+CmdStan).** `bench/pymc_race/reference_compare.py`:
 
 | model | components | max z mean | max z sd | worst R-hat (pymc / exmc) | min ESS (pymc / exmc) | exmc wall | verdict |
 |---|---|---|---|---|---|---|---|
