@@ -8,6 +8,80 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-13, both arms on super-io, the NUC joins, the whole fleet at one commit
+
+Supersedes the section below's items 1 and 2. Its item 3 (the "(last)"
+section's items 3–7) stands and follows these. **`docs/ARMS.md` is new and is
+now where per-host expected results live**; this section does not repeat its
+tables.
+
+**Done and MEASURED** (exmc `6eafcc29c`, nx_vulkan lock `8116a19`)
+
+- **Track 3 item 1, the EXLA arm at HEAD, CUDA build.** `EXMC_COMPILER=exla
+  mix check` on super-io with no `LD_LIBRARY_PATH` set: 723 tests, 2 failures,
+  443 s. Both failures were `DistributedTest` `:nodistribution`, because the
+  shell was `nohup`-style and epmd was not running. With epmd started, that
+  file is 5 / 0, and its `:peer` nodes load EXLA through the loader fix. **No
+  real failures on the EXLA arm**, first measured since `a178a0833` (652 tests).
+- **The Vulkan arm after the loader change**, as the previous section asked:
+  `EXMC_COMPILER=vulkan mix check`, 723 / 0, 950 s, RTX 3060 Ti.
+- **Whole fleet via `scripts/fleet_verify.sh`**, all at one commit, for the
+  first time since `d410b183a`: mac-248 723 / 0; mac-247 723 / 1 (`PokerTest`
+  timeout, as before); Jetson 723 / 2 (`PokerTest` + `IntegrationTest`
+  timeouts, as before, 60 min); NUC 723 / 1 (below). The script was `scp`ed to
+  `~/fleet_verify.sh` and run from there under `nohup`, not from the checkout.
+  It fast-forwards the checkout, and bash reads its script incrementally, so
+  running the in-tree copy across a merge that changes it is unsafe.
+- **The NUC joined the fleet** (FreeBSD 15.0, i3-6100U, HD 520). It was set
+  up the way mac-247 is. The differences are `drm-kmod` + `i915kms` +
+  `mesa-dri` for the nvidia driver, and ANV reports `shaderFloat64 = true`, so
+  it runs f64. The non-interactive PATH comes from `/etc/login.conf`'s default
+  class, as on mac-247 and mac-248 (original saved as `login.conf.orig`).
+  Setup details are in `docs/ARMS.md` host notes. mac-248 needed only
+  `pkgconf` and the `.shrc` line.
+- **A flaky test the NUC found, fixed and pushed:** `d68b86ccd`. `ValidatorTest`
+  "iid samples report ESS ~ n" used unseeded `:rand` with a ±0.15 bound. It
+  failed on 3.55% of 2000 seeds, and the NUC's seed reproduced on super-io to
+  the last digit. It is now seeded, with a measured bound of 0.70 ≤ ESS/n ≤ 1.0.
+
+**Observed, not explained:** the Jetson log has one `SuspectTracker`
+"emergency brake — 5 timeouts in 60000 ms across 5 shader(s)" at 23:36,
+mid-suite. Earlier status sections record only counts, so whether this is new
+is unknown. Check the next Jetson log for it before calling it noise.
+
+**Agreed with nx_vulkan (asus session), not built:** a super-io cross-build of
+the Jetson NIF for **exmc's lock**. `deploy_jetson_nif.sh` gains `REF=<sha>`
+(sources via `git archive`) and `DEST_DIR` (refuses unless the destination
+checkout is at the built sha), and writes the same three-line `.provenance`.
+Their side waits on their user. Ours is exmc's `fleet_verify.sh` mirroring
+their prebuilt logic: use the prebuilt only when the marker's sha equals the
+lock sha AND its hash equals the file on disk, with the same mode-switch wipe
+of `_build/test/lib/nx_vulkan/{ebin,.mix}`. They TESTED that `mix deps.get`
+on a lock bump leaves `priv/native` and the marker in place, so the sha check
+is what forces the rebuild.
+
+**Next, in order**
+
+1. **Track 5 item 2, now with a concrete hazard:** pin the Vulkan device per
+   host in `fleet_verify.sh`. The NUC and super-io both have llvmpipe as
+   device [1]. If the real driver fails, llvmpipe is selected silently, and
+   nx_vulkan's banner reason reads "first DiscreteGpu" whatever wins (a label
+   bug on their side, queued). Until then, check `pci`/`driver` in every
+   banner.
+2. **Rerun the NUC** to confirm the expected 723 / 0 after `d68b86ccd`.
+3. **The exmc half of the Jetson prebuilt**, once nx_vulkan says the
+   interface has landed.
+4. **Track 3 leftovers:** the CPU `exla` build row, which replaces the CUDA
+   library both arms share, so it needs its own window; `test/run_all.sh`
+   (fold or delete); the present-but-unloadable EXLA test (item 3).
+5. Then the "(last)" section's items 3–7: seed 46 and the leaf-diff outlier,
+   Track 5 item 2 (see 1), Track 4, Track 6 leftovers, phd.git.
+
+**Do not:** start a hand-run suite from a non-interactive shell without
+`epmd -daemon` first.
+
+---
+
 ## Status — 2026-09-12 (after the lock bump), what to do next after the reboot
 
 Supersedes the "(last)" section's items 1 and 2 below; its items 3–7 stand
