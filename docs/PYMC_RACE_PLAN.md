@@ -4,8 +4,7 @@
 **Operator decisions, 2026-09-13: all five below are YES**, and the race also
 runs on two FreeBSD hosts (asus, then the NUC) — see *Hosts*.
 It replaces the February 2026 comparison the README used to publish
-(`STANDARD_BENCHMARKS.md`, now bannered historical). Decisions still open are
-marked **DECIDE**.
+(`STANDARD_BENCHMARKS.md`, now bannered historical).
 
 ## The question, and what counts as an answer
 
@@ -49,7 +48,7 @@ README table is generated from the results file, losses included.
   EXLA arm (host client), which is what a Linux user runs. The commit and
   `mix.lock` are recorded; `stats.provenance` goes into every result.
 - **Threads and cores:** both frameworks pinned with `taskset` to the same core
-  set (**DECIDE:** 1 core for the single-chain table, 4 for the 4-chain table),
+  set (1 core for the single-chain table, 4 for the 4-chain table),
   `OMP_NUM_THREADS`, `MKL_NUM_THREADS` and `OPENBLAS_NUM_THREADS` set to the
   core count for both, so BLAS cannot quietly borrow cores the other side is
   denied. The CPU model and `nproc` inside the pin are recorded.
@@ -119,8 +118,8 @@ sha256 in the results.
 builders use `shape=` vectors (eight schools' theta, logistic's beta, SV's s).
 The eXMC side is written the idiomatic eXMC way *today* — vector RVs where
 exmc supports them — and the results file says which form each side used.
-**DECIDE** whether a scalar-RV exmc variant is also run, to show the graph-shape
-cost MISSION §5.2c describes.
+A scalar-RV exmc variant is also run, to publish the graph-shape cost
+MISSION §5.2c describes.
 
 ## Gate 1 — the two sides are the same model
 
@@ -136,18 +135,18 @@ fails does not race.
 1000 tune / 1000 draws, `target_accept=0.8`, max tree depth 10, diagonal mass
 matrix adaptation, one chain per run for the headline table.
 
-**Initialisation — DECIDE.** (a) Each framework's defaults (PyMC's
+**Initialisation — decided.** (a) Each framework's defaults (PyMC's
 `jitter+adapt_diag`, exmc's own), which is what a user gets and is the
-recommended headline; or (b) both from the same explicit point (February's init
-dicts), which isolates the sampler from the initialiser. Recommended: (a) as
-the headline and (b) as a one-seed control, reported beside it.
+headline; and (b) both from the same explicit point (February's init
+dicts), which isolates the sampler from the initialiser. (a) is the
+headline and (b) a one-seed control, reported beside it.
 
 ## Arms
 
 | arm | what | status |
 |---|---|---|
 | **PyMC 6.3.2, default NUTS** | `pm.sample(nuts_sampler="pymc")` | always |
-| **PyMC + nutpie 0.16.11** | `pm.sample(nuts_sampler="nutpie")`, PyMC's fastest supported path | **DECIDE** — recommended: yes; leaving it out would be racing a weaker PyMC than users can install |
+| **PyMC + nutpie 0.16.11** | `pm.sample(nuts_sampler="nutpie")`, PyMC's fastest supported path | yes — leaving it out would race a weaker PyMC than users can install |
 | **eXMC, EXLA arm** | `Sampler.sample/3` | always |
 | eXMC, Vulkan arm on super-io | information only, not in the headline | optional |
 
