@@ -65,13 +65,18 @@ defmodule Exmc.ReproducibilityContractTest do
     s1
   end
 
+  # 1_200_000 ms, not 300_000: the CPU arm timed out on the Jetson (two 5 W cores,
+  # OTP without JIT) at 300 s during the Rustler 0.38 fleet run, 2026-09-13,
+  # before reaching the comparison. The draws are long on purpose (a last-bit
+  # difference needs a long chain to flip a decision), so the budget follows
+  # the slowest host rather than the chains shrinking.
   describe "CPU arm" do
     setup do
       put_env_scoped(:compiler, :none)
       :ok
     end
 
-    @tag timeout: 300_000
+    @tag timeout: 1_200_000
     test "same seed gives identical bits; a different seed does not; provenance recorded" do
       stats = assert_contract("cpu")
       assert stats.provenance.device == nil
@@ -79,7 +84,7 @@ defmodule Exmc.ReproducibilityContractTest do
   end
 
   describe "the arm this host detects" do
-    @tag timeout: 300_000
+    @tag timeout: 1_200_000
     test "same seed gives identical bits; a different seed does not; provenance recorded" do
       assert_contract("detected: #{Exmc.JIT.describe()}")
     end
@@ -93,7 +98,7 @@ defmodule Exmc.ReproducibilityContractTest do
       :ok
     end
 
-    @tag timeout: 300_000
+    @tag timeout: 1_200_000
     test "same seed gives identical bits; provenance names the device actually open" do
       stats = assert_contract("vulkan")
 

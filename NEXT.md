@@ -32,8 +32,14 @@ stands rather than as the mission planned it.
 - **Landed before the Jetson's suite finished**, on the operator's call. It had
   already used the prebuilt (marker `ca1e0c8`, hash_match yes, NIF `8647de56`,
   the same bytes the nx_vulkan session built) and passed the smoke gate.
-  Record its count here when `~/fleet_verify_r38.log` ends; expected 740 / 2
-  (PokerTest and IntegrationTest timeouts).
+  **Its count: 740 / 3**: the expected PokerTest and IntegrationTest timeouts,
+  plus `ReproducibilityContractTest` "CPU arm", which timed out at its 300 s
+  limit before reaching the comparison (not a bits mismatch). The contract
+  tests' timeouts are now 1,200 s; the Jetson's expected count stays 740 / 2.
+  NIF hashes read by exmc's gates: Keplers `5cb1e506`, NUC `11fdca96`, Jetson
+  `8647de56`. They differ from the nx_vulkan session's `671acbd8` / `6f52785b`
+  for native builds because a native build embeds its build path (deps/ against
+  ~/nx_vulkan); the cross-built Jetson NIF is byte-identical.
 
 **Not on main yet**
 - **The shader-size fix**, worktree `../exmc-shader`, branch `wip/shader-size`
