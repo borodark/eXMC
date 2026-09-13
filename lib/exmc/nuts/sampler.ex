@@ -189,6 +189,7 @@ defmodule Exmc.NUTS.Sampler do
       empty_trace = %{}
 
       stats = %{
+        provenance: provenance(seed),
         step_size: 0.0,
         inv_mass_diag: Nx.tensor(0.0, type: Exmc.JIT.precision()),
         divergences: 0,
@@ -374,6 +375,7 @@ defmodule Exmc.NUTS.Sampler do
         end
 
       stats = %{
+        provenance: provenance(seed),
         step_size: epsilon_final,
         inv_mass_diag: inv_mass_diag_out,
         divergences: state.divergences,
@@ -430,6 +432,7 @@ defmodule Exmc.NUTS.Sampler do
       empty_trace = %{}
 
       stats = %{
+        provenance: provenance(seed),
         step_size: 0.0,
         inv_mass_diag: Nx.tensor(0.0, type: Exmc.JIT.precision()),
         divergences: 0,
@@ -481,6 +484,7 @@ defmodule Exmc.NUTS.Sampler do
           end
 
         stats = %{
+          provenance: provenance(seed),
           step_size: epsilon,
           inv_mass_diag: inv_mass_diag_out,
           divergences: state.divergences,
@@ -1263,6 +1267,7 @@ defmodule Exmc.NUTS.Sampler do
       empty_trace = %{}
 
       empty_stats = %{
+        provenance: provenance(base_seed),
         step_size: 0.0,
         inv_mass_diag: Nx.tensor(0.0, type: Exmc.JIT.precision()),
         divergences: 0,
@@ -1394,6 +1399,7 @@ defmodule Exmc.NUTS.Sampler do
             trace = build_trace(draws, pm, ncp_info)
 
             stats = %{
+              provenance: provenance(base_seed),
               step_size: epsilon_final,
               inv_mass_diag: inv_mass_diag_out,
               divergences: final_state.divergences,
@@ -1823,6 +1829,61 @@ defmodule Exmc.NUTS.Sampler do
   end
 
   defp prior_variance(_mod, _params), do: 1.0
+
+  # What produced this result, recorded on every stats map so a posterior carries
+  # the facts needed to replay it (docs/REPRODUCIBILITY.md).
+  #
+  # The contract: the same seed, arm, build and host give bit-identical draws;
+  # across hosts only statistically, because the host libm and GPU vendors
+  # differ in the last bits. A result that does not say which arm, build and
+  # host made it cannot be checked against that contract, and two runs that
+  # disagree cannot be told apart from a defect. REVIEW_PLAN Track 1 item 4
+  # asked for the arm in the stats map for the same reason.
+  #
+  # `:arm` is Exmc.JIT.describe/0, the same line test_helper.exs prints. On the
+  # Vulkan arm `:device` is the device actually open -- name, uuid, pci, driver
+  # and how it was selected -- because the arm alone does not say which GPU,
+  # and a two-GPU host picks by enumeration order unless NXV_DEVICE pins it.
+  # The nx_vulkan commit is not recoverable at runtime (a git dependency's vsn is
+  # its mix.exs version); `mix.lock` pins it, and the build is part of what
+  # "the same build" means.
+  defp provenance(seed) do
+    compiler = Exmc.JIT.detect_compiler()
+
+    %{
+      seed: seed,
+      arm: Exmc.JIT.describe(),
+      device: vulkan_device(compiler),
+      exmc: vsn(:exmc),
+      nx: vsn(:nx),
+      nx_vulkan: vsn(:nx_vulkan),
+      exla: vsn(:exla),
+      elixir: System.version(),
+      otp: List.to_string(:erlang.system_info(:otp_release)),
+      os: :os.type() |> Tuple.to_list() |> Enum.join("/"),
+      os_version: :os.version() |> Tuple.to_list() |> Enum.join("."),
+      arch: List.to_string(:erlang.system_info(:system_architecture)),
+      host: :net_adm.localhost() |> List.to_string()
+    }
+  end
+
+  defp vulkan_device(Nx.Vulkan) do
+    if Code.ensure_loaded?(Nx.Vulkan.Device) do
+      case apply(Nx.Vulkan.Device, :info, []) do
+        %{} = info -> Map.take(info, [:name, :uuid, :pci, :driver, :selected_by])
+        _ -> nil
+      end
+    end
+  end
+
+  defp vulkan_device(_compiler), do: nil
+
+  defp vsn(app) do
+    case Application.spec(app, :vsn) do
+      nil -> nil
+      v -> List.to_string(v)
+    end
+  end
 
   defp scalar_param(params, key) do
     case Map.fetch!(params, key) do

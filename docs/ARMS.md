@@ -105,7 +105,10 @@ The total is 723 tests on every arm; only the excluded set differs.
 in `test/exmc/nuts/synthesis_fallback_test.exs`, four of them
 `:requires_vulkan`): MEASURED on super-io, Vulkan 728 / 0 with 6 excluded,
 EXLA 728 / 0 with 71 excluded. Fleet rows below predate it; expect 728 with the
-same failures on the next run.
+same failures on the next run. **From the reproducibility contract on, 731**
+(`test/reproducibility_contract_test.exs`, one of its three tests
+`:requires_vulkan`): MEASURED on super-io, Vulkan 731 / 0 with 6 excluded, EXLA
+731 / 0 with 72 excluded.
 
 ## Fleet, measured
 
