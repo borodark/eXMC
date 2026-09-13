@@ -101,6 +101,22 @@ needs cargo plus `pyarrow` and `obstore`. It is attempted; if it does not build,
 the nutpie column on that host is recorded as "not buildable on FreeBSD", with
 the error.
 
+**Installed on asus, 2026-09-13.**
+- **From pkg**, additive only: `py312-numpy` 2.4.6, `py312-scipy` 1.17.1,
+  `py312-numba` 0.67.0, `py312-llvmlite` 0.49.0, `py312-pandas` 2.3.3,
+  `py312-pyarrow` 24.0.0, `py312-xarray` 2026.4.0, `py312-maturin`,
+  `py312-cython`. The dry run listed 84 new packages and nothing upgraded or
+  removed.
+- **The venv**: `~/pymc_race_venv` with `--system-site-packages`, and pip
+  constrained to `requirements.lock` for everything pkg did not provide:
+  pymc 6.3.2, pytensor 3.3.1, arviz 1.3.0, and **nutpie 0.16.11 built from
+  source** with cargo 1.94.0 in about 13 minutes at nice 15.
+- **Lock**: `requirements-freebsd.lock`. numba and llvmlite match super-io
+  exactly. numpy, scipy, pandas, pyarrow and xarray are a minor version behind,
+  and every run records its versions.
+- **Smoke test on `simple`** (1000 + 1000, one chain): PyMC NUTS gave mu 3.1396,
+  sigma 1.1653; nutpie gave mu 3.1253, sigma 1.1676. Both in float64.
+
 **asus** is shared (the nx_vulkan two-GPU work, the ex_pathmc session). Its
 `~/exmc_oss` belongs to the two-GPU work, so the race uses a separate checkout
 (`~/exmc_race`) and a venv under it (agreed by the nx_vulkan session;
