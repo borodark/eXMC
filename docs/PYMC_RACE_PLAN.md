@@ -222,6 +222,51 @@ numpy 2.5.3. Both samplers sample a Normal/Exponential model. `pm.sample` now
 returns a `DataTree` (ArviZ 1.x), and `arviz.ess(idata, method="bulk")` works on
 it; that is the call score.py uses for both frameworks.
 
+## Steps 2–3 — DONE 2026-09-13, super-io: the models, and gate 1 passes
+
+`bench/pymc_race/`: `data.json` (the seven models' data from phd.git
+`benchmark/data/benchmark_data.json` @ `c579dba`, sha256 `5cc2601a58508af3`),
+`models.py` (PyMC 6.3.2), `models.exs` (exmc, `:vector` and `:scalar`
+variants), `parity.py` + `parity.exs`. The points file is regenerated from
+its seed and not committed.
+
+Gate 1 compares log densities at 200 PyMC points per model in CONSTRAINED
+space (PyMC `compile_logp(jacobian=False)` against exmc's compiled density
+minus exmc's own Jacobian), on exmc's CPU arm with NCP off:
+
+| model | exmc variant | d | result | constant offset | worst relative residual |
+|---|---|---|---|---|---|
+| simple | (one form) | 2 | PASS | 3.2e-08 | 6.6e-16 |
+| medium | (one form) | 5 | PASS | 3.0e-08 | 7.0e-16 |
+| stress | (one form) | 8 | PASS | 3.4e-08 | 6.6e-16 |
+| eight_schools | vector / scalar | 10 | PASS | 6.0e-08 | 3.3e-16 / 4.1e-16 |
+| funnel | vector / scalar | 10 | PASS | 8.270447 (exmc's Custom drops the normaliser) | 4.2e-16 |
+| logistic | vector / scalar | 21 | PASS | 6.7e-07 | 4.9e-16 / 7.7e-16 |
+| sv | vector / scalar | 102 | PASS | 5.4e-06 | **6.9e-10** |
+
+**Three findings the gate produced, and what the race does about each:**
+
+1. **February's SV race compared two different models.** PyMC's
+   `GaussianRandomWalk` without `init_dist` defaults the first step to
+   Normal(0, 100); exmc's has x[0] ~ Normal(0, sigma). MEASURED as a negative
+   control: with February's PyMC spec, both SV variants FAIL at a worst
+   relative residual of 5.2e-2 (offset about -95), every other model still
+   PASSes. The race's PyMC SV passes `init_dist=pm.Normal.dist(0, sigma)`.
+2. **SV's residual is near the tolerance and not constant**: 6.9e-10 relative,
+   about 5e-4 absolute on log densities near 7e5. INFERRED cause: exmc's
+   `Exmc.Math.lgamma` is a Lanczos approximation and PyMC uses exact `gammaln`,
+   and the StudentT likelihood's `lgamma((nu+1)/2) - lgamma(nu/2)` varies with
+   `nu`. The model is the same; the arithmetic differs in the last digits. It
+   is recorded beside SV's results.
+3. **The parameter spaces differ where the models do not.** exmc samples
+   HalfNormal through softplus (eight schools' tau), PyMC through log. The
+   same posterior, sampled in different coordinates, which affects geometry
+   and so ESS. That is a real framework difference, reported as such, not
+   normalised away.
+
+Also measured: February's exmc funnel clamped y/2 to [-20, 20]; the race's
+does not.
+
 ## Order of work
 
 1. venv, pins, `requirements.lock`; confirm PyMC 6.3.2 and nutpie import and
