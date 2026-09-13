@@ -1089,6 +1089,7 @@ defmodule Exmc.NUTS.Tree do
         sliced_p,
         sliced_logp,
         sliced_grad,
+        epsilon,
         inv_mass_diag,
         depth,
         rng,
@@ -1120,6 +1121,7 @@ defmodule Exmc.NUTS.Tree do
          sliced_p,
          sliced_logp,
          sliced_grad,
+         epsilon,
          inv_mass_diag,
          depth,
          rng,
@@ -1142,8 +1144,23 @@ defmodule Exmc.NUTS.Tree do
 
     jlp0 = if is_number(joint_logp_0), do: joint_logp_0, else: -1.0e300
 
-    # Backward chain states were computed with -epsilon, so the NIF traverses
-    # them as if going forward (going_right=true always).
+    # The direction is the subtree's real one, as in `build_subtree_nif/10`.
+    #
+    # The buffer holds a backward chain nearest-first (integrated with
+    # -epsilon), and so does multi_step_fn's output there; the NIF reads that
+    # order correctly only when told it is going left. This passed `true` for
+    # both directions, so a backward subtree came back with its endpoints
+    # swapped: q_left the state next to the trajectory, q_right the far end.
+    # `merge_trajectories/6` then took the near state as the trajectory's new
+    # left edge, and the U-turn checks ran on the wrong endpoint momenta.
+    #
+    # The sampler's default path (use_nif, speculative precompute, depth >= 2).
+    # On bench/pymc_race's stochastic-volatility model it inflated sigma to
+    # 0.0834 (mean s sd 0.195) against CmdStan's 0.0782 (0.178); the Elixir
+    # tree, the full-tree NIF and this NIF without precompute all agreed with
+    # Stan.
+    going_right = epsilon > 0
+
     nif_result =
       NativeTree.build_subtree_bin(
         all_q_bin,
@@ -1154,7 +1171,7 @@ defmodule Exmc.NUTS.Tree do
         jlp0,
         depth,
         d,
-        true,
+        going_right,
         rng_seed
       )
 
@@ -2164,7 +2181,7 @@ defmodule Exmc.NUTS.Tree do
   # the exact producer: "vulkano f32 dispatch that hits a numerical edge case
   # and emits NaN into the trajectory tensors".
   #
-  # The NIF path did not. `build_subtree_nif_precomputed/8` guarded only
+  # The NIF path did not. `build_subtree_nif_precomputed/9` guarded only
   # `joint_logp_0` and handed the chain binaries to
   # `NativeTree.build_subtree_bin/9` unchecked, where a non-finite f64 is
   # rejected as `badarg` -- so the same trajectory that the Elixir path

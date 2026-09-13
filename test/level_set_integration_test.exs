@@ -22,7 +22,24 @@ defmodule Exmc.LevelSetIntegrationTest do
   alias Exmc.Dist
   alias Exmc.Physics.{LevelSet, Heat2D}
 
-  test "recovers circular inclusion on 6x6 grid" do
+  # This test used to be "recovers circular inclusion on 6x6 grid" and asserted
+  # that the posterior mean of phi is higher at the centre than at the corners.
+  # The model does not identify that at this budget. The true contrast is about
+  # 2.8 (centre 0.79, corners -2.04). The measured centre-minus-corner contrast
+  # of the posterior mean, 500 warmup + 300 draws, was noise around zero:
+  #
+  #   subtree NIF, seeds 42,1..5:   -0.073 -0.002 +0.029 +0.126 +0.004 +0.070
+  #   Elixir tree, seeds 42,1,2:    +0.019 -0.042 +0.043
+  #
+  # Six bottom-row sensors behind a smoothed material field barely move phi off
+  # its N(0, 2) prior. The assertion passed at seed 42 only while the
+  # speculative NIF tree swapped backward subtree endpoints. Fixing that
+  # changed the draws and the sign flipped (2026-09-13). What the test can
+  # honestly check is that NUTS runs this PDE-in-the-loop model end to end:
+  # finite draws of the right shape, sigma_obs in its support, few divergences.
+  # A recovery test needs a design that identifies the inclusion (sensors on
+  # every boundary, more draws), which is a separate piece of work.
+  test "samples the PDE-constrained level-set model on a 6x6 grid" do
     ny = 6
     nx = 6
     n = ny * nx
@@ -141,28 +158,10 @@ defmodule Exmc.LevelSetIntegrationTest do
         ncp: false
       )
 
-    # Verify: posterior mean phi should have correct sign pattern
-    # (positive at center, negative at corners)
-    phi_samples = trace["phi"]
-    mean_phi = Nx.mean(phi_samples, axes: [0]) |> Nx.reshape({ny, nx})
-
-    # Center region (rows 2-3, cols 2-3) should be more positive than corners
-    center_vals =
-      for i <- 2..3, j <- 2..3 do
-        Nx.to_number(mean_phi[i][j])
-      end
-
-    corner_vals =
-      for {i, j} <- [{0, 0}, {0, nx - 1}, {ny - 1, 0}, {ny - 1, nx - 1}] do
-        Nx.to_number(mean_phi[i][j])
-      end
-
-    center_mean = Enum.sum(center_vals) / length(center_vals)
-    corner_mean = Enum.sum(corner_vals) / length(corner_vals)
-
-    # The center should be more positive (inclusion detected)
-    assert center_mean > corner_mean,
-           "Center mean phi (#{center_mean}) should be > corner mean (#{corner_mean})"
+    assert Nx.shape(trace["phi"]) == {300, n}
+    assert Nx.to_number(Nx.all(Nx.is_nan(trace["phi"]) |> Nx.logical_not())) == 1
+    assert Nx.to_number(Nx.all(Nx.is_infinity(trace["phi"]) |> Nx.logical_not())) == 1
+    assert Nx.to_number(Nx.all(Nx.greater(trace["sigma_obs"], 0.0))) == 1
 
     # Sanity checks
     assert stats.divergences < 150, "Too many divergences: #{stats.divergences}"

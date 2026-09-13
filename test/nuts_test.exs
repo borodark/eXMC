@@ -553,6 +553,72 @@ defmodule Exmc.NUTSTest do
              "accept_sum: spec=#{result_spec.accept_sum} vs no_spec=#{result_no_spec.accept_sum}"
     end
 
+    # Test 21 turns the NIF off, so the speculative buffer's NIF subtree was never
+    # compared with the direct one. It passed going_right=true for backward
+    # subtrees, swapping their endpoints; the trees then stopped at different
+    # U-turns, and sigma on the stochastic-volatility model came out 7% high.
+    # Both paths call the same NIF over the same states with the same seed, so
+    # the trees must agree exactly.
+    @tag timeout: 300_000
+    test "21b. speculative vs non-speculative through the subtree NIF: identical trees" do
+      if not Tree.nif_available?(), do: flunk("exmc_tree NIF not loaded")
+
+      ir =
+        Builder.new_ir()
+        |> Builder.rv("x", Normal, %{mu: Nx.tensor(0.0), sigma: Nx.tensor(1.0)})
+        |> Builder.rv("y", Normal, %{mu: Nx.tensor(1.0), sigma: Nx.tensor(3.0)})
+        |> Rewrite.apply()
+
+      {vag_fn, step_fn, _pm, _ncp_info, multi_step_fn, _chain_meta} =
+        Exmc.Compiler.compile_for_sampling(ir)
+
+      inv_mass = Nx.tensor([1.0, 0.5], type: :f64)
+      inv_mass_list = Nx.to_flat_list(inv_mass)
+
+      put_env_scoped(:use_nif, true)
+      put_env_scoped(:full_tree_nif, false)
+
+      build = fn speculative, seed ->
+        q = Nx.tensor([0.3, -0.2], type: :f64)
+        {logp, grad} = vag_fn.(q)
+        {p, _} = Leapfrog.sample_momentum(Nx.Random.key(seed), inv_mass)
+        Application.put_env(:exmc, :speculative_precompute, speculative)
+
+        Tree.build(
+          step_fn,
+          q,
+          p,
+          logp,
+          grad,
+          0.15,
+          inv_mass,
+          8,
+          :rand.seed_s(:exsss, seed),
+          Leapfrog.joint_logp(logp, p, inv_mass),
+          multi_step_fn,
+          inv_mass_list
+        )
+      end
+
+      put_env_scoped(:speculative_precompute, true)
+
+      results =
+        for seed <- 1..24 do
+          spec = build.(true, seed)
+          direct = build.(false, seed)
+
+          assert {spec.n_steps, spec.depth, spec.divergent} ==
+                   {direct.n_steps, direct.depth, direct.divergent},
+                 "seed #{seed}: spec #{inspect({spec.n_steps, spec.depth})} vs direct #{inspect({direct.n_steps, direct.depth})}"
+
+          assert Nx.to_flat_list(spec.q) == Nx.to_flat_list(direct.q), "seed #{seed}: proposals differ"
+          spec.depth
+        end
+
+      # Depth >= 3 means a doubling of depth >= 2, the first to reach the NIF.
+      assert Enum.count(results, &(&1 >= 3)) >= 12, "trees too shallow to reach the NIF: #{inspect(results)}"
+    end
+
     @tag timeout: 120_000
     test "22. sampling quality with speculative pre-computation" do
       ir =
