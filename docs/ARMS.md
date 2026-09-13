@@ -151,12 +151,38 @@ Vulkan startup. All arms were within tolerance of analytic truth.
 mac-248 is 1.43× faster on `vulkan` and 1.26× on `none`, so most of the gap is
 the CPU. What is left for the GPU is roughly 1.13×, and startup is inside it.
 
-**Agreement.** Both hosts' `vulkan` pooled moments are identical to every
-printed digit (Normal mean −0.000347, var 0.999222, ess 4809), and so are
-their `none` moments. super-io's `vulkan` run at the same seeds (NEXT.md,
-2026-09-12, lock `8116a19`) gave Normal mean −0.003061. On these three
-single-RV fixtures, ANV reproduces the Kepler and the Ampere is the outlier,
-the same grouping as the leaf-diff table's.
+**Agreement, and what it is not.** Both hosts' `vulkan` pooled moments are
+identical to every printed digit (Normal mean −0.000347, var 0.999222, ess
+4809), and so are their `none` moments. That is NOT a GPU grouping. Measured
+the same day at the same settings (`667573f16`):
+
+| run | Normal mean | HalfNormal mean | Exponential mean |
+|---|---|---|---|
+| super-io `none` | −0.016021 | 0.792226 | 0.495538 |
+| NUC = mac-248 `none` | −0.015276 | 0.795172 | 0.496193 |
+| super-io `vulkan` (Ampere) | −0.003061 | 0.795981 | 0.491954 |
+| Jetson `vulkan` (Tegra, glibc aarch64) | −0.003061 | 0.790088 | 0.496679 |
+| NUC = mac-248 `vulkan` (ANV, Kepler) | −0.000347 | 0.784924 | 0.489146 |
+
+The host-only arm already differs between super-io and the FreeBSD boxes, so
+part of the split is on the host. On Normal, whose chain shader takes no
+`log`/`exp`, the grouping is by OS on both arms: Linux {super-io, Jetson}
+vs FreeBSD {NUC, mac-248}. A short run (seed 1, 100/200) is identical on
+super-io, mac-247 and the Jetson for both tree implementations, so the
+difference needs a long chain to surface.
+
+**The host libm is not bit-portable, even glibc to glibc.** BEAM `:math` over
+1M seeded inputs, sha256 of the raw f64s: inputs and `sqrt` identical on
+super-io (glibc 2.39 x86_64), mac-247 (FreeBSD msun) and the Jetson (glibc
+2.27 aarch64); `log`, `exp`, `log(1+x)` and `pow` differ on all three. Yet the
+Jetson's Normal `vulkan` run matched super-io's exactly, so a libm difference
+has to flip an accept/reject decision before it reaches the moments. Why that
+happened Linux-to-FreeBSD and not glibc-to-glibc is **open**. INFERRED
+candidate: msun differs from glibc on more inputs or by more ULPs.
+
+**Consequence:** exact posterior reproducibility across hosts is not a
+property exmc has, on either arm. Tolerance to analytic truth is the gate.
+Moments quoted across hosts are comparable statistically, not bitwise.
 
 **Not a general bit-identity claim across vendors.** nx_vulkan's
 `scripts/arch_float_divergence.exs` at `eddb973` measured the chain shaders'
