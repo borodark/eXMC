@@ -8,6 +8,54 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-13 (night): references agree on all 7 models after a sampler fix
+
+**Sampler defect, fixed in `509e22b26`.** The race's reference runs caught it:
+exmc's SV posterior had sigma 7% high and s's sd 9% wide against PyMC,
+nutpie and CmdStan.
+- **Localised by tree implementation.** The Elixir tree, the full-tree NIF and
+  the subtree NIF without speculative precompute all matched Stan. Only the
+  default path was biased (use_nif, speculative precompute, depth >= 2).
+- **Cause.** `build_subtree_nif_precomputed` passed `going_right=true` for
+  backward subtrees, so their endpoints came back swapped.
+- **Regression test.** `nuts_test` 21b requires the speculative and direct NIF
+  trees to be identical across 24 seeds; it fails with the old direction.
+- **Level-set test.** `level_set_integration_test` had passed its centre > corner
+  assertion only through seed luck on the buggy tree. Measured over 9 runs on
+  the correct trees, that contrast is noise around zero. It is now an
+  end-to-end sampling check.
+- **Suites on super-io.** EXLA 741/0; Vulkan 741/0.
+
+**Reference posteriors (gate 2), exmc on `509e22b26`, EXLA arm on super-io, 4 x
+10,000 draws against PyMC 6.3.2 NUTS.** `bench/pymc_race/reference_compare.py`:
+
+| model | components | max z mean | max z sd | worst R-hat (pymc / exmc) | min ESS (pymc / exmc) | exmc wall | verdict |
+|---|---|---|---|---|---|---|---|
+| simple | 2 | 0.96 | 0.28 | 1.0000 / 1.0002 | 36548 / 25298 | 42.7 s | AGREE |
+| medium | 5 | 1.79 | 0.97 | 1.0003 / 1.0004 | 21062 / 21059 | 60.6 s | AGREE |
+| stress | 8 | 1.84 | 1.93 | 1.0002 / 1.0003 | 30037 / 24954 | 114.6 s | AGREE |
+| eight_schools | 10 | 1.44 | 1.27 | 1.0001 / 1.0003 | 18183 / 48706 | 69.0 s | AGREE |
+| funnel | 10 | 1.91 | 1.99 | 1.0001 / 1.0001 | 38875 / 39156 | 68.6 s | AGREE |
+| logistic | 21 | 2.04 | 1.74 | 1.0003 / 1.0003 | 55840 / 46664 | 203.8 s | AGREE |
+| sv | 102 | 1.58 | 1.78 | 1.0016 / 1.0031 | 2140 / 1649 | 1304.9 s | AGREE |
+
+- **SV before the fix.** max z mean was 8.87, and exmc's wall time was 881 s.
+  Trees now stop at the correct U-turn and run longer.
+- **Wall times** are reference runs, not race timings.
+- **Where the outputs live.** They are gitignored, in `bench/pymc_race/reference/`.
+  The runs before the fix are kept in `reference/pre_509e22b/`.
+
+**Next, in order:**
+1. **Move the nx_vulkan lock to `bd17793`.** This is the asus start-up hang fix:
+   one Vulkan instance per process. It needs a new NIF on every host, and the
+   race provenance records the NIF sha. The Jetson NIF is cross-built with
+   `REF=bd17793 DEST_DIR='$HOME/exmc_oss/deps/nx_vulkan'`.
+2. **Fleet-verify exmc**, including asus, where the six start-up timeouts should
+   be gone.
+3. **PyMC race harness and a one-seed pilot on super-io**, then asus, then the NUC.
+4. **Remaining work.** Land `wip/shader-size`. Fix SV synthesis on the Vulkan
+   arm (GaussianRandomWalk in `compose_logp_defn`). Write up the width race.
+
 ## Status — 2026-09-13 (evening): Rustler 0.38 on main; two exmc defects fixed
 
 **On main**
