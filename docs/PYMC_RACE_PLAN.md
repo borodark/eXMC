@@ -1,6 +1,8 @@
 # The PyMC race — plan
 
 **Written 2026-09-13**, at exmc `7db9ffcab`. Status: **PLAN, nothing run.**
+**Operator decisions, 2026-09-13: all five below are YES**, and the race also
+runs on two FreeBSD hosts (asus, then the NUC) — see *Hosts*.
 It replaces the February 2026 comparison the README used to publish
 (`STANDARD_BENCHMARKS.md`, now bannered historical). Decisions still open are
 marked **DECIDE**.
@@ -37,7 +39,10 @@ README table is generated from the results file, losses included.
   told before and after.
 - **PyMC side:** a venv at `bench/pymc_race/.venv` (never the system
   site-packages, which hold 5.27.1): `pymc==6.3.2` with the `pytensor`,
-  `arviz` and `numpy` it resolves, plus `nutpie==0.16.11` if that arm is kept.
+  `arviz` and `numpy` it resolves, plus `nutpie==0.16.11`. From PyPI metadata:
+  PyMC 6.3.2 needs **Python >= 3.12**, `pytensor>=3.2.2,<3.4` and
+  **`arviz>=1.1,<2`**. ArviZ 1.x is a new major version, so step 1 confirms
+  the ESS call (`ess_bulk`/`ess_tail`) under 1.x before anything depends on it.
   `requirements.lock` is committed from `pip freeze`. The PyTensor compile
   cache is warmed by the untimed run, then left alone.
 - **eXMC side:** `MIX_ENV=prod`-shaped run via `mix run`, the consumer path.
@@ -48,6 +53,50 @@ README table is generated from the results file, losses included.
   `OMP_NUM_THREADS`, `MKL_NUM_THREADS` and `OPENBLAS_NUM_THREADS` set to the
   core count for both, so BLAS cannot quietly borrow cores the other side is
   denied. The CPU model and `nproc` inside the pin are recorded.
+
+## Hosts
+
+Three machines, one protocol. The references (gate 2) are computed once, on
+super-io, and reused: the data and the posterior are identical everywhere.
+
+| host | OS, CPU | GPU | exmc arms | PyMC arms | tables |
+|---|---|---|---|---|---|
+| **super-io** | Linux x86_64 | RTX 3060 Ti | **EXLA** (headline), Vulkan (information) | default NUTS, nutpie | single-chain, 4-chain |
+| **asus** | FreeBSD 15 | GTX 1660 Ti + Quadro M4000, driver 580 (to confirm) | **Vulkan**, pinned by uuid; CPU host tree | default NUTS; nutpie if it builds | single-chain, 4-chain |
+| **NUC** | FreeBSD 15, i3-6100U (2 cores / 4 threads), 8 GB | HD 520, Mesa ANV | **Vulkan**; CPU host tree | default NUTS; nutpie if it builds | single-chain only |
+
+**Why the FreeBSD hosts matter.** FreeBSD has no EXLA and no CUDA. There the
+race is the reach thesis itself, against a compiled competitor rather than
+the interpreter: *on a machine with a GPU but no CUDA, does exmc on Vulkan
+deliver more effective samples per second than PyMC on the CPU?* asus
+answers it on a discrete NVIDIA card, the NUC on a commodity iGPU.
+
+**Vulkan arm coverage.** A model that does not synthesise a chain shader is
+refused at compile time (the Plan-B' guard), and is recorded as a refused row,
+not silently run per-op. Logistic (Custom Bernoulli likelihood) and SV
+(GaussianRandomWalk with a StudentT likelihood on exp(s)) are the ones to
+check first.
+
+**FreeBSD Python stack.** PyMC is pure Python. FreeBSD packages provide
+`python3.12`, `py312-numpy` 2.4.6, `py312-scipy` 1.17.1, `py312-xarray` and
+`py312-arviz` 1.1.0; packaged `py312-pytensor` is 3.1.2, below PyMC's floor, so
+PyTensor is built by pip against packaged Cython 3.2.8. **nutpie publishes no
+FreeBSD wheel** (0.16.11: manylinux, macOS and Windows only); a source build
+needs cargo plus `pyarrow` and `obstore`. It is attempted; if it does not build,
+the nutpie column on that host is recorded as "not buildable on FreeBSD", with
+the error.
+
+**asus** is shared (the nx_vulkan two-GPU work, the ex_pathmc session). Its
+`~/exmc_oss` belongs to the two-GPU work, so the race uses a separate checkout
+(`~/exmc_race`) and a venv under it. It needs an agreed window with the box
+otherwise idle. Pending the nx_vulkan session's answer on CPU, RAM, toolchain
+and window.
+
+**The NUC** goes last and overnight. The 4-chain table is skipped there (four
+chains would saturate its two cores and turn the table into a contention
+measurement), and the venv plus any nutpie build must fit in the ~4 GB free on
+its 11 GB pool. The width race on the same box (2026-09-13) spent 729 s
+sampling one d=32 Vulkan cell, so budget several times super-io's hours.
 
 ## Models
 
@@ -158,7 +207,9 @@ simple a few seconds; logistic 4 s (PyMC) to 16 s (exmc); SV 35–54 s (PyMC)
 to 83–95 s (exmc). Ten seeds × seven models × three arms ≈ 45–60 min for the
 single-chain table; the 4-chain table about the same; reference runs ≈ 30 min;
 gate 1 and warm-ups ≈ 10 min. **About 2.5–3 hours of super-io**, plus the
-harness work before it.
+harness work before it. asus: similar or somewhat longer (no EXLA; the CPU
+host-tree arm is slow on logistic and SV). The NUC: several times that,
+overnight, single-chain table only.
 
 ## Order of work
 
@@ -170,12 +221,19 @@ harness work before it.
 5. Pilot: one seed, all arms, all models, end to end through `score.py`.
 6. The full run, super-io idle.
 7. Results file, then README.
+8. asus, in its agreed window: `~/exmc_race` checkout, venv, gate 1 re-run on
+   that host, then the same run with the Vulkan and CPU arms.
+9. The NUC, overnight: single-chain table only.
 
-## Decisions for the operator
+## Decisions — resolved 2026-09-13, all YES
 
-1. Keep **nutpie** as an arm? Recommended: yes.
-2. **Initialisation:** defaults as the headline and a shared-init control?
-   Recommended: yes.
-3. **Core pin:** 1 core single-chain, 4 cores for the 4-chain table?
-4. Run a **scalar-RV exmc variant** as well, to publish the graph-shape cost?
-5. Include the **Vulkan arm** on super-io as information?
+1. **nutpie** is an arm (on FreeBSD, where it builds).
+2. **Initialisation:** each framework's defaults are the headline; a shared
+   explicit init is a one-seed control beside it.
+3. **Core pin:** 1 core for the single-chain table, 4 cores for the 4-chain
+   table (not run on the NUC).
+4. A **scalar-RV exmc variant** runs too, and the graph-shape cost is published.
+5. The **Vulkan arm** runs on super-io as information; on asus and the NUC it
+   is the headline exmc arm.
+
+Still open: the asus window and toolchain (asked of the nx_vulkan session).
