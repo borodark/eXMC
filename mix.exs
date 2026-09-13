@@ -153,7 +153,13 @@ defmodule Exmc.MixProject do
       # Local git server, pinned. Override with
       # `NX_VULKAN_PATH=/path/to/nx_vulkan mix deps.get` for local iteration.
       nx_vulkan_dep(),
-      {:rustler, "~> 0.36", runtime: false},
+      # `~> 0.38.0`, three components, in lockstep with nx_vulkan: mix resolves ONE
+      # rustler for the whole project, so exmc's range decides whether nx_vulkan's
+      # NIF builds at all. `~> 0.36` admitted 0.37, which nx_vulkan records as
+      # broken (a rustler-sys signature mismatch). 0.38 needs rustc >= 1.91
+      # (native/exmc_tree/rust-toolchain.toml) and installs the NIF as
+      # priv/native/<crate>.so, with no `lib` prefix.
+      {:rustler, "~> 0.38.0", runtime: false},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:propcheck, "~> 1.4", only: :test, runtime: false}

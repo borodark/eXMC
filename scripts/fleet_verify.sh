@@ -89,16 +89,21 @@ git fetch -q origin || { echo "FATAL: fetch failed"; exit 2; }
 # here. A host's local `main` may be far behind (mac-247's was 145 commits), which
 # the fast-forward below takes care of. Tracked changes stop the checkout, and
 # that is the right outcome: the DIRTY block above has already printed them.
+#
+# FLEET_BRANCH names another origin branch to verify, for a change that should
+# pass the fleet BEFORE it lands on main (a lock bump, say). Default main. The
+# host is left on that branch; its next ordinary run moves it back to main.
+target=${FLEET_BRANCH:-main}
 branch=$(git rev-parse --abbrev-ref HEAD)
-if [ "$branch" != "main" ]; then
-  echo "### BRANCH   $branch -> main (gate1/reconcile-core is retired)"
-  if git show-ref --verify --quiet refs/heads/main; then
-    git checkout -q main || { echo "FATAL: cannot check out main; resolve by hand"; exit 2; }
+if [ "$branch" != "$target" ]; then
+  echo "### BRANCH   $branch -> $target"
+  if git show-ref --verify --quiet "refs/heads/$target"; then
+    git checkout -q "$target" || { echo "FATAL: cannot check out $target; resolve by hand"; exit 2; }
   else
-    git checkout -q -b main origin/main || { echo "FATAL: cannot create main; resolve by hand"; exit 2; }
+    git checkout -q -b "$target" "origin/$target" || { echo "FATAL: cannot create $target; resolve by hand"; exit 2; }
   fi
 fi
-git merge --ff-only origin/main || { echo "FATAL: not a fast-forward; resolve by hand"; exit 2; }
+git merge --ff-only "origin/$target" || { echo "FATAL: not a fast-forward; resolve by hand"; exit 2; }
 
 echo "### HEAD     $(git log --oneline -1)"
 echo "### NX_VULKAN $(grep -o '"nx_vulkan": {:git[^}]*}' mix.lock | grep -oE '[0-9a-f]{40}' | head -1)"
@@ -135,7 +140,16 @@ mix deps.get </dev/null 2>&1 | tail -3
 # overwrites the .so and leaves the old marker beside it, and only the hash
 # comparison catches that. Anything else builds natively: slow and correct.
 nxv_lock=$(grep -o '"nx_vulkan": {:git[^}]*}' mix.lock | grep -oE '[0-9a-f]{40}' | head -1)
-nxv_so=deps/nx_vulkan/priv/native/libnx_vulkan_vulkano.so
+# Rustler 0.38 installs and loads `priv/native/<crate>.so`, with NO `lib` prefix
+# (exmc bumped 2026-09-13, nx_vulkan lock ca1e0c8). A `lib<crate>.so` left from
+# 0.36 is never loaded again, but it is still a file with the old name, and a
+# checksum of it measures something the VM does not run. So stale lib-prefixed
+# NIFs, their markers and deploy_jetson_nif.sh's `.prev` backups of them are
+# deleted here, before anything hashes or builds. The glob covers nx_vulkan's old
+# libnx_vulkan_native.so too; the unprefixed `.so.prev` a deploy keeps is left.
+rm -f deps/nx_vulkan/priv/native/lib*.so deps/nx_vulkan/priv/native/lib*.so.provenance \
+  deps/nx_vulkan/priv/native/lib*.so.prev _build/*/lib/exmc/priv/native/lib*.so
+nxv_so=deps/nx_vulkan/priv/native/nx_vulkan_vulkano.so
 nxv_prov=$nxv_so.provenance
 nxv_hash() { { sha256sum "$nxv_so" 2>/dev/null || sha256 -q "$nxv_so" 2>/dev/null; } | cut -d' ' -f1; }
 

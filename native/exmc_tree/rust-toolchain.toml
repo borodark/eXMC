@@ -1,0 +1,4 @@
+[toolchain]
+# Rustler 0.38 requires rustc >= 1.91. rustup reads this file; hosts without
+# rustup (FreeBSD pkg rust, 1.94 on the fleet) ignore it and are new enough.
+channel = "1.91.0"

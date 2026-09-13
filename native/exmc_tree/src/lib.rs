@@ -433,10 +433,9 @@ fn get_result(env: Env, traj_ref: ResourceArc<TrajectoryResource>) -> NifResult<
     Ok(map)
 }
 
-#[allow(non_local_definitions)]
-fn on_load(env: Env, _info: Term) -> bool {
-    let _ = rustler::resource!(TrajectoryResource, env);
-    true
-}
+// Rustler 0.38: resources are registered at item level; the `load` callback
+// that called `rustler::resource!` no longer exists.
+#[rustler::resource_impl]
+impl rustler::Resource for TrajectoryResource {}
 
-rustler::init!("Elixir.Exmc.NUTS.NativeTree", load = on_load);
+rustler::init!("Elixir.Exmc.NUTS.NativeTree");
