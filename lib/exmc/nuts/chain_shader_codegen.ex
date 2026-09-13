@@ -46,31 +46,36 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
   Phase A + B implementations dispatch on the IR's nodes here.
   """
   @spec detect_meta(IR.t(), keyword()) ::
-          {:ok, meta()} | :unsupported | {:unsupported, :push_too_large}
+          {:ok, meta() | tuple()} | :unsupported | {:unsupported, atom()}
   def detect_meta(ir, opts \\ [])
 
   def detect_meta(%IR{nodes: nodes} = ir, opts) when map_size(nodes) == 1 do
-    # Surface A of PLAN_F64_CHAIN_SHADER (Option B): under D88's f64
-    # Vulkano default, route single-family models to the vulkano synth
-    # path (Surface 7) instead of the spirit C++ family fused SPVs.
-    # Spirit family SPVs are f32-only; under f64 they trigger the D87
-    # silent-collapse pathology (the whole reason #175 exists). Synth
-    # emits precision-portable GLSL and dispatch.ex's chain_synth_vulkano
-    # routes to leapfrog_chain_synth_f64 automatically.
+    # UNDER VULKAN, SYNTHESIS OR REFUSAL, NEVER A FAMILY META.
     #
-    # At :f32 (the pre-D88 default or an explicit force_precision: :f32
-    # override) keep the family fast path — it's a few % faster and works
-    # correctly at f32. Under EXLA compiler, always keep the family
-    # fast path — synth returns a `{:synthesised, ...}` meta for the
-    # Vulkan chain-shader pipeline, which EXLA has no notion of; the
-    # synth SPV also can't be compiled for a multi-D single-RV shape
-    # (regression seen in bench/nx_0_12_race_results.md at d=8 / d=50).
-    with :f64 <- Exmc.JIT.precision(),
-         Nx.Vulkan <- Exmc.JIT.detect_compiler(),
-         {:ok, meta} <- try_synthesise(ir, opts) do
-      {:ok, meta}
+    # Every chain shader is synthesised now: nx_vulkan deleted the hand-written
+    # family SPVs (`8006a4d`), and `Exmc.NUTS.Vulkan.Dispatch.do_chain/8` has
+    # exactly one clause, for `{:synthesised, ...}`. The family tuples
+    # detect_family/1 builds still reach it -- Tree.do_dispatch/10 routes
+    # `{:normal, ...}` et al. to it under Nx.Vulkan -- and die there with a
+    # FunctionClauseError at the first chain.
+    #
+    # This clause used to fall back to detect_family/1 whenever synthesis did
+    # not return {:ok, _}, and at :f32 without trying synthesis at all. On
+    # 2026-09-13 that turned an environment defect into a mystery: on FreeBSD,
+    # `:crypto` was not on the code path (fixed in mix.exs), CustomSynth raised,
+    # try_synthesise/2 swallowed it, the family fallback handed Dispatch a
+    # `{:normal, 0.0, 1.0}`, and bench/nuts_truth.exs died after one second on
+    # every FreeBSD host with an error that named neither crypto nor synthesis.
+    # A refusal here reaches the Plan-B' guard in Exmc.Compiler, which says why.
+    #
+    # Under EXLA or the Evaluator nothing changes: the family meta is how
+    # Sampler seeds the initial mass matrix (prior_inv_mass_per_rv/2), and no
+    # chain dispatch happens off Vulkan. The multi-RV clause below already
+    # synthesised unconditionally; this makes the single-RV one agree with it.
+    if Exmc.JIT.detect_compiler() == Nx.Vulkan do
+      try_synthesise(ir, opts)
     else
-      _ -> detect_family(nodes)
+      detect_family(nodes)
     end
   end
 
@@ -99,15 +104,45 @@ defmodule Exmc.NUTS.ChainShaderCodegen do
   # slicing MvNormal's rank-2 covariance produced one ("invalid start indices
   # rank for shape of rank 2") that escaped synthesis and broke the Plan-B'
   # guard for every MvNormal model. Catching a type is not catching a cause.
+  #
+  # Anything else that RAISES is still turned into a refusal, but a tagged,
+  # logged one: `{:unsupported, :synthesis_raised}`, with the exception and the
+  # top of its stacktrace in a warning. A controlled refusal is a return value
+  # from CustomSynth; a raise is a defect or an environment problem, and the
+  # bare `:unsupported` it used to become was indistinguishable from "this
+  # model has no chain-shader form". The `:crypto` hunt is what that cost.
+  #
+  # `:synthesiser` in opts replaces CustomSynth -- a seam for tests, which need
+  # a synthesis that raises and have no ordinary model that does. It is popped
+  # before the rest of opts reach synthesise/2.
   defp try_synthesise(%IR{} = ir, opts) do
+    {synthesiser, opts} = Keyword.pop(opts, :synthesiser, Exmc.NUTS.CustomSynth)
+
     try do
-      Exmc.NUTS.CustomSynth.synthesise(ir, opts)
+      synthesiser.synthesise(ir, opts)
     rescue
-      e in Exmc.SynthReferenceError -> reraise e, __STACKTRACE__
-      _ -> :unsupported
+      e in Exmc.SynthReferenceError ->
+        reraise e, __STACKTRACE__
+
+      e ->
+        log_synthesis_raised(:error, e, __STACKTRACE__)
+        {:unsupported, :synthesis_raised}
     catch
-      _, _ -> :unsupported
+      kind, value ->
+        log_synthesis_raised(kind, value, __STACKTRACE__)
+        {:unsupported, :synthesis_raised}
     end
+  end
+
+  defp log_synthesis_raised(kind, value, stacktrace) do
+    require Logger
+
+    Logger.warning(
+      "[ChainShaderCodegen] chain-shader synthesis raised, so this model is refused " <>
+        "as {:unsupported, :synthesis_raised}. A raise is not a model-shape refusal; " <>
+        "it is a defect or an environment problem:\n" <>
+        Exception.format(kind, value, Enum.take(stacktrace, 8))
+    )
   end
 
   # Multi-RV IRs with at least one Custom-likelihood node: hand off

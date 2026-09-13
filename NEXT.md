@@ -82,7 +82,12 @@ is what forces the rebuild.
    mac-247 and in the race. **Still open:** a synthesis failure under Vulkan at
    f64 falls back to a family meta that no dispatch clause accepts. It should
    reach the Plan-B' refusal with the real reason; `try_synthesise` swallowing
-   the exception is what made this cost an investigation.
+   the exception is what made this cost an investigation. **DONE the same
+   day:** under Vulkan, single-RV detect_meta synthesises or refuses (never a
+   family meta), a raise is logged and becomes `{:unsupported,
+   :synthesis_raised}`, and the Plan-B' guard's message says so. Tests in
+   `synthesis_fallback_test.exs` fail 3 of 5 against the old code. super-io
+   728 / 0 on both arms.
 3. **The exmc half of the Jetson prebuilt**, once nx_vulkan says the
    interface has landed.
 4. **Track 3 leftovers:** the CPU `exla` build row, which replaces the CUDA

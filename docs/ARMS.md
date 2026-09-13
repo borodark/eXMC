@@ -101,6 +101,11 @@ cannot be misread from the tags:
 | Vulkan, f32-only device | the above plus `:requires_f64` | not measured |
 
 The total is 723 tests on every arm; only the excluded set differs.
+**From the synthesis-fallback fix on (2026-09-13) the total is 728** (five tests
+in `test/exmc/nuts/synthesis_fallback_test.exs`, four of them
+`:requires_vulkan`): MEASURED on super-io, Vulkan 728 / 0 with 6 excluded,
+EXLA 728 / 0 with 71 excluded. Fleet rows below predate it; expect 728 with the
+same failures on the next run.
 
 ## Fleet, measured
 

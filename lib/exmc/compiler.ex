@@ -109,30 +109,32 @@ defmodule Exmc.Compiler do
           )
 
         _ ->
-          msg = """
-          Vulkan compiler requires a synthesisable model (f64 chain shader path).
-          ChainShaderCodegen.detect_meta/1 returned :unsupported for this IR.
-          Either:
-            - use `compiler: :exla` (if EXLA is available on this platform)
-            - use `compiler: :none` (pure CPU, slower but correct)
-            - reshape the model so CustomSynth can emit a fused f64 chain shader
-              (standard-family priors with optional Custom likelihood)
+          msg =
+            synthesis_raised_note(detect) <>
+              """
+              Vulkan compiler requires a synthesisable model (f64 chain shader path).
+              ChainShaderCodegen.detect_meta/2 returned #{inspect(detect)} for this IR.
+              Either:
+                - use `compiler: :exla` (if EXLA is available on this platform)
+                - use `compiler: :none` (pure CPU, slower but correct)
+                - reshape the model so CustomSynth can emit a fused f64 chain shader
+                  (standard-family priors with optional Custom likelihood)
 
-          Note on width: this is NOT a width problem. `:unsupported` means the
-          IR itself has no chain-shader form — a non-standard prior family, or
-          a structure CustomSynth cannot compose — so widening anything will
-          not help.
+              Note on width: this is NOT a width problem. `:unsupported` means the
+              IR itself has no chain-shader form — a non-standard prior family, or
+              a structure CustomSynth cannot compose — so widening anything will
+              not help.
 
-          The only width bound is d <= 256, the shader's thread tile
-          (`local_size_x = 256` with a `q_shared[256]` tile), and it reports
-          itself as `{:unsupported, :d_exceeds_tile}` rather than as this
-          message.
+              The only width bound is d <= 256, the shader's thread tile
+              (`local_size_x = 256` with a `q_shared[256]` tile), and it reports
+              itself as `{:unsupported, :d_exceeds_tile}` rather than as this
+              message.
 
-          This note used to say the binding limit was the 128-byte push block
-          at 13 prior floats. That was wrong, and wrong in a way that sent
-          readers to reduce their model when the model was never the problem.
-          See Exmc.NUTS.CustomSynth.Push.
-          """
+              This note used to say the binding limit was the 128-byte push block
+              at 13 prior floats. That was wrong, and wrong in a way that sent
+              readers to reduce their model when the model was never the problem.
+              See Exmc.NUTS.CustomSynth.Push.
+              """
 
           if Application.get_env(:exmc, :allow_vulkan_perop_sampling, false) do
             require Logger
@@ -145,6 +147,22 @@ defmodule Exmc.Compiler do
 
     {vag_fn, step_fn, pm, ncp_info, multi_step_fn, chain_meta}
   end
+
+  # A synthesis that RAISED is not a model-shape refusal, and the reshape advice
+  # below would send the reader after the wrong problem. ChainShaderCodegen has
+  # already logged the exception; point at it.
+  defp synthesis_raised_note({:unsupported, :synthesis_raised}) do
+    """
+    CHAIN-SHADER SYNTHESIS RAISED. This is not a statement about the model's
+    shape: the exception and its stacktrace were logged just above as a
+    [ChainShaderCodegen] warning, and it is a defect or an environment problem
+    (on 2026-09-13 it was `:crypto` missing from the code path on FreeBSD).
+    Read that first; the advice below is for models synthesis refuses cleanly.
+
+    """
+  end
+
+  defp synthesis_raised_note(_detect), do: ""
 
   @doc """
   Compile an IR for pointwise observation log-likelihood.
