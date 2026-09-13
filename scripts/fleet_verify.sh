@@ -64,7 +64,11 @@ export PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:$HOME/.cargo/bin:$HOME/.local/bin
 erts_bin=$(dirname "$(find "$HOME/.asdf/installs/erlang" -name epmd -type f 2>/dev/null | head -1)" 2>/dev/null)
 [ -n "$erts_bin" ] && [ -d "$erts_bin" ] && export PATH="$erts_bin:$PATH"
 
-cd "$HOME/exmc_oss" || { echo "FATAL: no ~/exmc_oss on $(hostname)"; exit 2; }
+# EXMC_DIR overrides the checkout, for a host where ~/exmc_oss belongs to other
+# work: on asus it is the two-GPU branch's tree, and exmc's own runs use
+# ~/exmc_race. The remote-URL safety check below applies to it all the same.
+exmc_dir=${EXMC_DIR:-$HOME/exmc_oss}
+cd "$exmc_dir" || { echo "FATAL: no $exmc_dir on $(hostname)"; exit 2; }
 
 # --- 2. safety: verify the checkout by its REMOTE, never by its directory ----
 #
@@ -219,6 +223,10 @@ expected_device() {
     super-io)           echo "f7e146ef RTX 3060 Ti" ;;
     mac)                echo "c3fcb5dd GT 650M" ;;         # mac-247
     free-macpro-nvidia) echo "91f659e1 GT 750M" ;;         # mac-248
+    # asus has TWO cards; the default rule picks whichever enumerates first,
+    # which a reseat has already moved once. The GTX 1660 Ti is the one raced;
+    # the Quadro M4000 (uuid c8727fb7) is a slower Maxwell part.
+    asus)               echo "cd6c2df3 GTX 1660 Ti" ;;
     nuc)                echo "86801619 HD Graphics 520" ;;
     jake-desktop)       echo "a220528a Tegra X1" ;;        # Jetson
     *)                  echo "" ;;
