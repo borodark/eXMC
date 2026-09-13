@@ -66,10 +66,28 @@ The reason in parentheses is a fixed string in nx_vulkan (`lib.rs:759`) and
 reads "first DiscreteGpu" even when an integrated GPU won. The ranking behind
 it is discrete < integrated < virtual < CPU. **Check the `pci` and `driver`
 fields, not the reason.** The failure to watch for is on hosts whose only
-other device is llvmpipe (the NUC, measured; super-io, INFERRED from one
-NVIDIA GPU plus an installed `lvp_icd.json`): if the real driver fails to
-start, llvmpipe becomes the only device and is selected silently.
-`scripts/fleet_verify.sh` does not pin a device yet (Track 5 item 2).
+other device is llvmpipe (the NUC and super-io, both measured): if the real
+driver fails to start, llvmpipe becomes the only device and is selected
+silently.
+
+**`scripts/fleet_verify.sh` pins it** (Track 5 item 2). `expected_device()`
+maps `hostname -s` to a uuid prefix and a name substring, and the script
+exports `NXV_DEVICE=uuid:<prefix>`. A probe in its own `mix run` then
+refuses to start the suite (exit 2) in four cases: the selector matches
+nothing, the device is `kind=Cpu`, the name does not match, or the host has
+no row. A selector that matches nothing is an error from the NIF that lists
+the devices, not a fallback. The log line to read is `### DEVICE
+DEVICEINFO kind=... uuid=... pci=... driver=... selected_by=NXV_DEVICE=...
+name=...`. `NXV_SKIP_DEVICE_PIN=1` runs a host unpinned on purpose, and the
+log says so. A new host needs a row before its first run.
+
+| `hostname -s` | host | uuid prefix | name |
+|---|---|---|---|
+| `super-io` | super-io | `f7e146ef` | RTX 3060 Ti |
+| `mac` | mac-247 | `c3fcb5dd` | GT 650M |
+| `free-macpro-nvidia` | mac-248 | `91f659e1` | GT 750M |
+| `nuc` | NUC | `86801619` | HD Graphics 520 |
+| `jake-desktop` | Jetson | `a220528a` | Tegra X1 |
 
 ## What each arm excludes
 

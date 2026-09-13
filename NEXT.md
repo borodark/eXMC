@@ -67,7 +67,11 @@ is what forces the rebuild.
    device [1]. If the real driver fails, llvmpipe is selected silently, and
    nx_vulkan's banner reason reads "first DiscreteGpu" whatever wins (a label
    bug on their side, queued). Until then, check `pci`/`driver` in every
-   banner.
+   banner. **Done later the same day:** `fleet_verify.sh` pins by uuid per
+   `hostname -s` and refuses before the suite on an unresolved selector, a
+   `kind=Cpu` device, a name mismatch or an unknown host. Six cases were
+   exercised on super-io (pass, unpinned, and four refusals incl. llvmpipe); `docs/ARMS.md` has the table.
+   Each host's row is proved on its next real run.
 2. **Rerun the NUC** to confirm the expected 723 / 0 after `d68b86ccd`.
 3. **The exmc half of the Jetson prebuilt**, once nx_vulkan says the
    interface has landed.

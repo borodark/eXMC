@@ -159,7 +159,83 @@ if [ "$prebuilt" = "1" ] && [ "$(nxv_hash)" != "$p_hash" ]; then
   echo "### PREBUILT IGNORED: the compile replaced $nxv_so -- the skip did not reach Rustler"
 fi
 
-# --- 3. the suite, unfiltered -----------------------------------------------
+# --- 3. the device, pinned --------------------------------------------------
+#
+# WHICH GPU EACH HOST MUST RUN ON, keyed by `hostname -s`: a uuid prefix (the
+# identity nx_vulkan's selector matches; an index is not one) and a substring of
+# the device name, for a reader and as a second check. Hostnames and GPU
+# models, never addresses -- see the header for why addresses stay out.
+#
+# Without a pin, nx_vulkan picks by device type (discrete < integrated < virtual
+# < CPU), and two hosts here enumerate llvmpipe beside the real card (super-io,
+# the NUC). If the real driver fails to start -- a kernel module that did not
+# load, a driver upgrade -- llvmpipe is the only device left and is selected
+# silently, and the suite reports a CPU rasteriser's count as the GPU's. On a
+# two-card host the winner is whichever enumerates first, which a reseat moves.
+#
+# NXV_DEVICE is read by the NIF and takes precedence over everything; a selector
+# that matches nothing is `{:error, :vulkan_init_failed, ...}` listing the
+# devices, not a fallback (MEASURED on super-io, 2026-09-13). The probe below
+# resolves it in a process of its own before the suite, because the NIF's own
+# banner goes to stderr and interleaves with ExUnit's dots mid-string
+# (nx_vulkan's fleet_verify.sh records a false failure from parsing it).
+#
+# A new host fails here until it has a row, which is the point: the row is the
+# claim docs/ARMS.md makes about it. NXV_SKIP_DEVICE_PIN=1 runs a host on
+# whatever it picks -- deliberately, and the log says so.
+expected_device() {
+  case "$1" in
+    super-io)           echo "f7e146ef RTX 3060 Ti" ;;
+    mac)                echo "c3fcb5dd GT 650M" ;;         # mac-247
+    free-macpro-nvidia) echo "91f659e1 GT 750M" ;;         # mac-248
+    nuc)                echo "86801619 HD Graphics 520" ;;
+    jake-desktop)       echo "a220528a Tegra X1" ;;        # Jetson
+    *)                  echo "" ;;
+  esac
+}
+
+host_short=$(hostname -s)
+pin=$(expected_device "$host_short")
+if [ "${NXV_SKIP_DEVICE_PIN:-0}" = "1" ]; then
+  echo "### DEVICE   pin SKIPPED (NXV_SKIP_DEVICE_PIN=1) -- this run is on whatever nx_vulkan picks"
+  unset NXV_DEVICE
+elif [ -z "$pin" ]; then
+  echo "FATAL: no device pin for host '$host_short'."
+  echo "       Add it to expected_device() in scripts/fleet_verify.sh (uuid prefix + name),"
+  echo "       or rerun with NXV_SKIP_DEVICE_PIN=1 to run unpinned on purpose."
+  exit 2
+else
+  export NXV_DEVICE="uuid:${pin%% *}"
+fi
+
+device_probe=$(MIX_ENV=test mix run --no-start --no-compile </dev/null 2>/dev/null -e '
+  case Nx.Vulkan.NativeV.device_info() do
+    {:ok, i, by} ->
+      IO.puts("DEVICEINFO kind=#{i.kind} uuid=#{i.uuid} pci=#{i.pci || "none"} driver=#{i.driver} f64=#{i.supports_f64} selected_by=#{by} name=#{i.name}")
+    other ->
+      IO.puts("DEVICEINFO UNRESOLVED #{inspect(other)}")
+  end' | grep '^DEVICEINFO' | tail -1)
+echo "### DEVICE   ${device_probe:-DEVICEINFO NONE (the probe printed nothing)}"
+
+device_fail=""
+case "$device_probe" in
+  "")                        device_fail="the probe printed nothing" ;;
+  *UNRESOLVED*)              device_fail="${device_probe#DEVICEINFO }" ;;
+  *kind=Cpu*)                device_fail="a CPU (software) Vulkan device" ;;
+esac
+if [ -z "$device_fail" ] && [ -n "${NXV_DEVICE:-}" ]; then
+  case "$device_probe" in
+    *"uuid=${pin%% *}"*"name="*"${pin#* }"*) : ;;
+    *) device_fail="expected uuid ${pin%% *}... '${pin#* }', got ${device_probe#DEVICEINFO }" ;;
+  esac
+fi
+if [ -n "$device_fail" ]; then
+  echo "FATAL: wrong or missing GPU on $host_short: $device_fail"
+  echo "       The suite was NOT run; a count from this box would describe another device."
+  exit 2
+fi
+
+# --- 4. the suite, unfiltered -----------------------------------------------
 
 echo "### SUITE START"
 
@@ -191,7 +267,7 @@ rm -f "$suite_log"
 
 echo "### NOTE: read the failure blocks above the summary line, not the count alone"
 
-# --- 4. posteriordb, opt-in --------------------------------------------------
+# --- 5. posteriordb, opt-in --------------------------------------------------
 
 if [ "$pdb" = "1" ]; then
   n_fixtures=$(ls benchmark/posteriordb/posteriordb_processed 2>/dev/null | wc -l)
