@@ -108,7 +108,13 @@ EXLA 728 / 0 with 71 excluded. Fleet rows below predate it; expect 728 with the
 same failures on the next run. **From the reproducibility contract on, 731**
 (`test/reproducibility_contract_test.exs`, one of its three tests
 `:requires_vulkan`): MEASURED on super-io, Vulkan 731 / 0 with 6 excluded, EXLA
-731 / 0 with 72 excluded.
+731 / 0 with 72 excluded. **With the NCP and shape {1} fixes, 740**; and at
+**Rustler 0.38** (exmc `85f289306`, nx_vulkan lock `ca1e0c8`, 2026-09-13):
+super-io Vulkan 740 / 0 and EXLA 740 / 0; fleet_verify mac-248 740 / 0, NUC
+740 / 0, mac-247 740 / 1 (PokerTest timeout); the Jetson ran on the cross-built
+prebuilt NIF and passed the smoke gate, suite result in NEXT.md. From 0.38 the
+NIFs are `priv/native/nx_vulkan_vulkano.so` and `exmc_tree.so`, with no `lib`
+prefix, and building them needs rustc >= 1.91.
 
 ## Fleet, measured
 

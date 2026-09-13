@@ -8,6 +8,58 @@ stands rather than as the mission planned it.
 
 ---
 
+## Status — 2026-09-13 (evening): Rustler 0.38 on main; two exmc defects fixed
+
+**On main**
+- `134f9d3aa`: automatic NCP on vector RVs rebuilt traces with a broadcast
+  error. There is now one `NonCenteredParameterization.reconstruct/2` in place
+  of two private copies, in Sampler and MCLMC (which MAMS shares). Also
+  `shape: {1}` vector RVs now synthesise: the forward `param_vec` and the
+  one-column gradient contraction.
+- `85f289306`: Rustler 0.38 in lockstep with nx_vulkan `ca1e0c8`. The details
+  and every host's count are in the commit message and `docs/ARMS.md`. What
+  to remember:
+  - the NIFs load as `priv/native/<crate>.so`, with no `lib` prefix;
+    `fleet_verify.sh` deletes lib-prefixed NIFs, markers and `.so.prev`
+    backups before hashing;
+  - rustc >= 1.91 (`native/exmc_tree/rust-toolchain.toml`; super-io's rustup
+    default is still 1.90);
+  - the Jetson's prebuilt NIF comes from nx_vulkan's `deploy_jetson_nif.sh` at
+    `ca1e0c8` or later, which defaults to the `nxv-jetson-cross:1.91.0` image.
+- The bump was fleet-verified on a temporary branch through `FLEET_BRANCH`,
+  since deleted. mac-247, mac-248, the NUC and the Jetson are still checked out
+  on it locally; their next `fleet_verify.sh` moves them to `main` by itself.
+- **Landed before the Jetson's suite finished**, on the operator's call. It had
+  already used the prebuilt (marker `ca1e0c8`, hash_match yes, NIF `8647de56`,
+  the same bytes the nx_vulkan session built) and passed the smoke gate.
+  Record its count here when `~/fleet_verify_r38.log` ends; expected 740 / 2
+  (PokerTest and IntegrationTest timeouts).
+
+**Not on main yet**
+- **The shader-size fix**, worktree `../exmc-shader`, branch `wip/shader-size`
+  (based on the Rustler branch; rebase onto main).
+  - The cause: the synthesised chain shader grew as d^2. Each coordinate's
+    gradient branch repeated the full residual, and the gradient was emitted
+    twice. SPIR-V was 9.0 MB at d=128. It is why the NUC was OOM-killed at d=128
+    in the width race: the driver's pipeline compile, on 8 GB shared with the GPU.
+  - The fix: the gradient becomes one function `exmc_grad(tid)` with loops
+    fused across coordinates, so the existing CSE hoists the shared residual.
+  - MEASURED: SPIR-V 204 KB at d=128 (44x smaller); a d=128 10+10 sample
+    takes 4.9 s against 72 s; peak RSS 685 MB against 1.44 GB.
+  - Tests: shader correctness files on the Vulkan arm 243 / 1, the 1 a batched
+    test's normalisation, since fixed; a new `shader_size_test.exs` fails on the
+    old emitter (ratio 10.77).
+  - Still to do: full suites on both arms, then the fleet including the NUC and
+    the Jetson.
+  - Note: the text CSE now takes 7.4 s at d=128, which is worth optimising.
+- **The PyMC race** (`docs/PYMC_RACE_PLAN.md`), in order:
+  1. reference posteriors: `bench/pymc_race/reference_{pymc.py,exmc.exs}`,
+     not committed; the PyMC run was started on super-io, the exmc run was not;
+  2. the harness and a pilot;
+  3. super-io, then asus (a window for the operator to schedule), then the NUC.
+  PyMC 6.3.2 picks **nutpie** by default when it is installed, so the "PyMC
+  default NUTS" arm must pass `nuts_sampler="pymc"`.
+
 ## Branch — 2026-09-13: `gate1/reconcile-core` is retired; work on `main`
 
 Merged into `main` by fast-forward at `325c48e56` (operator's decision). From

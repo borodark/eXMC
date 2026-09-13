@@ -33,3 +33,4 @@ deps/exla/cache/*
 bench/pymc_race/.venv/
 bench/pymc_race/parity_points.json
 bench/pymc_race/__pycache__/
+bench/pymc_race/reference/
